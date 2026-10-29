@@ -32,6 +32,14 @@
 			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
 		</dict>
 		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Collapse Bars When Scrolling</string>
+			<key>key</key><string>collapse</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
 			<key>cell</key><string>PSGroupCell</string>
 			<key>footerText</key><string>Swipe left on the pill for the next song, right for the previous one.</string>
 		</dict>

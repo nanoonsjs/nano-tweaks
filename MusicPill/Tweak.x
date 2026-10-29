@@ -1,4 +1,8 @@
-// MusicPill 0.7.4 - made by nano
+// MusicPill 0.8.0 - made by nano
+// 0.8.0: iOS 26 tab bar collapse. Scrolling down squeezes the tab bar into a
+//        glass circle (current tab), Search splits off into its own circle,
+//        and the pill drops into the row between them (skip button hides).
+//        Scrolling back up / tapping the circle melts it all back out.
 // 0.7.4: queue pills, new method. The queue list is slid down 54pt (transform)
 //        and the pills fill the space at its top. Music's own scroll math is
 //        untouched, so nothing can end up under the pills; the list's bottom
@@ -75,8 +79,11 @@
 #define PLAYERDEBUG_TAG 0x4D505044
 #define QUEUEROW_TAG 0x4D505152
 #define QUEUE_EXTRA 54.0
+#define COLLAPSE_TAG 0x4D50434C
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
+static BOOL gCollapse = YES, gCollapsed = NO;
+static NSString *gCollapseDebug = @"-";
 static BOOL gMarquee = YES, gAlbum = YES, gNavGlass = YES, gQueueLook = YES;
 static NSString *gAlbumDebug = @"-", *gNavDebug = @"-", *gMarqueeDebug = @"-";
 // The see-through background is always on (no longer a setting).
@@ -146,6 +153,7 @@ static void LoadPrefs(void) {
     gAlbum    = PrefBool(file, @"album", YES);
     gNavGlass = PrefBool(file, @"navglass", YES);
     gQueueLook = PrefBool(file, @"queuelook", YES);
+    gCollapse = PrefBool(file, @"collapse", YES);
 }
 
 static void Update(UITabBar *tb);
@@ -340,8 +348,15 @@ static UIView *InnerContent(UIView *c) {
     return c;
 }
 
+static CGRect gCollapsedPill;   // where the pill sits when collapsed (root coords)
 static CGAffineTransform PillTransform(UIView *m) {
     CGFloat W = m.bounds.size.width, H = m.bounds.size.height;
+    if (gCollapsed && !CGRectIsEmpty(gCollapsedPill) && gLastTabBar) {
+        UIView *root = gLastTabBar.superview;
+        CGRect u = UntransformedRect(m, root);
+        CGFloat s = MIN(gCollapsedPill.size.height / H, gCollapsedPill.size.width / W);
+        return CGAffineTransformScale(CGAffineTransformMakeTranslation(CGRectGetMidX(gCollapsedPill) - CGRectGetMidX(u), CGRectGetMidY(gCollapsedPill) - CGRectGetMidY(u)), s, s);
+    }
     // Total horizontal inset for Normal / Compact / Small.
     CGFloat inset = gSize == 0 ? 24 : (gSize == 1 ? 56 : 96);
     CGFloat s = W > inset + 100 ? (W - inset) / W : 1;
@@ -553,9 +568,9 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.7.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
-                      CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
+                      CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
@@ -567,8 +582,14 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
 
 #pragma mark - driver
 
+static void SetCollapsed(BOOL collapse, BOOL animated);
 static void Update(UITabBar *tb) {
     FixTabItems(tb);
+    // Full player open: bars back to normal so Music's own animation looks right.
+    if (gCollapsed) {
+        UIViewController *rv = tb.window.rootViewController;
+        if (rv.presentedViewController) SetCollapsed(NO, NO);
+    }
     UIView *root = tb.superview;
     if (!root || !tb.window) return;
     CGRect tabRect = UntransformedRect(tb, root);
@@ -595,6 +616,187 @@ static void Update(UITabBar *tb) {
     UpdateDebug(tb, root, tabRect, gRound ? mini : nil);
 }
 
+#pragma mark - iOS 26 collapse
+
+@interface MPCollapse : NSObject
++ (instancetype)shared;
+- (void)tapTab;
+- (void)tapSearch;
+@end
+
+static NSHashTable *gUnclipped;        // ancestors we let the pill draw outside of
+static __weak UIView *gCollapsedMini;  // pill whose touches reach outside its container
+
+static UIView *TabButtonRow(UITabBar *tb, CGFloat *rowY, UIView *root) {
+    UIView *first = nil;
+    for (UIView *s in tb.subviews) if ([NSStringFromClass([s class]) containsString:@"TabBarButton"] && !s.hidden) { first = s; break; }
+    if (first) *rowY = CGRectGetMidY([first.superview convertRect:first.frame toView:root]);
+    else *rowY = CGRectGetMinY(UntransformedRect(tb, root)) + 28;
+    return first;
+}
+
+static UIImage *SelectedTabImage(UITabBar *tb) {
+    UITabBarItem *it = tb.selectedItem;
+    UIImage *img = it.selectedImage ?: it.image;
+    return [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
+
+static UIView *GlassCircle(NSString *ident, UIView *host) {
+    for (UIView *v in host.subviews) if ([v.accessibilityIdentifier isEqualToString:ident]) return v;
+    UIView *c = [UIView new];
+    c.accessibilityIdentifier = ident;
+    c.clipsToBounds = NO;
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    g.tag = 1; g.userInteractionEnabled = NO; g.clipsToBounds = YES;
+    g.layer.cornerCurve = kCACornerCurveContinuous;
+    g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+    [c addSubview:g];
+    UIImageView *iv = [UIImageView new];
+    iv.tag = 2; iv.contentMode = UIViewContentModeCenter; iv.userInteractionEnabled = NO;
+    [c addSubview:iv];
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:[MPCollapse shared]
+                                                                          action:[ident isEqualToString:@"tab"] ? @selector(tapTab) : @selector(tapSearch)];
+    [c addGestureRecognizer:tap];
+    [host addSubview:c];
+    return c;
+}
+static void LayoutCircle(UIView *c, CGRect f) {
+    c.frame = f;
+    UIView *g = [c viewWithTag:1];
+    g.frame = c.bounds;
+    g.layer.cornerRadius = MIN(f.size.width, f.size.height) / 2;
+    [c viewWithTag:2].frame = c.bounds;
+}
+
+@interface MPPassHost : UIView @end
+@implementation MPPassHost
+- (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e { UIView *h = [super hitTest:p withEvent:e]; return h == self ? nil : h; }
+@end
+
+static UIView *CollapseHost(UITabBar *tb) {
+    UIView *root = tb.superview;
+    UIView *h = [root viewWithTag:COLLAPSE_TAG];
+    if (h.superview != root) {
+        h = [MPPassHost new];
+        h.tag = COLLAPSE_TAG;
+        [root addSubview:h];
+    }
+    [root bringSubviewToFront:h];
+    h.frame = root.bounds;
+    return h;
+}
+
+// The skip button: rightmost small control in the pill.
+static UIView *NextButton(UIView *mini) {
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:mini];
+    UIView *best = nil; CGFloat bestX = -1;
+    while (stack.count) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if ([v isKindOfClass:[UIControl class]] && v != mini && !v.hidden && v.bounds.size.width < 70) {
+            CGFloat x = CGRectGetMidX([v convertRect:v.bounds toView:mini]);
+            if (x > bestX) { bestX = x; best = v; }
+        }
+        [stack addObjectsFromArray:v.subviews];
+    }
+    return best;
+}
+
+static void SetUnclipped(UIView *mini, UIView *root, BOOL on) {
+    if (!gUnclipped) gUnclipped = [NSHashTable weakObjectsHashTable];
+    if (on) {
+        for (UIView *p = mini; p && p != root; p = p.superview) if (p.clipsToBounds && p != mini) { p.clipsToBounds = NO; [gUnclipped addObject:p]; }
+        gCollapsedMini = mini;
+    } else {
+        for (UIView *p in [gUnclipped allObjects]) p.clipsToBounds = YES;
+        [gUnclipped removeAllObjects];
+        gCollapsedMini = nil;
+    }
+}
+
+static const CGFloat kCD = 50;   // collapsed circle size
+static void SetCollapsed(BOOL collapse, BOOL animated) {
+    UITabBar *tb = gLastTabBar;
+    UIView *root = tb.superview;
+    UIView *mini = tb ? objc_getAssociatedObject(tb, kMini) : nil;
+    if (collapse == gCollapsed) return;
+    if (collapse && (!gCollapse || !gRound || !tb.window || tb.hidden || !mini.window || !objc_getAssociatedObject(mini, kStyled))) return;
+    UIView *host = CollapseHost(tb);
+    UIView *tab = GlassCircle(@"tab", host), *search = GlassCircle(@"search", host);
+    CGFloat W = root.bounds.size.width, rowY = 0;
+    TabButtonRow(tb, &rowY, root);
+    CGRect tr = UntransformedRect(tb, root);
+    CGRect wide = CGRectMake(CGRectGetMinX(tr) + 14, rowY - 29, tr.size.width - 28, 58);   // the tab bar's pill
+    CGRect left = CGRectMake(16, rowY - kCD / 2, kCD, kCD), right = CGRectMake(W - 16 - kCD, rowY - kCD / 2, kCD, kCD);
+    CGRect rightStart = CGRectMake(CGRectGetMaxX(wide) - kCD - 4, rowY - kCD / 2, kCD, kCD);
+    gCollapsedPill = CGRectMake(CGRectGetMaxX(left) + 10, rowY - 24, CGRectGetMinX(right) - 10 - CGRectGetMaxX(left) - 10, 48);
+    UIImageView *ti = (UIImageView *)[tab viewWithTag:2], *si = (UIImageView *)[search viewWithTag:2];
+    ti.image = SelectedTabImage(tb); ti.tintColor = tb.tintColor ?: UIColor.systemPinkColor;
+    si.image = [UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]];
+    si.tintColor = UIColor.whiteColor;
+    UIView *next = NextButton(mini);
+    gCollapsed = collapse;
+    CGAffineTransform mt = PillTransform(mini);
+    objc_setAssociatedObject(mini, kApplied, [NSValue valueWithCGAffineTransform:mt], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIViewAnimationOptions o = UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState;
+    if (collapse) {
+        SetUnclipped(mini, root, YES);
+        tab.hidden = search.hidden = NO;
+        LayoutCircle(tab, wide); tab.alpha = 0.0;
+        LayoutCircle(search, rightStart); search.alpha = 0; search.transform = CGAffineTransformMakeScale(0.6, 0.6);
+        ti.alpha = 0;
+        [UIView animateWithDuration:0.14 delay:0 options:o animations:^{ tab.alpha = 1; tb.alpha = 0; } completion:nil];
+        // The tab bar's glass squeezes into the left circle; Search pops out to the right.
+        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.4 options:o animations:^{
+            LayoutCircle(tab, left);
+        } completion:nil];
+        [UIView animateWithDuration:0.25 delay:0.18 options:o animations:^{ ti.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.55 delay:0.05 usingSpringWithDamping:0.66 initialSpringVelocity:0.5 options:o animations:^{
+            LayoutCircle(search, right); search.alpha = 1; search.transform = CGAffineTransformIdentity;
+        } completion:nil];
+        // The pill drops into the row, a bit narrower, and the skip button goes.
+        [UIView animateWithDuration:0.55 delay:0.02 usingSpringWithDamping:0.78 initialSpringVelocity:0.3 options:o animations:^{
+            mini.transform = mt; next.alpha = 0;
+        } completion:nil];
+    } else {
+        [UIView animateWithDuration:0.18 delay:0.12 options:o animations:^{ tb.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.12 delay:0 options:o animations:^{ ti.alpha = 0; } completion:nil];
+        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.3 options:o animations:^{
+            LayoutCircle(tab, wide);
+        } completion:nil];
+        [UIView animateWithDuration:0.18 delay:0.2 options:o animations:^{ tab.alpha = 0; } completion:^(BOOL d) { if (!gCollapsed) tab.hidden = YES; }];
+        [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:o animations:^{
+            LayoutCircle(search, rightStart); search.alpha = 0; search.transform = CGAffineTransformMakeScale(0.6, 0.6);
+        } completion:^(BOOL d) { if (!gCollapsed) { search.hidden = YES; search.transform = CGAffineTransformIdentity; } }];
+        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.3 options:o animations:^{
+            mini.transform = mt; next.alpha = 1;
+        } completion:^(BOOL d) { if (!gCollapsed) SetUnclipped(mini, root, NO); }];
+    }
+    gCollapseDebug = [NSString stringWithFormat:@"%@ row=%.0f pill=%@ next=%@", collapse ? @"collapsed" : @"expanded", rowY, NSStringFromCGRect(gCollapsedPill), NSStringFromClass([next class])];
+}
+
+@implementation MPCollapse
++ (instancetype)shared { static MPCollapse *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPCollapse new]; }); return t; }
+- (void)tapTab { SetCollapsed(NO, YES); }
+- (void)tapSearch {
+    UITabBar *tb = gLastTabBar;
+    UITabBarController *tc = [tb.delegate isKindOfClass:[UITabBarController class]] ? (UITabBarController *)tb.delegate : nil;
+    NSUInteger idx = NSNotFound;
+    for (NSUInteger i = 0; i < tb.items.count; i++) {
+        UITabBarItem *it = tb.items[i];
+        if (it.tag == 0 && [it.title.lowercaseString containsString:@"search"]) idx = i;
+    }
+    if (idx == NSNotFound && tb.items.count) idx = tb.items.count - 1;
+    SetCollapsed(NO, YES);
+    if (tc && idx < tc.viewControllers.count) {
+        UIViewController *vc = tc.viewControllers[idx];
+        if (![tc.delegate respondsToSelector:@selector(tabBarController:shouldSelectViewController:)] || [tc.delegate tabBarController:tc shouldSelectViewController:vc]) {
+            tc.selectedIndex = idx;
+            if ([tc.delegate respondsToSelector:@selector(tabBarController:didSelectViewController:)]) [tc.delegate tabBarController:tc didSelectViewController:vc];
+        }
+    }
+}
+@end
+
 #pragma mark - grow while scrolling
 
 static void SetPillExpanded(BOOL expanded) {
@@ -615,6 +817,13 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
     static CGFloat acc = 0;
     if ((dy > 0) != (acc > 0)) acc = 0; // direction changed
     acc += dy;
+    if (gCollapse) {
+        // iOS 26: scrolling down collapses the bars, scrolling back up (or reaching the top) opens them.
+        if (y <= -sv.adjustedContentInset.top + 4) { SetCollapsed(NO, YES); return; }
+        if (acc > 28) SetCollapsed(YES, YES);
+        else if (acc < -28) SetCollapsed(NO, YES);
+        return;
+    }
     // dy < 0: finger moving down (page moves back toward the top) -> bigger.
     // dy > 0: finger moving up (page moves down) -> normal.
     if (acc < -12) SetPillExpanded(YES);
@@ -671,6 +880,16 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
 %end
 
 %hook UIView
+- (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
+    if (gCollapsed) {
+        UIView *m = gCollapsedMini;
+        if (m && m.window && self != m && [m isDescendantOfView:self]) {
+            CGPoint q = [self convertPoint:p toView:m];
+            if ([m pointInside:q withEvent:e]) return YES;
+        }
+    }
+    return %orig;
+}
 // Music's gray circles we cleared behind the top buttons stay clear.
 - (void)setBackgroundColor:(UIColor *)color {
     if (color && gNavGlass && objc_getAssociatedObject(self, kClearedBG)) { %orig(UIColor.clearColor); return; }
@@ -691,6 +910,20 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
 %end
 
 %hook UITabBar
+- (void)setAlpha:(CGFloat)a {
+    if (gCollapsed && self == gLastTabBar && a > 0.01) { %orig(0); return; }
+    %orig;
+}
+- (void)setHidden:(BOOL)h {
+    %orig;
+    if (h && gCollapsed && self == gLastTabBar) {
+        dispatch_async(dispatch_get_main_queue(), ^{ SetCollapsed(NO, YES); });
+    }
+}
+- (void)setSelectedItem:(UITabBarItem *)it {
+    %orig;
+    if (gCollapsed && self == gLastTabBar) dispatch_async(dispatch_get_main_queue(), ^{ SetCollapsed(NO, YES); });
+}
 - (void)layoutSubviews {
     %orig;
     gLastTabBar = self;
