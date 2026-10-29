@@ -1,4 +1,7 @@
-// Control26 0.1.3 - made by nano
+// Control26 0.1.4 - made by nano
+// 0.1.4: own previous/play/next (Apple's group scales itself, so it couldn't
+//        be moved), slider icons turn white when the fill is below them,
+//        spring-back carries finger speed, "jelly" round buttons.
 // 0.1.3: small AirPlay icon searched in the module's container too; transport
 //        row moved as a group (down + tighter); brightness updates with no
 //        animation for exact 1:1 tracking; the whole slider shell stretches.
@@ -32,6 +35,8 @@
 @interface CCUIBaseSliderView : UIView @end
 @interface MRUContinuousSliderView : UIView @end
 @interface CCUICAPackageView : UIView @end
+@interface CCUIRoundButton : UIView @end
+@interface CCUIButtonModuleView : UIView @end
 
 #define DOM_NS @"com.user.control26"
 #define DOM CFSTR("com.user.control26")
@@ -40,7 +45,7 @@
 #define GLYPH_TAG   0x43323631
 #define DEBUG_TAG   0x43323632
 
-static BOOL gEnabled = YES, gMusic = YES, gColors = YES, gBounce = YES, gDebug = NO;
+static BOOL gEnabled = YES, gMusic = YES, gColors = YES, gBounce = YES, gDebug = NO, gJelly = YES;
 
 static const void *kHidByUs = &kHidByUs;
 static const void *kBounce = &kBounce;
@@ -75,6 +80,7 @@ static void LoadPrefs(void) {
     gColors  = PrefBool(f, @"colors", YES);
     gBounce  = PrefBool(f, @"bounce", YES);
     gDebug   = PrefBool(f, @"debug", NO);
+    gJelly   = PrefBool(f, @"jelly", YES);
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ LoadPrefs(); });
@@ -149,6 +155,24 @@ static UIImage *gArtwork;
 static NSData *gArtworkData;
 static CFTimeInterval gLastFetch;
 
+typedef Boolean (*MRSendFn)(int, CFDictionaryRef);
+typedef void (*MRIsPlayingFn)(dispatch_queue_t, void (^)(Boolean));
+static BOOL gIsPlaying;
+static void *MediaRemote(void) {
+    static void *h; static dispatch_once_t o;
+    dispatch_once(&o, ^{ h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY); });
+    return h;
+}
+// 2 = play/pause, 4 = next track, 5 = previous track
+static void SendMR(int cmd) {
+    MRSendFn send = MediaRemote() ? (MRSendFn)dlsym(MediaRemote(), "MRMediaRemoteSendCommand") : NULL;
+    if (send) send(cmd, NULL);
+}
+static void FetchIsPlaying(void) {
+    MRIsPlayingFn f = MediaRemote() ? (MRIsPlayingFn)dlsym(MediaRemote(), "MRMediaRemoteGetNowPlayingApplicationIsPlaying") : NULL;
+    if (f) f(dispatch_get_main_queue(), ^(Boolean p) { gIsPlaying = p; });
+}
+
 static void FetchNowPlaying(void) {
     static MRGetInfoFn getInfo;
     static dispatch_once_t once;
@@ -159,6 +183,7 @@ static void FetchNowPlaying(void) {
     CFTimeInterval now = CACurrentMediaTime();
     if (!getInfo || now - gLastFetch < 0.9) return;
     gLastFetch = now;
+    FetchIsPlaying();
     getInfo(dispatch_get_main_queue(), ^(CFDictionaryRef info) {
         NSDictionary *d = (__bridge NSDictionary *)info;
         NSString *title = d[@"kMRMediaRemoteNowPlayingInfoTitle"];
@@ -222,7 +247,7 @@ static NSArray *FindTransport(UIView *module) {
     CGSize S = module.bounds.size;
     NSMutableArray *row = [NSMutableArray array];
     for (UIControl *c in ctls) {
-        if (c.hidden || c.alpha < 0.01 || c.bounds.size.width < 16) continue;
+        if (c.hidden || (c.alpha < 0.01 && !objc_getAssociatedObject(c, kHidByUs)) || c.bounds.size.width < 16) continue; // ours stay findable
         if ([c isKindOfClass:[UISlider class]]) continue;
         CGPoint p = [c.superview convertPoint:c.center toView:module];
         if (p.y < S.height * 0.45 || CGRectGetMidX([c convertRect:c.bounds toView:module]) > S.width) continue;
@@ -250,7 +275,7 @@ static NSArray *FindTransport(UIView *module) {
 }
 
 static const void *kOurTransform = &kOurTransform;
-static void SetOurTransform(UIView *v, CGAffineTransform t) {
+__attribute__((unused)) static void SetOurTransform(UIView *v, CGAffineTransform t) {
     NSValue *last = objc_getAssociatedObject(v, kOurTransform);
     BOOL ours = CGAffineTransformIsIdentity(v.transform) || (last && CGAffineTransformEqualToTransform(v.transform, last.CGAffineTransformValue));
     if (!ours) return; // Apple is animating it; leave it alone
@@ -262,6 +287,29 @@ static void ClearOurTransform(UIView *v) {
     if (last && CGAffineTransformEqualToTransform(v.transform, last.CGAffineTransformValue)) v.transform = CGAffineTransformIdentity;
     objc_setAssociatedObject(v, kOurTransform, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
+
+@interface C26Transport : NSObject
++ (instancetype)shared;
+@end
+@implementation C26Transport
++ (instancetype)shared { static C26Transport *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26Transport new]; }); return t; }
+- (void)down:(UIButton *)b {
+    [UIView animateWithDuration:0.18 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction
+                     animations:^{ b.transform = CGAffineTransformMakeScale(0.82, 0.82); b.alpha = 0.7; } completion:nil];
+}
+- (void)up:(UIButton *)b {
+    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction
+                     animations:^{ b.transform = CGAffineTransformIdentity; b.alpha = 1; } completion:nil];
+}
+- (void)tap:(UIButton *)b {
+    [self up:b];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    if (b.tag == 6) SendMR(5);
+    else if (b.tag == 8) SendMR(4);
+    else { SendMR(2); gIsPlaying = !gIsPlaying; }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ FetchIsPlaying(); });
+}
+@end
 
 static C26PassView *BuildOverlay(UIView *module) {
     C26PassView *o = [C26PassView new];
@@ -302,6 +350,19 @@ static C26PassView *BuildOverlay(UIView *module) {
     artist.lineBreakMode = NSLineBreakByTruncatingTail;
     [o addSubview:artist];
 
+    // Our previous / play / next (iOS 26 placement).
+    NSArray *syms = @[@"backward.fill", @"play.fill", @"forward.fill"];
+    for (int i = 0; i < 3; i++) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+        b.tag = 6 + i;
+        b.tintColor = UIColor.whiteColor;
+        [b setImage:[UIImage systemImageNamed:syms[i] withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:(i == 1 ? 30 : 22) weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+        [b addTarget:[C26Transport shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+        [b addTarget:[C26Transport shared] action:@selector(down:) forControlEvents:UIControlEventTouchDown];
+        [b addTarget:[C26Transport shared] action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+        [o addSubview:b];
+    }
+
     [module addSubview:o];
     return o;
 }
@@ -322,7 +383,7 @@ static void UnstyleModule(UIView *module) {
     for (UILabel *l in labels) ShowOriginal(l);
     for (UIView *v in TopRightViews(module)) ShowOriginal(v);
     NSArray *tr = FindTransport(module);
-    for (UIView *b in tr) { ClearOurTransform(b); ClearOurTransform(b.superview); ClearOurTransform(b.superview.superview); }
+    for (UIView *b in tr) { ShowOriginal(b); ClearOurTransform(b); ClearOurTransform(b.superview); ClearOurTransform(b.superview.superview); }
 }
 
 static void StyleModule(UIView *module) {
@@ -372,38 +433,24 @@ static void StyleModule(UIView *module) {
                         animations:^{ art.image = img; } completion:nil];
     }
 
-    // Like iOS 26: previous / play / next tight, centered, low in the module.
-    // Move the whole group down first, then pull each button toward the middle.
+    // Our previous / play / next: tight, centered, low (like iOS 26).
+    CGFloat ty2 = round(S.height * 0.84), bw = round(42 * s);
+    for (int i = 0; i < 3; i++) {
+        UIButton *b = (UIButton *)[o viewWithTag:6 + i];
+        CGFloat cx = S.width / 2 + (i - 1) * 46 * s;
+        SetFrame(b, CGRectMake(round(cx - bw / 2), ty2 - bw / 2, bw, bw));
+    }
+    UIButton *pp = (UIButton *)[o viewWithTag:7];
+    NSString *ppSym = gIsPlaying ? @"pause.fill" : @"play.fill";
+    if (![objc_getAssociatedObject(pp, kLastValue) isEqual:ppSym]) {
+        objc_setAssociatedObject(pp, kLastValue, ppSym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIImage *img = [UIImage systemImageNamed:ppSym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightSemibold]];
+        [UIView transitionWithView:pp duration:0.18 options:UIViewAnimationOptionTransitionCrossDissolve | UIViewAnimationOptionAllowUserInteraction
+                        animations:^{ [pp setImage:img forState:UIControlStateNormal]; } completion:nil];
+    }
+    // Apple's own row is hidden (it scales/positions itself, so it can't be moved).
     NSArray *tr = FindTransport(module);
-    UIView *group = nil;
-    if (tr.count == 3) {
-        group = [tr[0] superview];
-        while (group && group != module && !([tr[1] isDescendantOfView:group] && [tr[2] isDescendantOfView:group])) group = group.superview;
-    }
-    int refused = 0;
-    if (group && group != module) {
-        CGPoint gc = [group.superview convertPoint:group.center toView:module];
-        UIView *b1 = tr[1];
-        CGPoint mid = [b1 convertPoint:CGPointMake(CGRectGetMidX(b1.bounds), CGRectGetMidY(b1.bounds)) toView:group];
-        CGFloat midInModule = gc.y - group.bounds.size.height / 2 + mid.y;
-        SetOurTransform(group, CGAffineTransformMakeTranslation(round(S.width / 2 - gc.x), round(S.height * 0.86 - midInModule)));
-        CGFloat centerX = [b1.superview convertPoint:b1.center toView:group].x;
-        for (NSUInteger i = 0; i < 3; i++) {
-            UIView *b = tr[i];
-            CGFloat x = [b.superview convertPoint:b.center toView:group].x;
-            CGFloat target = (i == 1) ? x : centerX + ((CGFloat)i - 1) * 44 * s;
-            NSValue *before = objc_getAssociatedObject(b, kOurTransform);
-            SetOurTransform(b, CGAffineTransformMakeTranslation(round(target - x), 0));
-            if (!objc_getAssociatedObject(b, kOurTransform) && !before) refused++;
-        }
-    } else {
-        for (NSUInteger i = 0; i < tr.count; i++) {
-            UIView *b = tr[i];
-            CGPoint c = [b.superview convertPoint:b.center toView:module];
-            CGPoint target = CGPointMake(S.width / 2 + ((CGFloat)i - 1) * 44 * s, S.height * 0.86);
-            SetOurTransform(b, CGAffineTransformMakeTranslation(round(target.x - c.x), round(target.y - c.y)));
-        }
-    }
+    for (UIView *b in tr) HideOriginal(b);
 
     // Hide Apple's labels and small AirPlay icon (ours replace them).
     NSMutableArray *labels = [NSMutableArray array];
@@ -416,10 +463,9 @@ static void StyleModule(UIView *module) {
     for (UIView *v in corner) HideOriginal(v);
     NSMutableArray *cornerNames = [NSMutableArray array];
     for (UIView *v in corner) [cornerNames addObject:NSStringFromClass([v class])];
-    gMusicDebug = [NSString stringWithFormat:@"%@ %.0fx%.0f corner=[%@] transport=%lu group=%@ refused=%d np=%@ art=%d",
+    gMusicDebug = [NSString stringWithFormat:@"%@ %.0fx%.0f corner=%lu hidden-transport=%lu playing=%d np=%@ art=%d",
                    NSStringFromClass([module class]), S.width, S.height,
-                   [cornerNames componentsJoinedByString:@","], (unsigned long)tr.count,
-                   group ? NSStringFromClass([group class]) : @"none", refused,
+                   (unsigned long)cornerNames.count, (unsigned long)tr.count, gIsPlaying,
                    gNPTitle ?: @"(none)", gArtwork != nil];
 }
 
@@ -504,8 +550,13 @@ static void StyleSlider(UIView *slider) {
         else [UIView transitionWithView:mine duration:0.18 options:UIViewAnimationOptionTransitionCrossDissolve | UIViewAnimationOptionAllowUserInteraction
                              animations:^{ mine.image = img; } completion:nil];
     }
-    UIColor *c = kind == 1 ? SUN_COLOR : VOLUME_COLOR;
-    if (![mine.tintColor isEqual:c]) mine.tintColor = c;
+    // Like iOS 26: colored when the white fill covers the icon, white when it doesn't.
+    CGFloat fillTop = slider.bounds.size.height * (1.0 - MAX(0, MIN(1, v)));
+    BOOL covered = CGRectGetMidY(mine.frame) >= fillTop;
+    UIColor *c = covered ? (kind == 1 ? SUN_COLOR : VOLUME_COLOR) : UIColor.whiteColor;
+    if (![mine.tintColor isEqual:c])
+        [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState
+                         animations:^{ mine.tintColor = c; } completion:nil];
     for (UIView *g in AllAppleGlyphs(slider)) HideOriginal(g);
 }
 
@@ -636,10 +687,16 @@ static void ApplyStretch(UIView *slider, CGFloat over, int dir) {
         objc_setAssociatedObject(v, kBounce, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if (direct) SetSliderValue(v, MAX(0, MIN(1, SliderValue(v))));
         UIView *shell = SliderShell(v);
-        if (!CGAffineTransformIsIdentity(shell.transform))
-            [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.68 initialSpringVelocity:0
-                                options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState
-                             animations:^{ shell.transform = CGAffineTransformIdentity; } completion:nil];
+        if (!CGAffineTransformIsIdentity(shell.transform)) {
+            // Spring back carrying the finger's speed, so it bounces off naturally.
+            CGFloat stretchNow = fabs(shell.transform.ty) * 2;
+            CGFloat speed = fabs([g velocityInView:v].y);
+            CGFloat initialV = stretchNow > 1 ? MIN(speed / stretchNow, 20) : 0;
+            UISpringTimingParameters *spring = [[UISpringTimingParameters alloc] initWithDampingRatio:0.58 initialVelocity:CGVectorMake(initialV, initialV)];
+            UIViewPropertyAnimator *anim = [[UIViewPropertyAnimator alloc] initWithDuration:0.6 timingParameters:spring];
+            [anim addAnimations:^{ shell.transform = CGAffineTransformIdentity; }];
+            [anim startAnimation];
+        }
     }
 }
 @end
@@ -655,6 +712,67 @@ static void AddBounce(UIView *slider) {
     pan.delaysTouchesBegan = NO;
     pan.delaysTouchesEnded = NO;
     [slider addGestureRecognizer:pan];
+}
+
+#pragma mark - jelly round buttons (iOS 26 liquid glass press)
+
+static const void *kJelly = &kJelly;
+static const void *kJellyStart = &kJellyStart;
+
+@interface C26Jelly : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+@implementation C26Jelly
++ (instancetype)shared { static C26Jelly *j; static dispatch_once_t o; dispatch_once(&o, ^{ j = [C26Jelly new]; }); return j; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+- (void)press:(UILongPressGestureRecognizer *)g {
+    UIView *v = g.view;
+    if (!v || !v.superview) return;
+    if (!gEnabled || !gJelly) { if (!CGAffineTransformIsIdentity(v.transform)) v.transform = CGAffineTransformIdentity; return; }
+    CGPoint p = [g locationInView:v.superview];
+    if (g.state == UIGestureRecognizerStateBegan) {
+        objc_setAssociatedObject(v, kJellyStart, [NSValue valueWithCGPoint:p], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // Lift: a soft swell like glass being pressed.
+        UIViewPropertyAnimator *a = [[UIViewPropertyAnimator alloc] initWithDuration:0.35 dampingRatio:0.7 animations:^{
+            v.transform = CGAffineTransformMakeScale(1.07, 1.07);
+        }];
+        [a startAnimation];
+    } else if (g.state == UIGestureRecognizerStateChanged) {
+        CGPoint s = [objc_getAssociatedObject(v, kJellyStart) CGPointValue];
+        CGFloat dx = p.x - s.x, dy = p.y - s.y, dist = hypot(dx, dy);
+        // Lean toward the finger (with resistance) and stretch along the drag.
+        // Follows the finger a little, with more resistance the further it goes (max ~10pt).
+        CGFloat damp = 0.14 / (1.0 + dist / 120.0);
+        CGFloat ox = dx * damp, oy = dy * damp;
+        CGFloat stretch = MIN(dist / 400.0, 0.08);
+        CGFloat angle = atan2(dy, dx);
+        CGAffineTransform t = CGAffineTransformMakeTranslation(ox, oy);
+        t = CGAffineTransformRotate(t, angle);
+        t = CGAffineTransformScale(t, 1.07 + stretch, 1.07 - stretch * 0.6);
+        t = CGAffineTransformRotate(t, -angle);
+        UIViewPropertyAnimator *a = [[UIViewPropertyAnimator alloc] initWithDuration:0.12 curve:UIViewAnimationCurveEaseOut animations:^{ v.transform = t; }];
+        [a startAnimation];
+    } else if (g.state >= UIGestureRecognizerStateEnded) {
+        // Release: wobble back to rest.
+        UISpringTimingParameters *spring = [[UISpringTimingParameters alloc] initWithDampingRatio:0.45 initialVelocity:CGVectorMake(0, 0)];
+        UIViewPropertyAnimator *a = [[UIViewPropertyAnimator alloc] initWithDuration:0.6 timingParameters:spring];
+        [a addAnimations:^{ v.transform = CGAffineTransformIdentity; }];
+        [a startAnimation];
+    }
+}
+@end
+
+static void AddJelly(UIView *v) {
+    if (objc_getAssociatedObject(v, kJelly)) return;
+    objc_setAssociatedObject(v, kJelly, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[C26Jelly shared] action:@selector(press:)];
+    lp.minimumPressDuration = 0;
+    lp.allowableMovement = CGFLOAT_MAX;
+    lp.cancelsTouchesInView = NO;
+    lp.delaysTouchesBegan = NO;
+    lp.delaysTouchesEnded = NO;
+    lp.delegate = [C26Jelly shared];
+    [v addGestureRecognizer:lp];
 }
 
 #pragma mark - debug
@@ -674,7 +792,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.1.3 debug\n music: %@\n sliders: %@", gMusicDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.1.4 debug\n music: %@\n sliders: %@", gMusicDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -769,6 +887,18 @@ static void Tick(void) {
 }
 %end
 
+%group Jelly1
+%hook CCUIRoundButton
+- (void)didMoveToWindow { %orig; if (self.window && InControlCenter(self)) AddJelly(self); }
+%end
+%end
+
+%group Jelly2
+%hook CCUIButtonModuleView
+- (void)didMoveToWindow { %orig; if (self.window && InControlCenter(self)) AddJelly(self); }
+%end
+%end
+
 %group Glyphs
 %hook CCUICAPackageView
 - (void)setAlpha:(CGFloat)a {
@@ -778,7 +908,9 @@ static void Tick(void) {
 %end
 %end
 
-static BOOL gMediaHooked, gCCHooked, gMRUHooked, gGlyphHooked;
+static BOOL gMediaHooked, gCCHooked, gMRUHooked, gGlyphHooked, gJ1Hooked, gJ2Hooked;
+static void InitJ1(void) { %init(Jelly1); }
+static void InitJ2(void) { %init(Jelly2); }
 static void InitMedia(void)  { %init(Media); }
 static void InitCC(void)     { %init(SlidersCC); }
 static void InitMRU(void)    { %init(SlidersMRU); }
@@ -789,6 +921,8 @@ static void TryLateHooks(void) {
     if (!gCCHooked && NSClassFromString(@"CCUIBaseSliderView"))        { gCCHooked = YES; InitCC(); }
     if (!gMRUHooked && NSClassFromString(@"MRUContinuousSliderView"))  { gMRUHooked = YES; InitMRU(); }
     if (!gGlyphHooked && NSClassFromString(@"CCUICAPackageView"))      { gGlyphHooked = YES; InitGlyphs(); }
+    if (!gJ1Hooked && NSClassFromString(@"CCUIRoundButton"))           { gJ1Hooked = YES; InitJ1(); }
+    if (!gJ2Hooked && NSClassFromString(@"CCUIButtonModuleView"))      { gJ2Hooked = YES; InitJ2(); }
 }
 
 static void StartLateHooks(void) {
@@ -796,7 +930,7 @@ static void StartLateHooks(void) {
     __block int tries = 0;
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         TryLateHooks();
-        if ((gMediaHooked && gCCHooked && gMRUHooked && gGlyphHooked) || ++tries > 120) [t invalidate];
+        if ((gMediaHooked && gCCHooked && gMRUHooked && gGlyphHooked && gJ1Hooked && gJ2Hooked) || ++tries > 120) [t invalidate];
     }];
 }
 
