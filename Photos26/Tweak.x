@@ -1,4 +1,8 @@
-// Photos26 1.9.0 - made by nano
+// Photos26 2.0.0 - made by nano
+// 2.0.0: grid top buttons (PXCuratedLibraryOverlayButton) styled from inside
+//        each button: glass Select capsule, glass X for Cancel, bigger glass
+//        ... circle, larger touch areas; select bar pinned to a fixed spot
+//        on screen (no slide-down when Apple moves the toolbar).
 // 1.9.0: select bar draws its own share / trash (pressing Apple's), so Apple
 //        rebuilding its buttons can't flicker; bar height locked while
 //        selecting; grid top glass removed again (debug map of it instead).
@@ -60,6 +64,7 @@
 #import <objc/message.h>
 
 @interface PUTilingView : UIView @end
+@interface PXCuratedLibraryOverlayButton : UIView @end
 #define DOM_NS @"com.user.photos26"
 #define DOM CFSTR("com.user.photos26")
 #define NOTIFY CFSTR("com.user.photos26/prefschanged")
@@ -752,11 +757,10 @@ static void LayoutBottom(UIToolbar *tb) {
         gItems = found;
         UIBarButtonItem *shareIt = ((PGBox *)found[@"share"]).obj, *trashIt = ((PGBox *)found[@"trash"]).obj;
         // Where Apple's row sits: read once when Select opens, then locked.
-        static CGFloat lockedCY;
-        if (!wasSelect || lockedCY <= 0) {
-            UIView *v = KV(shareIt, @"view");
-            lockedCY = v.window ? round(CGRectGetMidY([v convertRect:v.bounds toView:tb]) - v.transform.ty) : 25;
-        }
+        // A fixed spot on screen (just above the home bar), whatever Apple does with the toolbar.
+        UIWindow *win = tb.window;
+        CGFloat screenY = win ? win.bounds.size.height - win.safeAreaInsets.bottom - 23 : 0;
+        CGFloat lockedCY = win ? round([tb convertPoint:CGPointMake(0, screenY) fromView:nil].y) : 25;
         // All of Apple's buttons are hidden (and untouchable); ours press them.
         for (UIBarButtonItem *it in tb.items) {
             UIView *v = KV(it, @"view");
@@ -1250,6 +1254,88 @@ static void LayoutTop(UINavigationBar *nb) {
 
 #pragma mark - grid top buttons (Select / Cancel / ...)
 
+static const void *kOvlKind = &kOvlKind;
+// Restyle one of Photos' grid buttons from the inside: its own dark pill is
+// hidden and our glass sits under its contents. Cancel becomes a glass X.
+static void StyleOverlayButton(UIView *b) {
+    PGGlass *g = nil; UIImageView *x = nil; UILabel *label = nil; UIImageView *dots = nil;
+    for (UIView *s in b.subviews) {
+        if ([s isKindOfClass:[PGGlass class]]) { g = (PGGlass *)s; continue; }
+        if ([s.accessibilityIdentifier isEqualToString:@"ovl_x"]) { x = (UIImageView *)s; continue; }
+    }
+    NSMutableArray *stack = [NSMutableArray arrayWithArray:b.subviews];
+    while (stack.count) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v == g || v == x) continue;
+        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) label = (UILabel *)v;
+        else if ([v isKindOfClass:[UIImageView class]] && [((UIImageView *)v).image.description containsString:@"ellipsis"]) dots = (UIImageView *)v;
+        [stack addObjectsFromArray:v.subviews];
+    }
+    if (!gEnabled || !gTopBar || (!label && !dots)) {
+        g.hidden = YES; x.hidden = YES; Unmask(label);
+        for (UIView *s in b.subviews) Unmask(s);
+        return;
+    }
+    // Apple's own dark pill / blur behind the content.
+    for (UIView *s in b.subviews) {
+        if (s == g || s == x || (label && [label isDescendantOfView:s]) || (dots && [dots isDescendantOfView:s])) continue;
+        BOOL bg = [s isKindOfClass:[UIVisualEffectView class]] || [NSStringFromClass([s class]) containsString:@"Background"] || [NSStringFromClass([s class]) containsString:@"Blur"] || (s.layer.cornerRadius > 4 && !s.subviews.count);
+        if (bg) Mask(s);
+    }
+    // If Apple's blur wraps the text, keep the text and drop just the blur.
+    static const void *kOrigEffect = &kOrigEffect;
+    NSMutableArray *st2 = [NSMutableArray arrayWithArray:b.subviews];
+    while (st2.count) {
+        UIView *v = st2.lastObject; [st2 removeLastObject];
+        if (v == g || [v isDescendantOfView:g ?: [UIView new]]) continue;
+        if ([v isKindOfClass:[UIVisualEffectView class]] && ((UIVisualEffectView *)v).effect) {
+            objc_setAssociatedObject(v, kOrigEffect, ((UIVisualEffectView *)v).effect, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            ((UIVisualEffectView *)v).effect = nil;
+        }
+        [st2 addObjectsFromArray:v.subviews];
+    }
+    if (b.layer.cornerRadius > 0 && b.backgroundColor) b.backgroundColor = UIColor.clearColor;
+    if (!g) { g = [PGGlass new]; [b insertSubview:g atIndex:0]; }
+    if (!x) {
+        x = [[UIImageView alloc] initWithImage:Sym(@"xmark", 17)];
+        x.accessibilityIdentifier = @"ovl_x";
+        x.tintColor = UIColor.whiteColor;
+        x.contentMode = UIViewContentModeCenter;
+        x.userInteractionEnabled = NO;
+        [b addSubview:x];
+    }
+    g.hidden = NO;
+    if (b.clipsToBounds) b.clipsToBounds = NO;
+    [b sendSubviewToBack:g];
+    [b bringSubviewToFront:x];
+    NSString *kind = dots ? @"more" : ([label.text isEqualToString:@"Cancel"] ? @"cancel" : @"text");
+    CGSize S = b.bounds.size;
+    CGPoint c = CGPointMake(S.width / 2, S.height / 2);
+    CGFloat H = 44;
+    CGRect nf;
+    if ([kind isEqualToString:@"text"]) nf = CGRectMake(c.x - MAX(S.width + 10, 80) / 2, c.y - H / 2, MAX(S.width + 10, 80), H);
+    else nf = CGRectMake(c.x - H / 2, c.y - H / 2, H, H);
+    BOOL cancel = [kind isEqualToString:@"cancel"];
+    if (cancel) Mask(label); else Unmask(label);
+    if (dots && !CGAffineTransformEqualToTransform(dots.transform, CGAffineTransformMakeScale(1.25, 1.25))) dots.transform = CGAffineTransformMakeScale(1.25, 1.25);
+    NSString *old = objc_getAssociatedObject(b, kOvlKind);
+    objc_setAssociatedObject(b, kOvlKind, kind, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    void (^apply)(void) = ^{
+        g.frame = nf; [g layoutIfNeeded];
+        x.frame = nf;
+        x.alpha = cancel ? 1 : 0;
+    };
+    if (old && ![old isEqualToString:kind] && ([old isEqualToString:@"cancel"] || cancel)) {
+        // Select <-> X: the capsule melts into a circle (and back).
+        x.transform = CGAffineTransformMakeScale(cancel ? 0.4 : 1, cancel ? 0.4 : 1);
+        [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.58 initialSpringVelocity:0.8
+                            options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+            apply();
+            x.transform = CGAffineTransformIdentity;
+        } completion:nil];
+    } else if (!g.layer.animationKeys.count) apply();
+}
+
 static NSString *gGridDebug = @"-";
 static void UpdateDebug(UIWindow *w);
 // Debug only for now: what the grid's top-right buttons are made of.
@@ -1297,7 +1383,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.9.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 2.0.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1497,6 +1583,20 @@ static void StartLink(void) {
 }
 %end
 
+%group Overlay
+%hook PXCuratedLibraryOverlayButton
+- (void)layoutSubviews {
+    %orig;
+    @try { StyleOverlayButton(self); } @catch (__unused id e) {}
+}
+// Easier to hit: a little extra touch area around each button.
+- (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
+    if (gEnabled && gTopBar && CGRectContainsPoint(CGRectInset(self.bounds, -10, -8), p)) return YES;
+    return %orig;
+}
+%end
+%end
+
 %group Scrubber
 %hook PUTilingView
 // Round thumbnails the moment they're laid out (only the small strip, not the big photo).
@@ -1535,6 +1635,7 @@ static void StartLink(void) {
 }
 %end
 
+static void InitOverlay(void) { static BOOL done; if (done) return; done = YES; %init(Overlay); }
 static void InitScrubber(void) { static BOOL done; if (done) return; done = YES; %init(Scrubber); }
 
 %ctor {
@@ -1552,6 +1653,10 @@ static void InitScrubber(void) { static BOOL done; if (done) return; done = YES;
                 if ([s isKindOfClass:[UIWindowScene class]]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) key = w;
             @try { StyleGridTop(key); } @catch (__unused id e) {}
         }];
+    });
+    if (objc_getClass("PXCuratedLibraryOverlayButton")) InitOverlay();
+    else dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (objc_getClass("PXCuratedLibraryOverlayButton")) InitOverlay();
     });
     if (objc_getClass("PUScrubberView")) InitScrubber();
     else dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
