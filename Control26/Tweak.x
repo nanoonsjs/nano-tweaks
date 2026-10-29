@@ -1,4 +1,7 @@
-// Control26 0.3.6 - made by nano
+// Control26 0.3.7 - made by nano
+// 0.3.7: transport animations run on the icon's layer only (no giant icon
+//        flash), Control Center's module press-dim is switched off while a
+//        music button is held, play/pause: old icon bursts out, new grows in.
 // 0.3.6: iOS 26 transport animations: light circle while held, next / previous
 //        arrows roll over by one, play / pause shrinks to a dot and grows the
 //        new icon. No haptic on pause.
@@ -552,22 +555,56 @@ static void WakeSpring(C26Spring *s) {
     bub.layer.cornerRadius = d / 2;
     return bub;
 }
+// Control Center dims the whole module while a finger is on it. Switch those
+// press recognizers off while one of our buttons is held.
+static NSHashTable *gPausedPress;
+static void HoldModulePress(UIView *b, BOOL hold) {
+    if (!gPausedPress) gPausedPress = [NSHashTable weakObjectsHashTable];
+    if (hold) {
+        for (UIView *p = b.superview; p; p = p.superview) {
+            for (UIGestureRecognizer *g in p.gestureRecognizers) {
+                NSString *n = NSStringFromClass([g class]);
+                BOOL press = [n containsString:@"TouchDuration"] || [n containsString:@"Relationship"] || [n containsString:@"Press"] || [n containsString:@"Click"];
+                if (press && g.enabled && ![g isKindOfClass:[UIPanGestureRecognizer class]]) { g.enabled = NO; [gPausedPress addObject:g]; }
+            }
+            if ([NSStringFromClass([p class]) containsString:@"ModuleContainerView"]) break;
+        }
+    } else {
+        for (UIGestureRecognizer *g in [gPausedPress allObjects]) g.enabled = YES;
+        [gPausedPress removeAllObjects];
+    }
+}
+
+// Presentation-only scale/opacity on the icon layer (the button's own layout
+// never sees a transform, so the icon can't blow up).
+static void IconAnim(UIView *iv, NSArray *scales, NSArray *alphas, NSArray *times, CFTimeInterval dur, NSString *key) {
+    CAKeyframeAnimation *s = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    s.values = scales; s.keyTimes = times;
+    CAKeyframeAnimation *o = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+    o.values = alphas; o.keyTimes = times;
+    CAAnimationGroup *g = [CAAnimationGroup animation];
+    g.animations = @[s, o]; g.duration = dur;
+    g.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.25 :0.8 :0.3 :1.0];
+    g.fillMode = kCAFillModeForwards; g.removedOnCompletion = NO;
+    [iv.layer addAnimation:g forKey:key];
+}
+
 - (void)down:(UIButton *)b {
+    HoldModulePress(b, YES);
     UIView *bub = [self bubbleFor:b];
     bub.transform = CGAffineTransformMakeScale(0.8, 0.8);
     [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseOut animations:^{
         bub.alpha = 1; bub.transform = CGAffineTransformIdentity;
-        b.imageView.transform = CGAffineTransformMakeScale(0.92, 0.92);
     } completion:nil];
+    IconAnim(b.imageView, @[@1, @0.9], @[@1, @1], @[@0, @1], 0.14, @"press");
 }
 - (void)up:(UIButton *)b {
+    HoldModulePress(b, NO);
     UIView *bub = [self bubbleFor:b];
     [UIView animateWithDuration:0.35 delay:0.06 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseOut animations:^{
         bub.alpha = 0; bub.transform = CGAffineTransformMakeScale(1.08, 1.08);
     } completion:nil];
-    [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        b.imageView.transform = CGAffineTransformIdentity;
-    } completion:nil];
+    if ([b.imageView.layer animationForKey:@"press"]) IconAnim(b.imageView, @[@0.9, @1.04, @1], @[@1, @1, @1], @[@0, @0.5, @1], 0.28, @"press");
 }
 
 static CAShapeLayer *Triangle(CGSize sz, BOOL right, UIColor *color) {
@@ -646,18 +683,17 @@ static void AnimateLayer(CALayer *l, CGPoint from, CGPoint to, CGFloat s0, CGFlo
         objc_setAssociatedObject(b, kLastValue, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIImage *img = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightSemibold]];
         UIImageView *iv = b.imageView;
-        [UIView animateWithDuration:0.11 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
-            iv.transform = CGAffineTransformMakeScale(0.2, 0.2);
-            iv.alpha = 0;
-        } completion:^(BOOL d) {
-            [b setImage:img forState:UIControlStateNormal];
-            iv.transform = CGAffineTransformMakeScale(0.2, 0.2);
-            [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4
-                                options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
-                iv.transform = CGAffineTransformIdentity;
-                iv.alpha = 1;
-            } completion:nil];
-        }];
+        [iv.layer removeAnimationForKey:@"press"];
+        // The old icon bursts outward and fades...
+        UIImageView *ghost = [[UIImageView alloc] initWithImage:iv.image];
+        ghost.tintColor = b.tintColor; ghost.contentMode = iv.contentMode;
+        ghost.frame = iv.frame; ghost.userInteractionEnabled = NO;
+        [b addSubview:ghost];
+        IconAnim(ghost, @[@1, @1.35], @[@1, @0], @[@0, @1], 0.16, @"out");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.18 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [ghost removeFromSuperview]; });
+        // ...and the new one grows in from small and settles.
+        [b setImage:img forState:UIControlStateNormal];
+        IconAnim(iv, @[@0.25, @0.25, @1.06, @1], @[@0, @0, @1, @1], @[@0, @0.25, @0.75, @1], 0.36, @"morph");
     }
     // Pick up the new song / state right away.
     for (NSNumber *delay in @[@0.12, @0.35, @0.8]) {
@@ -2140,7 +2176,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.3.6 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.3.7 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
