@@ -1,4 +1,7 @@
-// Control26 0.3.5 - made by nano
+// Control26 0.3.6 - made by nano
+// 0.3.6: iOS 26 transport animations: light circle while held, next / previous
+//        arrows roll over by one, play / pause shrinks to a dot and grows the
+//        new icon. No haptic on pause.
 // 0.3.5: smoother glide; expanded player hides Apple's route buttons by
 //        position (works when the route shows a Bluetooth speaker icon), AirPlay
 //        capsule anchored to the volume slider under the controls; star next
@@ -530,61 +533,131 @@ static void WakeSpring(C26Spring *s) {
 @end
 @implementation C26Transport
 + (instancetype)shared { static C26Transport *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26Transport new]; }); return t; }
+
+// iOS 26: a soft light circle behind the button while it's held.
+- (UIView *)bubbleFor:(UIButton *)b {
+    UIView *bub = [b viewWithTag:77];
+    if (!bub) {
+        bub = [UIView new];
+        bub.tag = 77;
+        bub.userInteractionEnabled = NO;
+        bub.backgroundColor = [UIColor colorWithWhite:1 alpha:0.22];
+        bub.alpha = 0;
+        [b insertSubview:bub atIndex:0];
+        b.clipsToBounds = NO;
+    }
+    CGFloat d = MAX(b.bounds.size.width, b.bounds.size.height) * 1.08;
+    bub.bounds = CGRectMake(0, 0, d, d);
+    bub.center = CGPointMake(b.bounds.size.width / 2, b.bounds.size.height / 2);
+    bub.layer.cornerRadius = d / 2;
+    return bub;
+}
 - (void)down:(UIButton *)b {
-    // Press: sink quickly.
-    C26Spring *s = SpringFor(b);
-    s.k = 700; s.c = 40; s.tsx = s.tsy = 0.84; s.tx = s.ty = 0; s.angle = 0;
-    WakeSpring(s);
-    [UIView animateWithDuration:0.12 animations:^{ b.alpha = 0.75; }];
+    UIView *bub = [self bubbleFor:b];
+    bub.transform = CGAffineTransformMakeScale(0.8, 0.8);
+    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseOut animations:^{
+        bub.alpha = 1; bub.transform = CGAffineTransformIdentity;
+        b.imageView.transform = CGAffineTransformMakeScale(0.92, 0.92);
+    } completion:nil];
 }
 - (void)up:(UIButton *)b {
-    // Release: pop past full size and settle.
-    C26Spring *s = SpringFor(b);
-    s.k = 320; s.c = 13; s.tsx = s.tsy = 1; s.tx = s.ty = 0;
-    s.vsx += 2.4; s.vsy += 2.4;
-    WakeSpring(s);
-    [UIView animateWithDuration:0.2 animations:^{ b.alpha = 1; }];
+    UIView *bub = [self bubbleFor:b];
+    [UIView animateWithDuration:0.35 delay:0.06 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseOut animations:^{
+        bub.alpha = 0; bub.transform = CGAffineTransformMakeScale(1.08, 1.08);
+    } completion:nil];
+    [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        b.imageView.transform = CGAffineTransformIdentity;
+    } completion:nil];
 }
-// Next / previous: the arrows fling in the skip direction and spring home,
-// leaving a ghost that keeps going and fades.
-- (void)swoosh:(UIButton *)b dir:(CGFloat)dir {
+
+static CAShapeLayer *Triangle(CGSize sz, BOOL right, UIColor *color) {
+    CAShapeLayer *l = [CAShapeLayer layer];
+    l.bounds = CGRectMake(0, 0, sz.width, sz.height);
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    if (right) { [p moveToPoint:CGPointMake(0, 0)]; [p addLineToPoint:CGPointMake(sz.width, sz.height / 2)]; [p addLineToPoint:CGPointMake(0, sz.height)]; }
+    else       { [p moveToPoint:CGPointMake(sz.width, 0)]; [p addLineToPoint:CGPointMake(0, sz.height / 2)]; [p addLineToPoint:CGPointMake(sz.width, sz.height)]; }
+    [p closePath];
+    l.path = p.CGPath;
+    l.fillColor = color.CGColor;
+    l.lineJoin = kCALineJoinRound;
+    l.strokeColor = color.CGColor;
+    l.lineWidth = sz.height * 0.08;   // soft rounded tips like the SF glyph
+    return l;
+}
+
+static void AnimateLayer(CALayer *l, CGPoint from, CGPoint to, CGFloat s0, CGFloat s1, CGFloat a0, CGFloat a1, CFTimeInterval dur) {
+    CAMediaTimingFunction *ease = [CAMediaTimingFunction functionWithControlPoints:0.25 :0.8 :0.3 :1.0];
+    CABasicAnimation *pos = [CABasicAnimation animationWithKeyPath:@"position"];
+    pos.fromValue = [NSValue valueWithCGPoint:from]; pos.toValue = [NSValue valueWithCGPoint:to];
+    CABasicAnimation *sc = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+    sc.fromValue = @(s0); sc.toValue = @(s1);
+    CABasicAnimation *op = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    op.fromValue = @(a0); op.toValue = @(a1);
+    CAAnimationGroup *g = [CAAnimationGroup animation];
+    g.animations = @[pos, sc, op]; g.duration = dur; g.timingFunction = ease;
+    g.fillMode = kCAFillModeForwards; g.removedOnCompletion = NO;
+    l.position = to; l.opacity = a1; l.transform = CATransform3DMakeScale(s1, s1, 1);
+    [l addAnimation:g forKey:@"roll"];
+}
+
+// Next / previous, like iOS 26: the arrows roll over by one. The front arrow
+// slides off and shrinks away, the back one moves up, a new one grows in.
+- (void)roll:(UIButton *)b dir:(CGFloat)dir {
     UIImageView *iv = b.imageView;
-    if (iv.image) {
-        UIImageView *ghost = [[UIImageView alloc] initWithImage:iv.image];
-        ghost.tintColor = b.tintColor;
-        ghost.frame = iv.frame;
-        ghost.alpha = 0.55;
-        ghost.userInteractionEnabled = NO;
-        [b addSubview:ghost];
-        [UIView animateWithDuration:0.34 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-            ghost.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(24 * dir, 0), 1.15, 0.9);
-            ghost.alpha = 0;
-        } completion:^(BOOL d) { [ghost removeFromSuperview]; }];
-    }
-    C26Spring *s = SpringFor(iv);
-    s.k = 420; s.c = 16; s.tx = s.ty = 0; s.tsx = s.tsy = 1; s.angle = 0;
-    s.vx += 520 * dir;           // fling
-    s.vsx += 1.4; s.vsy -= 0.7;  // stretch along the fling
-    WakeSpring(s);
+    CGRect r = iv.frame;
+    if (r.size.width < 4) return;
+    UIView *box = [b viewWithTag:78];
+    [box removeFromSuperview];
+    box = [[UIView alloc] initWithFrame:b.bounds];
+    box.tag = 78;
+    box.userInteractionEnabled = NO;
+    [b addSubview:box];
+    BOOL right = dir > 0;
+    CGFloat tw = r.size.width / 2, th = r.size.height * 0.92;
+    CGSize sz = CGSizeMake(tw, th);
+    UIColor *col = b.tintColor ?: UIColor.whiteColor;
+    CGFloat cy = CGRectGetMidY(r);
+    CGPoint slotA = CGPointMake(r.origin.x + tw / 2, cy), slotB = CGPointMake(r.origin.x + tw * 1.5, cy);
+    // forward: the leading arrow is the right one (slot B); backward: the left one (slot A).
+    CGPoint lead = right ? slotB : slotA, trail = right ? slotA : slotB;
+    CGPoint off = CGPointMake(lead.x + tw * 0.75 * dir, cy);
+    CAShapeLayer *exiting = Triangle(sz, right, col), *moving = Triangle(sz, right, col), *entering = Triangle(sz, right, col);
+    for (CALayer *l in @[exiting, moving, entering]) [box.layer addSublayer:l];
+    exiting.position = lead; moving.position = trail; entering.position = trail;
+    iv.hidden = YES;
+    CFTimeInterval dur = 0.34;
+    AnimateLayer(exiting, lead, off, 1, 0.15, 1, 0, dur);
+    AnimateLayer(moving, trail, lead, 1, 1, 1, 1, dur);
+    AnimateLayer(entering, trail, trail, 0.05, 1, 0, 1, dur);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((dur + 0.02) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        iv.hidden = NO;
+        [box removeFromSuperview];
+    });
 }
 - (void)tap:(UIButton *)b {
     [self up:b];
-    if (b.tag == 6) { gSkipDir = -1; [self swoosh:b dir:-1]; SendMR(5); }
-    else if (b.tag == 8) { gSkipDir = 1; [self swoosh:b dir:1]; SendMR(4); }
+    if (b.tag == 6) { gSkipDir = -1; [self roll:b dir:-1]; SendMR(5); }
+    else if (b.tag == 8) { gSkipDir = 1; [self roll:b dir:1]; SendMR(4); }
     else {
-        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        // No haptic. Play <-> pause: the icon shrinks to a dot, then the new one grows out.
         SendMR(2);
         gIsPlaying = !gIsPlaying;
-        // Play <-> pause morph: shrink, swap, spring back.
         NSString *sym = gIsPlaying ? @"pause.fill" : @"play.fill";
         objc_setAssociatedObject(b, kLastValue, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIImage *img = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightSemibold]];
-        [b setImage:img forState:UIControlStateNormal];
-        // Morph: the new icon grows out of a dot with a springy overshoot.
-        C26Spring *s = SpringFor(b.imageView);
-        s.sx = s.sy = 0.2; s.vsx = s.vsy = 0;
-        s.k = 380; s.c = 14; s.tsx = s.tsy = 1; s.tx = s.ty = 0; s.angle = 0;
-        WakeSpring(s);
+        UIImageView *iv = b.imageView;
+        [UIView animateWithDuration:0.11 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
+            iv.transform = CGAffineTransformMakeScale(0.2, 0.2);
+            iv.alpha = 0;
+        } completion:^(BOOL d) {
+            [b setImage:img forState:UIControlStateNormal];
+            iv.transform = CGAffineTransformMakeScale(0.2, 0.2);
+            [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4
+                                options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+                iv.transform = CGAffineTransformIdentity;
+                iv.alpha = 1;
+            } completion:nil];
+        }];
     }
     // Pick up the new song / state right away.
     for (NSNumber *delay in @[@0.12, @0.35, @0.8]) {
@@ -2067,7 +2140,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.3.5 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.3.6 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
