@@ -1,4 +1,8 @@
-// MusicPill 0.8.4 - made by nano
+// MusicPill 0.8.5 - made by nano
+// 0.8.5: tapping the pill opens the player: Music's own bar stays under our
+//        pill (invisible via an empty mask, so it still gets touches) and our
+//        pill only keeps its play / next buttons; when collapsed, Music's bar
+//        moves under the small pill. Swipes reach Music's bar the same way.
 // 0.8.4: iOS 26 scrolling title in the pill (pause, glide left with a copy
 //        following, faded edges), tapping the pill opens the player again
 //        (more ways to reach Music's own tap, result in debug).
@@ -98,6 +102,8 @@
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
+static void SetUnclipped(UIView *mini, UIView *root, BOOL on);
+static __weak id gPillObj;
 static NSString *gCollapseDebug = @"-";
 static BOOL gMarquee = YES, gAlbum = YES, gNavGlass = YES, gQueueLook = YES;
 static NSString *gAlbumDebug = @"-", *gNavDebug = @"-", *gMarqueeDebug = @"-";
@@ -366,6 +372,13 @@ static UIView *InnerContent(UIView *c) {
 static CGRect gCollapsedPill;   // where the pill sits when collapsed (root coords)
 static CGAffineTransform PillTransform(UIView *m) {
     CGFloat W = m.bounds.size.width, H = m.bounds.size.height;
+    // Collapsed: Music's (invisible) bar sits right under our small pill so taps reach it.
+    if (gCollapsed && !CGRectIsEmpty(gCollapsedPill) && gLastTabBar && W > 0 && H > 0) {
+        UIView *root = gLastTabBar.superview;
+        CGRect u = UntransformedRect(m, root);
+        CGFloat sx = gCollapsedPill.size.width / W, sy = gCollapsedPill.size.height / H;
+        return CGAffineTransformScale(CGAffineTransformMakeTranslation(CGRectGetMidX(gCollapsedPill) - CGRectGetMidX(u), CGRectGetMidY(gCollapsedPill) - CGRectGetMidY(u)), sx, sy);
+    }
 
     // Total horizontal inset for Normal / Compact / Small.
     CGFloat inset = gSize == 0 ? 24 : (gSize == 1 ? 56 : 96);
@@ -446,6 +459,8 @@ static void SkipTrack(BOOL next) {
     BOOL next = g.direction == UISwipeGestureRecognizerDirectionLeft;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     SkipTrack(next);
+    id pillObj = gPillObj;
+    if (pillObj && [pillObj respondsToSelector:@selector(bumpDir:)]) [pillObj performSelector:@selector(bumpDir:) withObject:@(next ? -1 : 1)];
     // Little slide-and-bounce so the swipe feels like it did something.
     CGAffineTransform base = PillTransform(m);
     CGAffineTransform nudge = CGAffineTransformTranslate(base, next ? -26 : 26, 0);
@@ -578,7 +593,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -822,14 +837,18 @@ static BOOL OpenPlayer(UIView *mini) {
     [_next setImage:[UIImage systemImageNamed:@"forward.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
     [_next addTarget:self action:@selector(skipNext) forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:_next];
-    for (NSNumber *dir in @[@(UISwipeGestureRecognizerDirectionLeft), @(UISwipeGestureRecognizerDirectionRight)]) {
-        UISwipeGestureRecognizer *s = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(swiped:)];
-        s.direction = dir.unsignedIntegerValue;
-        [self addGestureRecognizer:s];
-    }
-    [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(open)]];
     return self;
 }
+// Only our buttons take touches; taps and swipes anywhere else fall through to
+// Music's own (invisible) bar underneath, which opens the player / skips.
+- (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
+    for (UIButton *b in @[_play, _next]) {
+        if (b.hidden || b.alpha < 0.05) continue;
+        if (CGRectContainsPoint(CGRectInset(b.frame, -4, -6), p)) return b;
+    }
+    return nil;
+}
+- (void)bumpDir:(NSNumber *)d { [self bump:d.doubleValue]; }
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGSize S = self.bounds.size;
@@ -1010,7 +1029,10 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
         if (pill.hidden || CGRectIsEmpty(pill.frame)) { pill.frame = miniRect; [pill layoutIfNeeded]; }
         // 1. The bar's glass takes over from Music's tab bar, and Music's mini bar hands over to our pill.
         [UIView animateWithDuration:0.12 delay:0 options:o animations:^{ tab.alpha = 1; tb.alpha = 0; } completion:nil];
-        mini.alpha = 0;
+        SetUnclipped(mini, root, YES);
+        CGAffineTransform under = PillTransform(mini);
+        objc_setAssociatedObject(mini, kApplied, [NSValue valueWithCGAffineTransform:under], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        mini.transform = under;
         // 2. The bar squeezes into the left circle (overshoots a touch, settles).
         [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.68 initialSpringVelocity:0.6 options:o animations:^{
             LayoutCircle(tab, left);
@@ -1044,6 +1066,11 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
         } completion:nil];
         [UIView animateWithDuration:0.18 delay:0.18 options:o animations:^{ search.alpha = 0; } completion:^(BOOL d) { if (!gCollapsed) search.hidden = YES; }];
         // Our pill rises back up to Music's bar and hands over.
+        CGAffineTransform home = PillTransform(mini);
+        objc_setAssociatedObject(mini, kApplied, [NSValue valueWithCGAffineTransform:home], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        mini.transform = home;
+        SetUnclipped(mini, root, NO);
+        miniHome = [mini convertRect:mini.bounds toView:host];
         [UIView animateWithDuration:0.56 delay:0 usingSpringWithDamping:0.76 initialSpringVelocity:0.3 options:o animations:^{
             pill.compact = NO;
             pill.frame = miniHome; [pill layoutIfNeeded];
@@ -1052,6 +1079,31 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
     gCollapseDebug = [NSString stringWithFormat:@"%@ row=%.0f open=%@", collapse ? @"collapsed" : @"expanded", rowY, gOpenDebug];
 }
 static void SetCollapsedFwd(BOOL c) { SetCollapsed(c, YES); }
+
+static const void *kMiniMask = &kMiniMask;
+static void HideMini(UIView *m, BOOL hide) {
+    if (!m) return;
+    if (hide && !objc_getAssociatedObject(m, kMiniMask)) {
+        m.layer.mask = [CALayer layer];   // draws nothing, still gets touches
+        objc_setAssociatedObject(m, kMiniMask, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } else if (!hide && objc_getAssociatedObject(m, kMiniMask)) {
+        m.layer.mask = nil;
+        objc_setAssociatedObject(m, kMiniMask, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+static NSHashTable *gUnclipped;
+static __weak UIView *gUnderMini;   // Music's bar while it's moved under the collapsed pill
+static void SetUnclipped(UIView *mini, UIView *root, BOOL on) {
+    if (!gUnclipped) gUnclipped = [NSHashTable weakObjectsHashTable];
+    if (on) {
+        for (UIView *p = mini.superview; p && p != root; p = p.superview) if (p.clipsToBounds) { p.clipsToBounds = NO; [gUnclipped addObject:p]; }
+        gUnderMini = mini;
+    } else {
+        for (UIView *p in [gUnclipped allObjects]) p.clipsToBounds = YES;
+        [gUnclipped removeAllObjects];
+        gUnderMini = nil;
+    }
+}
 
 // Our pill stands in for Music's bar in both states. Expanded, it sits exactly
 // where Music's (hidden) bar is; while the full player is up, Music's bar is back.
@@ -1071,6 +1123,7 @@ static void SyncPill(void) {
         if (gCollapsed && playerUp) SetCollapsed(NO, NO);
         pill.hidden = YES;
         UIView *hm = gHiddenMini; gHiddenMini = nil;
+        HideMini(hm, NO);
         if (hm && hm.alpha < 0.01) hm.alpha = 1;
         return;
     }
@@ -1082,7 +1135,9 @@ static void SyncPill(void) {
     }
     if (pill.hidden) { pill.hidden = NO; pill.alpha = 1; [pill refresh]; }
     gHiddenMini = mini;
-    if (mini.alpha > 0.01) mini.alpha = 0;
+    gPillObj = pill;
+    if (mini.alpha < 0.01) mini.alpha = 1;
+    HideMini(mini, YES);
     if (!gCollapsed && !pill.layer.animationKeys.count) {
         CGRect r = [mini convertRect:mini.bounds toView:host];
         if (!CGRectEqualToRect(pill.frame, r)) { pill.compact = NO; pill.frame = r; [pill setNeedsLayout]; }
@@ -1209,9 +1264,16 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
 %end
 
 %hook UIView
-- (void)setAlpha:(CGFloat)a {
-    if (a > 0.01 && self == gHiddenMini && gCollapse) { %orig(0); return; }
-    %orig;
+// Music's bar moved under the collapsed pill sits outside its container:
+// let touches reach it there.
+- (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
+    if (gCollapsed) {
+        UIView *m = gUnderMini;
+        if (m && m.window && self != m && [m isDescendantOfView:self]) {
+            if ([m pointInside:[self convertPoint:p toView:m] withEvent:e]) return YES;
+        }
+    }
+    return %orig;
 }
 // Music's gray circles we cleared behind the top buttons stay clear.
 - (void)setBackgroundColor:(UIColor *)color {
