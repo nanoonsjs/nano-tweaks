@@ -1,4 +1,6 @@
-// MusicPill 0.8.9 - made by nano
+// MusicPill 0.9.0 - made by nano
+// 0.9.0: our own closing animation: Apple's player-close transition is skipped
+//        and the player shrinks straight into the glass pill.
 // 0.8.9: undo 0.8.8's hiding of Music's bar container (Music reuses it for the
 //        player transition: hiding it could hide the player and crash Music).
 //        The pill-grow open animation stays; it only runs once per opening.
@@ -115,6 +117,8 @@
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
+static NSString *gDismissDebug = @"-";
+static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from);
 static void SetUnclipped(UIView *mini, UIView *root, BOOL on);
 static __weak id gPillObj;
 static NSString *gCollapseDebug = @"-";
@@ -307,6 +311,21 @@ static void FixTabItems(UITabBar *tb) {
 
 %hook UIViewController
 - (void)setTitle:(NSString *)title { %orig(IsListenNow(title) ? @"Home" : title); }
+// Closing the full player: skip Apple's transition and shrink it into our pill.
+- (void)dismissViewControllerAnimated:(BOOL)animated completion:(void (^)(void))completion {
+    UIViewController *presented = self.presentedViewController ?: self;
+    UIWindow *win = presented.view.window;
+    UIViewController *root = win.rootViewController;
+    NSString *cn = NSStringFromClass([presented class]);
+    BOOL player = animated && root && root.presentedViewController == presented && presented.presentedViewController == nil &&
+                  ([cn containsString:@"Player"] || [cn containsString:@"NowPlaying"]);
+    if (animated && root.presentedViewController == presented) gDismissDebug = cn;
+    if (!player || !gCollapse || !gRound || !gLastTabBar || gLastTabBar.window != win) { %orig; return; }
+    UIView *snap = [presented.view snapshotViewAfterScreenUpdates:NO];
+    CGRect from = [presented.view convertRect:presented.view.bounds toView:win];
+    %orig(NO, completion);
+    @try { PlayerClosedOurWay(win, snap, from); } @catch (__unused id e) {}
+}
 %end
 
 #pragma mark - geometry helpers
@@ -606,7 +625,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.9 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1112,7 +1131,7 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
             pill.frame = miniHome; [pill layoutIfNeeded];
         } completion:nil];
     }
-    gCollapseDebug = [NSString stringWithFormat:@"%@ row=%.0f open=%@", collapse ? @"collapsed" : @"expanded", rowY, gOpenDebug];
+    gCollapseDebug = [NSString stringWithFormat:@"%@ row=%.0f closed=%@", collapse ? @"collapsed" : @"expanded", rowY, gDismissDebug];
 }
 static void SetCollapsedFwd(BOOL c) { SetCollapsed(c, YES); }
 
@@ -1228,6 +1247,37 @@ static void SyncPill(void) {
     static CFTimeInterval lastRefresh;
     CGFloat every = CACurrentMediaTime() < gFastRefreshUntil ? 0.3 : 1.0;
     if (CACurrentMediaTime() - lastRefresh > every) { lastRefresh = CACurrentMediaTime(); [pill refresh]; }
+}
+
+// The player (as a snapshot) shrinks straight into the pill.
+static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
+    SyncPill();   // the pill is back right away underneath
+    UITabBar *tb = gLastTabBar;
+    UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
+    MPMiniPill *pill = nil;
+    for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
+    if (!snap || !pill || pill.hidden) return;
+    CGRect to = [pill convertRect:pill.bounds toView:win];
+    UIView *wrap = [[UIView alloc] initWithFrame:from];
+    wrap.userInteractionEnabled = NO;
+    wrap.clipsToBounds = YES;
+    wrap.layer.cornerRadius = 38;
+    wrap.layer.cornerCurve = kCACornerCurveContinuous;
+    snap.frame = wrap.bounds;
+    snap.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    snap.contentMode = UIViewContentModeTop;
+    [wrap addSubview:snap];
+    [win addSubview:wrap];
+
+    [UIView animateWithDuration:0.46 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.2 options:0 animations:^{
+        wrap.frame = to;
+        wrap.layer.cornerRadius = to.size.height / 2;
+    } completion:nil];
+    [UIView animateWithDuration:0.2 delay:0.2 options:0 animations:^{ snap.alpha = 0; } completion:^(BOOL d) { [wrap removeFromSuperview]; }];
+    // The pill gives a little liquid bounce as the player lands in it.
+    CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    k.values = @[@0.92, @0.92, @1.05, @0.98, @1]; k.keyTimes = @[@0, @0.4, @0.65, @0.85, @1]; k.duration = 0.75;
+    [pill.layer addAnimation:k forKey:@"land"];
 }
 
 @interface MPPillTicker : NSObject
