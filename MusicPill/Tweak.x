@@ -1,4 +1,7 @@
-// MusicPill 0.8.6 - made by nano
+// MusicPill 0.8.7 - made by nano
+// 0.8.7: the pill comes back as soon as the player starts closing (covers
+//        Music's gray closing bar), and its blur glass is rebuilt every time
+//        it reappears (iOS stops drawing a blur that was hidden mid-transition).
 // 0.8.6: no old-bar flash when the player opens (Music's bar stays hidden,
 //        our pill fades out as a snapshot), real blur glass matching the tab
 //        bar again (blur views are never faded now), and the pill keeps the
@@ -597,7 +600,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -695,6 +698,16 @@ static UIView *GlassCircle(NSString *ident, UIView *host) {
     [c addGestureRecognizer:tap];
     [host addSubview:c];
     return c;
+}
+static void RebuildCircleGlass(UIView *c) {
+    UIView *old = [c viewWithTag:1];
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    g.tag = 1; g.userInteractionEnabled = NO; g.clipsToBounds = YES;
+    g.layer.cornerCurve = kCACornerCurveContinuous;
+    g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+    g.frame = old ? old.frame : c.bounds; g.layer.cornerRadius = old.layer.cornerRadius;
+    [c insertSubview:g atIndex:0];
+    [old removeFromSuperview];
 }
 static void LayoutCircle(UIView *c, CGRect f) {
     c.bounds = CGRectMake(0, 0, f.size.width, f.size.height);
@@ -851,6 +864,16 @@ static BOOL OpenPlayer(UIView *mini) {
     return nil;
 }
 - (void)bumpDir:(NSNumber *)d { [self bump:d.doubleValue]; }
+- (void)rebuildGlass {
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    g.userInteractionEnabled = NO; g.clipsToBounds = YES;
+    g.layer.cornerCurve = kCACornerCurveContinuous;
+    g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+    g.frame = self.bounds; g.layer.cornerRadius = self.bounds.size.height / 2;
+    [self insertSubview:g aboveSubview:_glass];
+    [_glass removeFromSuperview];
+    _glass = g;
+}
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGSize S = self.bounds.size;
@@ -1024,6 +1047,7 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
     };
 
     if (collapse) {
+        RebuildCircleGlass(tab); RebuildCircleGlass(search);
         tab.hidden = search.hidden = pill.hidden = NO;
         pill.alpha = 1;
         tab.transform = search.transform = CGAffineTransformIdentity;
@@ -1124,7 +1148,7 @@ static void SyncPill(void) {
     MPMiniPill *pill = nil;
     for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
     UIViewController *rv = tb.window.rootViewController;
-    BOOL playerUp = rv.presentedViewController != nil;
+    BOOL playerUp = rv.presentedViewController != nil && !rv.presentedViewController.isBeingDismissed;
     BOOL on = gCollapse && gRound && mini.window && objc_getAssociatedObject(mini, kStyled) && !playerUp && !mini.hidden;
     if (!on && playerUp && pill && !pill.hidden && gCollapse && gRound) {
         // Full player opening: Music's bar stays hidden (no old-bar flash);
@@ -1155,7 +1179,11 @@ static void SyncPill(void) {
         [host addSubview:pill];
         [pill refresh];
     }
-    if (pill.hidden) { pill.hidden = NO; pill.alpha = 1; [pill refresh]; gFastRefreshUntil = CACurrentMediaTime() + 3; }
+    if (pill.hidden) {
+        pill.hidden = NO; pill.alpha = 1;
+        [pill performSelector:@selector(rebuildGlass)];
+        [pill refresh]; gFastRefreshUntil = CACurrentMediaTime() + 3;
+    }
     gHiddenMini = mini;
     gPillObj = pill;
     if (mini.alpha < 0.01) mini.alpha = 1;
