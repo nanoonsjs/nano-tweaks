@@ -1,4 +1,6 @@
-// Control26 0.2.1 - made by nano
+// Control26 0.2.2 - made by nano
+// 0.2.2: iOS 26 tiles (square, brighter glass rim, up/down chevron after the
+//        status), menu probing for Wi-Fi/Bluetooth lists.
 // 0.2.1: Wi-Fi/Bluetooth arrows expand Apple's nested module, rounder bars,
 //        sliders settle back slowly (~0.5s) with no bounce.
 // 0.2.0: live signal bars, no outer glass behind the cards, Wi-Fi/Bluetooth
@@ -71,6 +73,8 @@
 #define EXP_TAG     0x43323633
 #define CELL_TAG    0x43323634
 #define CONN_TAG    0x43323635
+#define CARD_A      0.24
+#define CARD_PRESSED 0.34
 
 static BOOL gEnabled = YES, gMusic = YES, gColors = YES, gBounce = YES, gDebug = NO, gJelly = YES, gConn = YES;
 
@@ -1470,20 +1474,8 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     if (labeled) [views addObject:labeled];
     for (UIView *v = round.superview; v && v != labeled; v = v.superview) [views addObject:v];
     UIViewController *vc = OwnerVC(labeled);
-    // iOS 16: the Wi-Fi / Bluetooth list is a nested module that expands.
-    NSMutableArray *chain = [NSMutableArray array];
-    for (UIViewController *p = vc; p; p = p.parentViewController) {
-        [chain addObject:NSStringFromClass([p class])];
-        for (NSString *sel in @[@"expandModule", @"_expandModule", @"expandModuleAnimated:"]) {
-            SEL s = NSSelectorFromString(sel);
-            if (p != vc && [p respondsToSelector:s] && [NSStringFromClass([p class]) containsString:@"Container"]) {
-                if ([sel hasSuffix:@":"]) ((void (*)(id, SEL, BOOL))objc_msgSend)(p, s, YES);
-                else ((void (*)(id, SEL))objc_msgSend)(p, s);
-                gMenuDebug = [NSString stringWithFormat:@"%@ on %@", sel, NSStringFromClass([p class])];
-                return;
-            }
-        }
-    }
+    NSMutableArray *vcs = [NSMutableArray array];
+    for (UIViewController *p = vc; p; p = p.parentViewController) [vcs addObject:p];
     if (vc.view) [views addObject:vc.view];
     for (UIView *v in views)
         for (UIGestureRecognizer *gr in v.gestureRecognizers) {
@@ -1500,33 +1492,50 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
                 gMenuDebug = @"context menu";
                 return;
             }
-    // Nothing found: list what the controller can do so the next build can call it.
+    for (UIView *v in views)
+        for (id it in v.interactions)
+            for (NSString *sel in @[@"_presentMenuAtLocation:", @"_beginInteractionAtLocation:", @"_startInteractionAtLocation:"])
+                if ([it respondsToSelector:NSSelectorFromString(sel)]) {
+                    CGPoint c = CGPointMake(CGRectGetMidX(v.bounds), CGRectGetMidY(v.bounds));
+                    ((void (*)(id, SEL, CGPoint))objc_msgSend)(it, NSSelectorFromString(sel), c);
+                    gMenuDebug = [NSString stringWithFormat:@"%@ %@", NSStringFromClass([it class]), sel];
+                    return;
+                }
+    // Nothing worked: list what Apple's objects offer so the next build can call it.
     NSMutableArray *m = [NSMutableArray array];
-    for (Class c = [vc class]; c && c != [UIViewController class] && m.count < 10; c = class_getSuperclass(c)) {
-        unsigned int cnt = 0; Method *ms = class_copyMethodList(c, &cnt);
-        for (unsigned int i = 0; i < cnt && m.count < 10; i++) {
-            NSString *n = NSStringFromSelector(method_getName(ms[i]));
-            if ([n rangeOfString:@"menu" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                [n rangeOfString:@"press" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-                [n rangeOfString:@"expand" options:NSCaseInsensitiveSearch].location != NSNotFound) [m addObject:n];
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"menu|present|expand|detail|long|click|preview" options:NSRegularExpressionCaseInsensitive error:nil];
+    NSMutableArray *objs = [vcs mutableCopy];
+    for (UIView *v in views) for (id it in v.interactions) [objs addObject:it];
+    for (id o in objs) {
+        NSMutableArray *found = [NSMutableArray array];
+        for (Class c = [o class]; c && c != [UIViewController class] && c != [NSObject class]; c = class_getSuperclass(c)) {
+            unsigned int cnt = 0; Method *ms = class_copyMethodList(c, &cnt);
+            for (unsigned int i = 0; i < cnt && found.count < 8; i++) {
+                NSString *n = NSStringFromSelector(method_getName(ms[i]));
+                if ([n hasPrefix:@"_accessibility"] || [n hasPrefix:@"."]) continue;
+                if ([re firstMatchInString:n options:0 range:NSMakeRange(0, n.length)]) [found addObject:n];
+            }
+            free(ms);
         }
-        free(ms);
+        id del = [o respondsToSelector:@selector(delegate)] && ![o isKindOfClass:[UIViewController class]] ? [o delegate] : nil;
+        [m addObject:[NSString stringWithFormat:@"%@%@: %@", NSStringFromClass([o class]), del ? [NSString stringWithFormat:@"(del=%@)", NSStringFromClass([del class])] : @"",
+                      [found componentsJoinedByString:@" "]]];
     }
-    NSMutableArray *ints = [NSMutableArray array];
-    for (UIView *v in views) for (id it in v.interactions) [ints addObject:NSStringFromClass([it class])];
-    gMenuDebug = [NSString stringWithFormat:@"no menu; chain=%@ ints=%@", [chain componentsJoinedByString:@">"], [ints componentsJoinedByString:@","]];
+    gMenuDebug = [@"none worked\n   " stringByAppendingString:[m componentsJoinedByString:@"\n   "]];
 }
 @implementation C26ConnCard
 - (instancetype)initWithKey:(NSString *)key pill:(BOOL)pill {
     if (!(self = [super initWithFrame:CGRectZero])) return nil;
     _key = key; _pill = pill;
-    self.backgroundColor = [UIColor colorWithWhite:1 alpha:0.13];
-    self.layer.borderWidth = 0.7;
-    self.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
+    self.backgroundColor = [UIColor colorWithWhite:1 alpha:CARD_A];
+    self.layer.borderWidth = 1.1;
+    self.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.32].CGColor;
     if (@available(iOS 13.0, *)) self.layer.cornerCurve = kCACornerCurveContinuous;
     _sheen = [CAGradientLayer layer];
-    _sheen.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.16].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
-    _sheen.locations = @[@0, @0.55];
+    // liquid-glass light: bright at the top edge, a softer catch at the bottom
+    _sheen.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.22].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor,
+                      (id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.1].CGColor];
+    _sheen.locations = @[@0, @0.3, @0.8, @1];
     [self.layer addSublayer:_sheen];
     _circle = [UIView new];
     _circle.userInteractionEnabled = NO;
@@ -1536,11 +1545,11 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     _icon.tintColor = UIColor.whiteColor;
     [_circle addSubview:_icon];
     _title = [UILabel new];
-    _title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    _title.font = [UIFont systemFontOfSize:pill ? 15.5 : 15.5 weight:UIFontWeightMedium];
     _title.textColor = UIColor.whiteColor;
     [self addSubview:_title];
     _sub = [UILabel new];
-    _sub.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+    _sub.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
     _sub.textColor = [UIColor colorWithWhite:1 alpha:0.62];
     [self addSubview:_sub];
     if ([key isEqualToString:@"cell"]) {
@@ -1548,9 +1557,9 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
         [_circle addSubview:_bars];
         _icon.hidden = YES;
     }
-    if (!pill && ![key isEqualToString:@"cell"]) {
-        _chevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightBold]]];
-        _chevron.tintColor = [UIColor colorWithWhite:1 alpha:0.55];
+    if ([@[@"wifi", @"airdrop", @"bt"] containsObject:key]) {
+        _chevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.up.chevron.down" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:10.5 weight:UIImageSymbolWeightSemibold]]];
+        _chevron.tintColor = [UIColor colorWithWhite:1 alpha:0.62];
         _chevron.contentMode = UIViewContentModeCenter;
         [self addSubview:_chevron];
     }
@@ -1563,23 +1572,26 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGSize S = self.bounds.size;
-    self.layer.cornerRadius = _pill ? S.height / 2 : 26;
+    self.layer.cornerRadius = _pill ? S.height / 2 : 30;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _sheen.frame = self.bounds; _sheen.cornerRadius = self.layer.cornerRadius;
     [CATransaction commit];
     CGFloat d = 44;
+    CGFloat subW;
     if (_pill) {
-        _circle.frame = CGRectMake(10, (S.height - d) / 2, d, d);
-        CGFloat x = 10 + d + 12, w = S.width - x - 16;
-        _title.frame = CGRectMake(x, S.height / 2 - 19, w, 20);
-        _sub.frame = CGRectMake(x, S.height / 2 + 1, w, 18);
+        _circle.frame = CGRectMake(14, (S.height - d) / 2, d, d);
+        CGFloat x = 14 + d + 12, w = S.width - x - 16;
+        _title.frame = CGRectMake(x, S.height / 2 - 20, w, 20);
+        subW = MIN(w, [_sub sizeThatFits:CGSizeMake(w, 20)].width);
+        _sub.frame = CGRectMake(x, S.height / 2 + 1, subW, 19);
     } else {
-        _circle.frame = CGRectMake(12, 12, d, d);
-        CGFloat w = S.width - 24 - 16;
-        _title.frame = CGRectMake(14, S.height - 52, w, 20);
-        _sub.frame = CGRectMake(14, S.height - 31, w, 18);
-        _chevron.frame = CGRectMake(S.width - 30, S.height - 52, 18, 20);
+        _circle.frame = CGRectMake(14, 14, d, d);
+        CGFloat w = S.width - 30;
+        _title.frame = CGRectMake(16, S.height - 56, w, 20);
+        subW = MIN(w - 16, [_sub sizeThatFits:CGSizeMake(w, 20)].width);
+        _sub.frame = CGRectMake(16, S.height - 35, subW, 19);
     }
+    _chevron.frame = CGRectMake(CGRectGetMaxX(_sub.frame) + 3, _sub.frame.origin.y, 12, 19);
     _circle.layer.cornerRadius = d / 2;
     _icon.frame = _circle.bounds;
     _bars.frame = CGRectMake((d - 20) / 2, (d - 16) / 2, 20, 16);
@@ -1627,7 +1639,7 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     C26Spring *s = SpringFor(self);
     s.k = 650; s.c = 38; s.tsx = s.tsy = _pill ? 0.965 : 0.93; s.tx = s.ty = 0; s.angle = 0;
     WakeSpring(s);
-    [UIView animateWithDuration:0.12 animations:^{ self.backgroundColor = [UIColor colorWithWhite:1 alpha:0.22]; }];
+    [UIView animateWithDuration:0.12 animations:^{ self.backgroundColor = [UIColor colorWithWhite:1 alpha:CARD_PRESSED]; }];
 }
 - (void)relax:(CGFloat)kick {
     C26Spring *s = SpringFor(self);
@@ -1635,7 +1647,7 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     s.vsx += kick; s.vsy += kick;
     WakeSpring(s);
     BOOL airOn = [_key isEqualToString:@"air"] && _on;
-    [UIView animateWithDuration:0.25 animations:^{ self.backgroundColor = airOn ? [UIColor.systemOrangeColor colorWithAlphaComponent:0.22] : [UIColor colorWithWhite:1 alpha:0.13]; }];
+    [UIView animateWithDuration:0.25 animations:^{ self.backgroundColor = airOn ? [UIColor.systemOrangeColor colorWithAlphaComponent:0.22] : [UIColor colorWithWhite:1 alpha:CARD_A]; }];
 }
 - (void)cancel { [self relax:0]; }
 - (void)fire {
@@ -1645,7 +1657,7 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     c.sx = c.sy = 0.78; c.k = 360; c.c = 12; c.tsx = c.tsy = 1;
     WakeSpring(c);
     UIControl *t = self.target;
-    BOOL arrow = ([_key isEqualToString:@"wifi"] || [_key isEqualToString:@"bt"]) && _touchStart.x > self.bounds.size.width - 64;
+    BOOL arrow = ([_key isEqualToString:@"wifi"] || [_key isEqualToString:@"bt"]) && _touchStart.y > _sub.frame.origin.y - 8;
     if (arrow) { @try { OpenConnMenu(self.apple, t); } @catch (__unused id e) { gMenuDebug = @"menu threw"; } return; }
     if (t && t.enabled) [t sendActionsForControlEvents:UIControlEventTouchUpInside];
     for (NSNumber *d in @[@0.06, @0.2, @0.5])
@@ -1658,7 +1670,7 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
         self.circle.backgroundColor = on ? ConnOnColor(self.key) : (white ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.2]);
         self.icon.tintColor = white ? [UIColor colorWithWhite:0.12 alpha:1] : UIColor.whiteColor;
         if ([self.key isEqualToString:@"air"])
-            self.backgroundColor = on ? [UIColor.systemOrangeColor colorWithAlphaComponent:0.22] : [UIColor colorWithWhite:1 alpha:0.13];
+            self.backgroundColor = on ? [UIColor.systemOrangeColor colorWithAlphaComponent:0.22] : [UIColor colorWithWhite:1 alpha:CARD_A];
     };
     if (animated && on && [_key isEqualToString:@"air"]) [self takeOff];
     if (animated) [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionAllowUserInteraction animations:apply completion:nil];
@@ -1701,8 +1713,8 @@ static void StyleConnectivity(NSArray *buttons) {
         else [extra addObject:b];
     }
     // The card area: a little wider and taller than Apple's 2x3 grid.
-    CGFloat W = U.size.width + 16, gap = 12, pillH = 64;
-    CGFloat tileW = (W - gap) / 2, tileH = MIN(122, tileW * 0.74);
+    CGFloat W = U.size.width + 16, gap = 14, pillH = 70;
+    CGFloat tileW = (W - gap) / 2, tileH = tileW * 0.96;
     NSMutableArray *rows = [NSMutableArray array];   // each row: array of keys
     if (byKey[@"air"]) [rows addObject:@[@"air"]];
     NSArray *tiles = @[@[@"wifi", @"airdrop"], @[@"cell", @"bt"]];
@@ -1794,7 +1806,7 @@ static void StyleConnectivity(NSArray *buttons) {
             }
             NSString *title = ConnTitle(b), *sub = ConnSubtitle(b);
             if (![card.title.text isEqualToString:title]) card.title.text = title;
-            if (![card.sub.text isEqualToString:sub]) card.sub.text = sub;
+            if (![card.sub.text isEqualToString:sub]) { card.sub.text = sub; [card setNeedsLayout]; }
             BOOL on = card.target ? card.target.isSelected : NO;
             NSNumber *last = objc_getAssociatedObject(card, kLastValue);
             if (last.intValue != (int)on) {
@@ -1845,7 +1857,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.2.1 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.2.2 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
