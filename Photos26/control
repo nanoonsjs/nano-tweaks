@@ -1,6 +1,6 @@
 Package: com.user.photos26
 Name: Photos26
-Version: 1.7.0
+Version: 1.8.0
 Architecture: iphoneos-arm64
 Description: iOS 26 style Photos viewer: liquid glass buttons and a glass video player. Made by nano.
 Maintainer: nano

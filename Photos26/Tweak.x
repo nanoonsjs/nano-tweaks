@@ -1,4 +1,7 @@
-// Photos26 1.7.0 - made by nano
+// Photos26 1.8.0 - made by nano
+// 1.8.0: no flicker when Select opens (Apple's share / trash icons ride
+//        inside the splitting circles), grid top buttons on liquid glass:
+//        Select capsule (bigger touch area), Cancel -> glass X, bigger ...
 // 1.7.0: select bar like iOS 26 (51pt circles, small round pill that hugs
 //        its text, icons centered in their circles, extra ... hidden), the
 //        split animation replays every time Select opens, middle pill shows
@@ -771,6 +774,7 @@ static void LayoutBottom(UIToolbar *tb) {
         gs.hidden = gt.hidden = gc.hidden = NO;
         // Center Apple's share and trash on their circles.
         NSDictionary *targets = @{ @"share": [NSValue valueWithCGRect:rs], @"trash": [NSValue valueWithCGRect:rt] };
+        NSMutableDictionary *finalDX = [NSMutableDictionary dictionary];
         for (NSString *k in targets) {
             UIView *v = KV(((PGBox *)found[k]).obj, @"view");
             if (!v) continue;
@@ -780,8 +784,8 @@ static void LayoutBottom(UIToolbar *tb) {
             CGRect r = [g ?: v convertRect:(g ?: v).bounds toView:c];
             CGFloat curX = CGRectGetMidX(r) - v.transform.tx;
             CGFloat dx = round(CGRectGetMidX([targets[k] CGRectValue]) - curX);
-            if (fabs(v.transform.tx - dx) > 0.5 && !wasSelect) v.transform = CGAffineTransformMakeTranslation(dx, 0);
-            else if (fabs(v.transform.tx - dx) > 0.5 && ![v.layer animationKeys].count) v.transform = CGAffineTransformMakeTranslation(dx, 0);
+            finalDX[k] = @(dx);
+            if (wasSelect && fabs(v.transform.tx - dx) > 0.5 && ![v.layer animationKeys].count) v.transform = CGAffineTransformMakeTranslation(dx, 0);
             objc_setAssociatedObject(v, kShift, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         // "Show Selected (13)" in the middle.
@@ -820,24 +824,32 @@ static void LayoutBottom(UIToolbar *tb) {
             gt.frame = CGRectMake(CGRectGetMaxX(rm) - 6 - D, rm.origin.y, D, D);
             gs.transform = gt.transform = CGAffineTransformMakeScale(0.7, 0.7);
             gs.alpha = gt.alpha = 0.4; sl.alpha = 0;
-            NSMutableArray *apple = [NSMutableArray array];
-            for (NSString *k in @[@"share", @"trash"]) { UIView *v = KV(((PGBox *)found[k]).obj, @"view"); if (v) [apple addObject:v]; }
-            for (UIView *v in apple) { v.alpha = 0; }
-            [UIView animateWithDuration:0.75 delay:0.02 usingSpringWithDamping:0.58 initialSpringVelocity:0.9
+            // Apple's icons start inside the pill with their circles and ride out with them.
+            UIView *va = KV(shareIt, @"view"), *vb = KV(trashIt, @"view");
+            CGFloat dxa = [finalDX[@"share"] doubleValue], dxb = [finalDX[@"trash"] doubleValue];
+            va.transform = CGAffineTransformMakeTranslation(dxa + (CGRectGetMidX(gs.frame) - CGRectGetMidX(rs)), 0);
+            vb.transform = CGAffineTransformMakeTranslation(dxb + (CGRectGetMidX(gt.frame) - CGRectGetMidX(rt)), 0);
+            va.alpha = vb.alpha = 1;
+            [UIView animateWithDuration:0.75 delay:0 usingSpringWithDamping:0.58 initialSpringVelocity:0.9
                                 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
                 gs.transform = gt.transform = CGAffineTransformIdentity;
                 gs.frame = rs; gt.frame = rt;
                 gs.alpha = gt.alpha = 1;
+                va.transform = CGAffineTransformMakeTranslation(dxa, 0);
+                vb.transform = CGAffineTransformMakeTranslation(dxb, 0);
             } completion:nil];
-            [UIView animateWithDuration:0.3 delay:0.18 options:UIViewAnimationOptionAllowUserInteraction animations:^{
-                sl.alpha = 1; for (UIView *v in apple) v.alpha = 1;
-            } completion:nil];
+            [UIView animateWithDuration:0.25 delay:0.12 options:UIViewAnimationOptionAllowUserInteraction animations:^{ sl.alpha = 1; } completion:nil];
+            // Apple may finish laying out its buttons a moment later: settle again then.
+            for (NSNumber *d in @[@0.8, @1.1])
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    UIToolbar *t2 = gToolbar; if (t2) { @try { LayoutBottom(t2); } @catch (__unused id e) {} }
+                });
             CAKeyframeAnimation *sq = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"];
             sq.values = @[@1.12, @0.9, @1.04, @0.99, @1]; sq.keyTimes = @[@0, @0.25, @0.55, @0.8, @1]; sq.duration = 0.7;
             CAKeyframeAnimation *sqy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
             sqy.values = @[@0.9, @1.08, @0.97, @1.01, @1]; sqy.keyTimes = sq.keyTimes; sqy.duration = 0.7;
             [gc.layer addAnimation:sq forKey:@"sx"]; [gc.layer addAnimation:sqy forKey:@"sy"];
-        } else {
+        } else if (!gs.layer.animationKeys.count && !gt.layer.animationKeys.count) {
             SetFrame(gs, rs); SetFrame(gt, rt); SetFrame(gc, rm);
             SetFrame(sl, CGRectInset(rm, 12, 0));
         }
@@ -1229,6 +1241,98 @@ static void LayoutTop(UINavigationBar *nb) {
     gTopDebug = [NSString stringWithFormat:@"back=%@ title=%@ more=%d edit=%d", NSStringFromClass([back class]), NSStringFromClass([title class]), moreView != nil, editView != nil];
 }
 
+#pragma mark - grid top buttons (Select / Cancel / ...)
+
+static NSString *gGridDebug = @"-";
+static UIView *ControlAncestor(UIView *v) {
+    for (UIView *p = v; p; p = p.superview) if ([p isKindOfClass:[UIControl class]]) return p;
+    return v.superview;
+}
+// Our glass sits right under Apple's button; Apple's button is made invisible
+// (empty mask) and scaled up so the whole glass is its touch area.
+static PGGlass *GridGlass(UIView *ctl, NSString *key) {
+    UIView *sup = ctl.superview;
+    PGGlass *g = nil;
+    for (UIView *v in sup.subviews) if ([v isKindOfClass:[PGGlass class]] && [v.accessibilityIdentifier isEqualToString:key]) g = (PGGlass *)v;
+    if (!g) { g = [PGGlass new]; g.accessibilityIdentifier = key; }
+    if (g.superview != sup || [sup.subviews indexOfObject:g] + 1 != [sup.subviews indexOfObject:ctl]) [sup insertSubview:g belowSubview:ctl];
+    return g;
+}
+static void FitTouch(UIView *ctl, CGSize glass) {
+    CGSize s = ctl.bounds.size;
+    if (s.width < 2 || s.height < 2) return;
+    CGFloat sx = MAX(1, glass.width / s.width), sy = MAX(1, glass.height / s.height);
+    CGAffineTransform t = CGAffineTransformMakeScale(sx, sy);
+    if (!CGAffineTransformEqualToTransform(ctl.transform, t)) ctl.transform = t;
+}
+static void StyleGridTop(UIWindow *w) {
+    if (!w || !gEnabled || !gTopBar || HasScrubber(w)) return;
+    static __weak UIView *selCtl, *moreCtl;
+    static __weak UILabel *selLabel;
+    static CFTimeInterval lastSearch;
+    CFTimeInterval now = CACurrentMediaTime();
+    UIView *sc = selCtl, *mc = moreCtl;
+    if ((!sc.window || !mc.window) && now - lastSearch > 0.8) {
+        lastSearch = now;
+        NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
+        int guard = 0;
+        while (stack.count && guard++ < 5000) {
+            UIView *v = stack.lastObject; [stack removeLastObject];
+            if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UICollectionViewCell class]]) continue;
+            CGRect f = [v convertRect:v.bounds toView:nil];
+            if (f.origin.y > 160) { if (f.origin.y > w.bounds.size.height * 0.5) continue; }
+            else if ([v isKindOfClass:[UILabel class]]) {
+                NSString *s = ((UILabel *)v).text;
+                if ([s isEqualToString:@"Select"] || [s isEqualToString:@"Cancel"]) { selLabel = (UILabel *)v; selCtl = ControlAncestor(v); }
+            } else if ([v isKindOfClass:[UIImageView class]] && [((UIImageView *)v).image.description containsString:@"ellipsis"]) {
+                moreCtl = ControlAncestor(v);
+            }
+            [stack addObjectsFromArray:v.subviews];
+        }
+        sc = selCtl; mc = moreCtl;
+    }
+    UILabel *sl = selLabel;
+    if (sc.window && sl) {
+        BOOL cancel = [sl.text isEqualToString:@"Cancel"];
+        Mask(sc);
+        PGGlass *g = GridGlass(sc, @"grid_sel");
+        UILabel *t = nil; UIImageView *x = nil;
+        for (UIView *s in g.subviews) { if ([s isKindOfClass:[UILabel class]]) t = (UILabel *)s; if ([s isKindOfClass:[UIImageView class]]) x = (UIImageView *)s; }
+        if (!t) { t = [UILabel new]; t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold]; t.textAlignment = NSTextAlignmentCenter; [g addSubview:t]; }
+        if (!x) { x = [[UIImageView alloc] initWithImage:Sym(@"xmark", 18)]; x.tintColor = UIColor.whiteColor; x.contentMode = UIViewContentModeCenter; [g addSubview:x]; }
+        t.text = @"Select";
+        CGFloat H = 44;
+        CGFloat W = cancel ? H : ceil([@"Select" sizeWithAttributes:@{NSFontAttributeName: t.font}].width) + 36;
+        CGPoint c = sc.center;
+        CGRect nf = CGRectMake(round(c.x - W / 2), round(c.y - H / 2), W, H);
+        BOOL changed = objc_getAssociatedObject(g, kStyled) && [objc_getAssociatedObject(g, kStyled) boolValue] != cancel;
+        objc_setAssociatedObject(g, kStyled, @(cancel), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        void (^apply)(void) = ^{
+            g.frame = nf; [g layoutIfNeeded];
+            t.frame = g.bounds; x.frame = g.bounds;
+            t.alpha = cancel ? 0 : 1; x.alpha = cancel ? 1 : 0;
+        };
+        if (changed) {
+            // Select <-> X: the capsule melts into a circle (and back).
+            [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.8 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:apply completion:nil];
+        } else if (!g.layer.animationKeys.count) apply();
+        FitTouch(sc, nf.size);
+    }
+    if (mc.window) {
+        Mask(mc);
+        PGGlass *g = GridGlass(mc, @"grid_more");
+        UIImageView *x = nil;
+        for (UIView *s in g.subviews) if ([s isKindOfClass:[UIImageView class]]) x = (UIImageView *)s;
+        if (!x) { x = [[UIImageView alloc] initWithImage:Sym(@"ellipsis", 20)]; x.tintColor = UIColor.whiteColor; x.contentMode = UIViewContentModeCenter; [g addSubview:x]; }
+        CGFloat H = 44;
+        CGPoint c = mc.center;
+        SetFrame(g, CGRectMake(round(c.x - H / 2), round(c.y - H / 2), H, H));
+        x.frame = g.bounds;
+        FitTouch(mc, CGSizeMake(H, H));
+    }
+    gGridDebug = [NSString stringWithFormat:@"select=%@ more=%@", NSStringFromClass([sc class]), NSStringFromClass([mc class])];
+}
+
 #pragma mark - debug
 
 static void UpdateDebug(UIWindow *w) {
@@ -1246,7 +1350,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.7.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.8.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1492,6 +1596,16 @@ static void InitScrubber(void) { static BOOL done; if (done) return; done = YES;
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     %init;
+    // The grid's top buttons live outside the bars: check them a few times a second.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *tm) {
+            if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+            UIWindow *key = nil;
+            for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
+                if ([s isKindOfClass:[UIWindowScene class]]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) key = w;
+            @try { StyleGridTop(key); } @catch (__unused id e) {}
+        }];
+    });
     if (objc_getClass("PUScrubberView")) InitScrubber();
     else dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (objc_getClass("PUScrubberView")) InitScrubber();
