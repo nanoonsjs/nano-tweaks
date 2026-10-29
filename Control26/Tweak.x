@@ -1,4 +1,6 @@
-// Control26 0.3.1 - made by nano
+// Control26 0.3.2 - made by nano
+// 0.3.2: subtle fade-and-settle when expanded cards appear, music text a bit
+//        smaller, Auto-Brightness switched off (setting "Stop Auto-Brightness").
 // 0.3.1: tap anywhere on the brightness / volume capsule to open it, no icon
 //        inside the expanded slider, Dark Mode / Night Shift / True Tone left
 //        as Apple's own round buttons (cards are only for connectivity).
@@ -84,6 +86,7 @@
 #define CARD_A      0.24
 #define CARD_PRESSED 0.34
 
+static BOOL gNoAuto = YES;
 static BOOL gEnabled = YES, gMusic = YES, gColors = YES, gBounce = YES, gDebug = NO, gJelly = YES, gConn = YES;
 
 static const void *kHidByUs = &kHidByUs;
@@ -121,9 +124,10 @@ static void LoadPrefs(void) {
     gDebug   = PrefBool(f, @"debug", NO);
     gJelly   = PrefBool(f, @"jelly", YES);
     gConn    = PrefBool(f, @"conn", YES);
+    gNoAuto  = PrefBool(f, @"noauto", YES);
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ LoadPrefs(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ LoadPrefs(); @try { StopAutoBrightness(); } @catch (__unused id e) {} });
 }
 
 #pragma mark - helpers
@@ -192,8 +196,10 @@ static NSTimer *gTimer;
 static NSString *gMusicDebug = @"-", *gSliderDebug = @"-", *gConnDebug = @"-";
 static void Tick(void);
 
+static void StopAutoBrightness(void);
 static void StartTimer(void) {
     if (gTimer) return;
+    @try { StopAutoBrightness(); } @catch (__unused id e) {}   // each time Control Center opens
     gTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) { @try { Tick(); } @catch (__unused id e) {} }];
     dispatch_async(dispatch_get_main_queue(), ^{ @try { Tick(); } @catch (__unused id e) {} });
 }
@@ -872,8 +878,8 @@ static void StyleModule(UIView *module) {
     glass.layer.cornerRadius = d / 2;
     air.hidden = glass.hidden = NO;
 
-    UIFont *tf = [UIFont systemFontOfSize:16 * s * (gNPTitle ? 1 : 0.9) weight:UIFontWeightSemibold];   // "Not Playing" 10% smaller
-    UIFont *af = [UIFont systemFontOfSize:16 * s weight:UIFontWeightRegular];
+    UIFont *tf = [UIFont systemFontOfSize:14.5 * s * (gNPTitle ? 1 : 0.9) weight:UIFontWeightSemibold];   // "Not Playing" 10% smaller
+    UIFont *af = [UIFont systemFontOfSize:14.5 * s weight:UIFontWeightRegular];
     if (![title.font isEqual:tf]) title.font = tf;
     if (![artist.font isEqual:af]) artist.font = af;
 
@@ -1922,7 +1928,15 @@ static void StyleConnectivity(NSArray *buttons) {
             }
             CGFloat a = (card.target && !card.target.enabled) ? 0.5 : 1;
             if (card.alpha != a && !fresh) card.alpha = a;
-            if (fresh) card.alpha = a;   // show right away, no entrance animation
+            if (fresh) {
+                // A small, quick settle: fade in from just slightly smaller.
+                card.alpha = 0;
+                card.transform = CGAffineTransformMakeScale(0.96, 0.96);
+                [UIView animateWithDuration:0.28 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0.3
+                                    options:UIViewAnimationOptionAllowUserInteraction animations:^{
+                    card.alpha = a; card.transform = CGAffineTransformIdentity;
+                } completion:nil];
+            }
 
             // Apple's own button stays (for state) but draws nothing.
             if (!objc_getAssociatedObject(b, kConnMask)) {
@@ -1952,7 +1966,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.3.1 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.3.2 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2151,6 +2165,20 @@ static void StartLateHooks(void) {
     }];
 }
 
+// Turn off Auto-Brightness through CoreBrightness (what Settings uses).
+static void StopAutoBrightness(void) {
+    if (!gEnabled || !gNoAuto) return;
+    static id client;
+    if (!client) {
+        dlopen("/System/Library/PrivateFrameworks/CoreBrightness.framework/CoreBrightness", RTLD_LAZY);
+        Class c = NSClassFromString(@"BrightnessSystemClient");
+        if (c) client = [c new];
+    }
+    SEL set = NSSelectorFromString(@"setProperty:forKey:");
+    if (client && [client respondsToSelector:set])
+        ((void (*)(id, SEL, id, id))objc_msgSend)(client, set, @NO, @"DisplayBrightnessAuto");
+}
+
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
     if (![bid isEqualToString:@"com.apple.springboard"]) return;
@@ -2161,4 +2189,5 @@ static void StartLateHooks(void) {
     // a second (for up to 2 minutes) and hook each part as soon as it exists.
     StartLateHooks();
     dispatch_async(dispatch_get_main_queue(), ^{ RegisterNowPlayingNotifications(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ @try { StopAutoBrightness(); } @catch (__unused id e) {} });
 }

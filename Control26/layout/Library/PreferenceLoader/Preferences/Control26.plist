@@ -69,6 +69,14 @@
 			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
 		</dict>
 		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Stop Auto-Brightness</string>
+			<key>key</key><string>noauto</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
 			<key>cell</key><string>PSGroupCell</string>
 			<key>label</key><string>Debug</string>
 			<key>footerText</key><string>Shows a purple box with what Control26 found. Send a screenshot if something looks off, then turn it off.</string>
