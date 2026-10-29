@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>entry</key>
+	<dict>
+		<key>cell</key><string>PSLinkCell</string>
+		<key>label</key><string>PhotosGlass</string>
+		<key>icon</key><string>PhotosGlass.png</string>
+	</dict>
+	<key>title</key><string>PhotosGlass</string>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Glass pills for the bottom toolbar when viewing a photo or video. Close Photos from the app switcher and reopen it after changing.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Enabled</string>
+			<key>key</key><string>enabled</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.photosglass</string>
+			<key>PostNotification</key><string>com.user.photosglass/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Made by nano</string>
+		</dict>
+	</array>
+</dict>
+</plist>

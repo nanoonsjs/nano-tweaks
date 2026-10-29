@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>entry</key>
+	<dict>
+		<key>cell</key><string>PSLinkCell</string>
+		<key>label</key><string>MusicPill</string>
+		<key>icon</key><string>MusicPill.png</string>
+	</dict>
+	<key>title</key><string>MusicPill</string>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Close Music from the app switcher and reopen it after changing these.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Rename Listen Now to Home</string>
+			<key>key</key><string>rename</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Made by nano</string>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -1,0 +1,50 @@
+name: Build tweaks
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Real macOS + Xcode, so arm64e tweaks are built with Apple's own compiler.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install ldid make xz
+
+      - name: Install Theos
+        run: |
+          git clone --recursive --depth=1 https://github.com/theos/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+
+      - name: Build debs
+        run: |
+          mkdir -p out
+          for p in MusicPill PhotosGlass; do
+            echo "::group::$p"
+            (cd "$p" && gmake clean package FINALPACKAGE=1)
+            cp "$p"/packages/*.deb out/
+            echo "::endgroup::"
+          done
+          ls -la out
+
+      - name: Upload debs (Actions artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs
+          path: out/*.deb
+
+      - name: Publish release (direct .deb downloads for your phone)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="build-${{ github.run_number }}"
+          gh release create "$tag" out/*.deb \
+            --title "Build ${{ github.run_number }}" \
+            --notes "Built with Xcode on GitHub Actions. Tap a .deb, then open it in Sileo or Filza."
