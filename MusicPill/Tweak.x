@@ -1,4 +1,7 @@
-// MusicPill 0.6.0 - made by nano
+// MusicPill 0.6.1 - made by nano
+// 0.6.1: no more flicker. Music's resets of the buttons we replace/clear are now
+//        blocked when they happen (hooks) instead of corrected 4x a second, and
+//        the top glass is attached to the buttons so it moves with them.
 // 0.6.0: scrolling song title in the pill; iOS 26 style album/playlist buttons
 //        (shuffle circle, white Play, download circle); glass top buttons.
 // 0.5.3: shrink/round the bar's INNER content view instead of its container.
@@ -55,6 +58,8 @@ static const void *kHiddenBG = &kHiddenBG;
 static const void *kApplied = &kApplied;
 static const void *kSwipeAdded = &kSwipeAdded;
 static const void *kFight = &kFight;
+static const void *kHidByUs = &kHidByUs;
+static const void *kClearedBG = &kClearedBG;
 
 #pragma mark - prefs
 
@@ -463,7 +468,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -504,6 +509,32 @@ static void Update(UITabBar *tb) {
     }
     UpdateDebug(tb, root, tabRect, gRound ? mini : nil);
 }
+
+%hook UIControl
+// Our hidden originals (Play/Shuffle/Download): if Music tries to bring them
+// back, keep them invisible. This is what stops the old buttons flickering in.
+- (void)setAlpha:(CGFloat)alpha {
+    if (alpha > 0 && objc_getAssociatedObject(self, kHidByUs)) { %orig(0); return; }
+    %orig;
+}
+%end
+
+%hook UIView
+// Music's gray circles we cleared behind the top buttons stay clear.
+- (void)setBackgroundColor:(UIColor *)color {
+    if (color && gNavGlass && objc_getAssociatedObject(self, kClearedBG)) { %orig(UIColor.clearColor); return; }
+    %orig;
+}
+%end
+
+%hook UINavigationBar
+// White top icons; Music sets its red tint per page, which flashed red.
+- (void)setTintColor:(UIColor *)color { %orig(gNavGlass ? UIColor.whiteColor : color); }
+%end
+
+%hook UIBarButtonItem
+- (void)setTintColor:(UIColor *)color { %orig(gNavGlass ? UIColor.whiteColor : color); }
+%end
 
 %hook UITabBar
 - (void)layoutSubviews {
@@ -644,7 +675,6 @@ static void MarqueeTick(UIView *mini) {
 
 #pragma mark - iOS 26 album / playlist buttons
 
-static const void *kHidByUs = &kHidByUs;
 static __weak UIControl *gPlayCtl, *gShuffleCtl, *gDownloadCtl;
 static __weak UIView *gRowParent;
 static CFTimeInterval gLastHeaderSearch;
@@ -690,7 +720,10 @@ static void HideOriginal(UIView *v) {
     if (v.alpha != 0) { v.alpha = 0; objc_setAssociatedObject(v, kHidByUs, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
 }
 static void ShowOriginal(UIView *v) {
-    if (v && objc_getAssociatedObject(v, kHidByUs)) { v.alpha = 1; objc_setAssociatedObject(v, kHidByUs, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    if (v && objc_getAssociatedObject(v, kHidByUs)) {
+        objc_setAssociatedObject(v, kHidByUs, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        v.alpha = 1;
+    }
 }
 
 static void Forward(UIControl *c) {
@@ -754,14 +787,18 @@ static void AlbumTick(UIWindow *w) {
     BOOL lost = !play || !shuffle || !play.window || !shuffle.window;
     if (lost) {
         CFTimeInterval now = CACurrentMediaTime();
-        if (now - gLastHeaderSearch < 0.5) return;
+        if (now - gLastHeaderSearch < 0.2) return;
         gLastHeaderSearch = now;
-        TearDownRow();
         UIControl *p = nil, *s = nil, *d = nil;
         FindHeaderControls(w, 0, &p, &s, &d);
+        if (!p || !s) {
+            TearDownRow();
+            gPlayCtl = nil; gShuffleCtl = nil; gDownloadCtl = nil;
+            gAlbumDebug = [NSString stringWithFormat:@"play=%d shuffle=%d", p != nil, s != nil];
+            return;
+        }
         gPlayCtl = p; gShuffleCtl = s; gDownloadCtl = d;
         play = p; shuffle = s;
-        if (!play || !shuffle) { gAlbumDebug = [NSString stringWithFormat:@"play=%d shuffle=%d", play != nil, shuffle != nil]; return; }
     }
     UIView *parent = CommonParent(play, shuffle);
     // Only take over if the originals can be triggered from our buttons.
@@ -778,6 +815,11 @@ static void AlbumTick(UIWindow *w) {
     if (!row) {
         row = [UIView new];
         row.tag = ROW_TAG;
+        UIView *cover = [UIView new];
+        cover.tag = 9;
+        cover.backgroundColor = UIColor.systemBackgroundColor;
+        cover.userInteractionEnabled = NO;
+        [row addSubview:cover];
         [row addSubview:RowButton(2, @"shuffle", nil, NO)];
         [row addSubview:RowButton(1, @"play.fill", @"Play", YES)];
         [row addSubview:RowButton(3, @"arrow.down", nil, NO)];
@@ -791,6 +833,11 @@ static void AlbumTick(UIWindow *w) {
     CGFloat h = MAX(u.size.height, 40);
     CGRect rf = CGRectMake(u.origin.x, CGRectGetMidY(u) - h / 2, u.size.width, h);
     if (!CGRectEqualToRect(row.frame, rf)) row.frame = rf;
+    // Cover exactly where Music's buttons are (not the taller row), so nothing
+    // of the old buttons shows even for a frame.
+    UIView *cover = [row viewWithTag:9];
+    CGRect cf = CGRectOffset(u, -rf.origin.x, -rf.origin.y);
+    if (!CGRectEqualToRect(cover.frame, cf)) cover.frame = cf;
 
     UIControl *dl = gDownloadCtl;
     // Music hides its download button once the album is downloaded; mirror that.
@@ -814,7 +861,7 @@ static void AlbumTick(UIWindow *w) {
 
 #pragma mark - glass top buttons
 
-static const void *kClearedBG = &kClearedBG;
+static __weak UIView *gRightHost;
 
 static void CollectBarButtons(UIView *v, int depth, NSMutableArray *out) {
     for (UIView *s in v.subviews) {
@@ -830,88 +877,97 @@ static void CollectBarButtons(UIView *v, int depth, NSMutableArray *out) {
 
 static UIView *GlyphIn(UIView *v, int depth) {
     for (UIView *s in v.subviews) {
-        if (s.hidden || s.alpha < 0.01 || s.bounds.size.width < 2) continue;
+        if (s.hidden || s.alpha < 0.01 || s.bounds.size.width < 2 || s.tag == NAVGLASS_TAG) continue;
         if ([s isKindOfClass:[UIImageView class]] && ((UIImageView *)s).image) return s;
         if (depth < 5) { UIView *g = GlyphIn(s, depth + 1); if (g) return g; }
     }
     return nil;
 }
 
-// Music's own gray circles behind its top buttons: clear them so only our glass shows.
+// Music's own gray circles behind its top buttons: clear them once. The
+// setBackgroundColor hook below keeps them clear, so they can't flash back.
 static void ClearCircles(UIView *v, int depth) {
     for (UIView *s in v.subviews) {
-        if ([s isKindOfClass:[UIImageView class]] || [s isKindOfClass:[UILabel class]]) continue;
-        if (s.backgroundColor && CGColorGetAlpha(s.backgroundColor.CGColor) > 0.01 &&
+        if ([s isKindOfClass:[UIImageView class]] || [s isKindOfClass:[UILabel class]] || s.tag == NAVGLASS_TAG) continue;
+        if (!objc_getAssociatedObject(s, kClearedBG) && s.backgroundColor && CGColorGetAlpha(s.backgroundColor.CGColor) > 0.01 &&
             fabs(s.bounds.size.width - s.bounds.size.height) < 3 && s.bounds.size.width >= 20) {
-            s.backgroundColor = UIColor.clearColor;
             objc_setAssociatedObject(s, kClearedBG, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            s.backgroundColor = UIColor.clearColor;
         }
         if (depth < 4) ClearCircles(s, depth + 1);
     }
 }
 
-static UIView *MakeNavGlass(void) {
+static UIView *GlassIn(UIView *host) {
+    for (UIView *s in host.subviews) if (s.tag == NAVGLASS_TAG) return s;
     UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    g.tag = NAVGLASS_TAG;
     g.userInteractionEnabled = NO;
     g.clipsToBounds = YES;
     g.layer.cornerCurve = kCACornerCurveContinuous;
     g.layer.borderWidth = 0.75;
     g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.15].CGColor;
+    [host insertSubview:g atIndex:0];
     return g;
 }
 
+static void RemoveGlass(UIView *v, int depth) {
+    for (UIView *s in [v.subviews copy]) {
+        if (s.tag == NAVGLASS_TAG) { [s removeFromSuperview]; continue; }
+        if (depth < 8) RemoveGlass(s, depth + 1);
+    }
+}
+
+static void SetFrameIfNew(UIView *v, CGRect f, CGFloat radius) {
+    if (!CGRectEqualToRect(v.frame, f)) v.frame = f;
+    if (v.layer.cornerRadius != radius) v.layer.cornerRadius = radius;
+}
+
+// The glass lives INSIDE the button (or the right-hand buttons' shared
+// container), so it slides and fades with them during page transitions
+// instead of being repositioned after the fact.
 static void NavTick(UINavigationBar *nb) {
     if (!nb || !nb.window) return;
-    UIView *container = [nb viewWithTag:NAVGLASS_TAG];
-    if (!gNavGlass) { [container removeFromSuperview]; gNavDebug = @"off"; return; }
-
+    if (!gNavGlass) { RemoveGlass(nb, 0); gNavDebug = @"off"; return; }
     if (![nb.tintColor isEqual:UIColor.whiteColor]) nb.tintColor = UIColor.whiteColor;
 
     NSMutableArray *buttons = [NSMutableArray array];
     CollectBarButtons(nb, 0, buttons);
     CGFloat mid = nb.bounds.size.width / 2;
-    NSMutableArray *rects = [NSMutableArray array];
-    CGRect right = CGRectNull;
+    const CGFloat H = 44;
+    NSMutableArray *right = [NSMutableArray array];
     for (UIView *b in buttons) {
-        if (gDownloadCtl && [gDownloadCtl isDescendantOfView:b] && objc_getAssociatedObject(gDownloadCtl, kHidByUs)) continue; // moved to the row
         ClearCircles(b, 0);
         UIView *g = GlyphIn(b, 0) ?: b;
-        CGRect r = [g convertRect:g.bounds toView:nb];
-        if (CGRectGetMidX(r) < mid) [rects addObject:[NSValue valueWithCGRect:r]];
-        else right = CGRectUnion(right, r);
-    }
-    gNavDebug = [NSString stringWithFormat:@"%lu buttons", (unsigned long)buttons.count];
-
-    const CGFloat H = 44;
-    NSMutableArray *pills = [NSMutableArray array];
-    for (NSValue *v in rects) {
-        CGRect r = v.CGRectValue;
-        [pills addObject:[NSValue valueWithCGRect:CGRectMake(round(CGRectGetMidX(r) - H / 2), round(CGRectGetMidY(r) - H / 2), H, H)]];
-    }
-    if (!CGRectIsNull(right)) {
-        CGFloat w = MAX(H, right.size.width + 30);
-        [pills addObject:[NSValue valueWithCGRect:CGRectMake(round(CGRectGetMidX(right) - w / 2), round(CGRectGetMidY(right) - H / 2), round(w), H)]];
+        CGRect inNav = [g convertRect:g.bounds toView:nb];
+        if (CGRectGetMidX(inNav) < mid) {
+            CGRect r = [g convertRect:g.bounds toView:b];
+            SetFrameIfNew(GlassIn(b), CGRectMake(round(CGRectGetMidX(r) - H / 2), round(CGRectGetMidY(r) - H / 2), H, H), H / 2);
+        } else {
+            [right addObject:b];
+        }
     }
 
-    if (!container) {
-        container = [UIView new];
-        container.tag = NAVGLASS_TAG;
-        container.userInteractionEnabled = NO;
-        UIView *bg = nil;
-        for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"Background"]) { bg = s; break; }
-        if (bg) [nb insertSubview:container aboveSubview:bg]; else [nb insertSubview:container atIndex:0];
+    // Right side: one capsule around all of them, inside their shared container.
+    UIView *host = nil;
+    if (right.count == 1) host = right.firstObject;
+    else if (right.count > 1) {
+        host = [right.firstObject superview];
+        for (UIView *b in right) while (host && ![b isDescendantOfView:host]) host = host.superview;
     }
-    if (!CGRectEqualToRect(container.frame, nb.bounds)) container.frame = nb.bounds;
-    while (container.subviews.count < pills.count) [container addSubview:MakeNavGlass()];
-    for (NSUInteger i = 0; i < container.subviews.count; i++) {
-        UIView *g = container.subviews[i];
-        if (i < pills.count) {
-            CGRect f = [pills[i] CGRectValue];
-            if (!CGRectEqualToRect(g.frame, f)) g.frame = f;
-            g.layer.cornerRadius = H / 2;
-            g.hidden = NO;
-        } else g.hidden = YES;
+    UIView *old = gRightHost;
+    if (old && old != host) for (UIView *s in [old.subviews copy]) if (s.tag == NAVGLASS_TAG) [s removeFromSuperview];
+    gRightHost = host;
+    if (host) {
+        CGRect u = CGRectNull;
+        for (UIView *b in right) {
+            UIView *g = GlyphIn(b, 0) ?: b;
+            u = CGRectUnion(u, [g convertRect:g.bounds toView:host]);
+        }
+        CGFloat w = MAX(H, u.size.width + 30);
+        SetFrameIfNew(GlassIn(host), CGRectMake(round(CGRectGetMidX(u) - w / 2), round(CGRectGetMidY(u) - H / 2), round(w), H), H / 2);
     }
+    gNavDebug = [NSString stringWithFormat:@"%lu buttons, %lu right", (unsigned long)buttons.count, (unsigned long)right.count];
 }
 
 static UINavigationBar *TopNavBar(UIWindow *w) {
