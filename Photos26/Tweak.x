@@ -1,4 +1,6 @@
-// Photos26 2.0.0 - made by nano
+// Photos26 2.0.1 - made by nano
+// 2.0.1: X shows on Cancel, Select bigger and spaced from ..., select bar
+//        never flashes when opening a photo (needs Apple's selection label).
 // 2.0.0: grid top buttons (PXCuratedLibraryOverlayButton) styled from inside
 //        each button: glass Select capsule, glass X for Cancel, bigger glass
 //        ... circle, larger touch areas; select bar pinned to a fixed spot
@@ -639,7 +641,7 @@ static BOOL HasScrubber(UIWindow *w) {
     UIView *c = cached;
     if (c && c.window == w) return YES;
     CFTimeInterval now = CACurrentMediaTime();
-    if (now - last < 0.4) return lastAnswer;
+    if (now - last < 0.4 && lastAnswer) return YES;
     last = now;
     Class sc = NSClassFromString(@"PUScrubberView");
     NSMutableArray *stack = [NSMutableArray arrayWithObject:w ?: [UIView new]];
@@ -751,7 +753,8 @@ static void LayoutBottom(UIToolbar *tb) {
             [stack addObjectsFromArray:v.subviews];
         }
     }
-    if (gEnabled && !viewerHere && found[@"share"] && found[@"trash"]) {
+    BOOL selectLabel = countLabel && [countLabel.text rangeOfString:@"elect"].location != NSNotFound;
+    if (gEnabled && !viewerHere && selectLabel && found[@"share"] && found[@"trash"]) {
         c = EnsureContainer(tb);
         gToolbar = tb;
         gItems = found;
@@ -1304,7 +1307,7 @@ static void StyleOverlayButton(UIView *b) {
         x.userInteractionEnabled = NO;
         [b addSubview:x];
     }
-    g.hidden = NO;
+    g.hidden = NO; x.hidden = NO;
     if (b.clipsToBounds) b.clipsToBounds = NO;
     [b sendSubviewToBack:g];
     [b bringSubviewToFront:x];
@@ -1313,9 +1316,19 @@ static void StyleOverlayButton(UIView *b) {
     CGPoint c = CGPointMake(S.width / 2, S.height / 2);
     CGFloat H = 44;
     CGRect nf;
-    if ([kind isEqualToString:@"text"]) nf = CGRectMake(c.x - MAX(S.width + 10, 80) / 2, c.y - H / 2, MAX(S.width + 10, 80), H);
+    if ([kind isEqualToString:@"text"]) {
+        CGFloat tw = label ? [label.text sizeWithAttributes:@{NSFontAttributeName: label.font}].width * 1.15 : S.width;
+        CGFloat w = MAX(tw + 34, 84);
+        nf = CGRectMake(c.x - w / 2, c.y - H / 2, w, H);
+    }
     else nf = CGRectMake(c.x - H / 2, c.y - H / 2, H, H);
     BOOL cancel = [kind isEqualToString:@"cancel"];
+    // Select: bigger, crisp text; the whole button slides left, away from the ... circle.
+    BOOL text = [kind isEqualToString:@"text"];
+    CGAffineTransform lt = text ? CGAffineTransformMakeScale(1.15, 1.15) : CGAffineTransformIdentity;
+    if (label && !CGAffineTransformEqualToTransform(label.transform, lt)) { label.transform = lt; label.contentScaleFactor = UIScreen.mainScreen.scale * (text ? 1.15 : 1); }
+    CGAffineTransform bt = dots ? CGAffineTransformIdentity : CGAffineTransformMakeTranslation(-14, 0);
+    if (!CGAffineTransformEqualToTransform(b.transform, bt)) b.transform = bt;
     if (cancel) Mask(label); else Unmask(label);
     if (dots && !CGAffineTransformEqualToTransform(dots.transform, CGAffineTransformMakeScale(1.25, 1.25))) dots.transform = CGAffineTransformMakeScale(1.25, 1.25);
     NSString *old = objc_getAssociatedObject(b, kOvlKind);
@@ -1383,7 +1396,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 2.0.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 2.0.1 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
