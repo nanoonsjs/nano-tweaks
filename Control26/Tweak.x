@@ -1,4 +1,7 @@
-// Control26 0.1.2 - made by nano
+// Control26 0.1.3 - made by nano
+// 0.1.3: small AirPlay icon searched in the module's container too; transport
+//        row moved as a group (down + tighter); brightness updates with no
+//        animation for exact 1:1 tracking; the whole slider shell stretches.
 // 0.1.2: real AirPlay picker in the round button (AVRoutePickerView) and the
 //        small original fully hidden; Apple's gray slider icons fully hidden;
 //        transport row found reliably and placed like iOS 26; brightness
@@ -23,6 +26,7 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <AVKit/AVKit.h>
+#import <objc/message.h>
 
 @interface MRUNowPlayingView : UIView @end
 @interface CCUIBaseSliderView : UIView @end
@@ -180,15 +184,31 @@ static void CollectViews(UIView *v, int depth, Class cls, NSMutableArray *out) {
 
 // Everything Apple draws in the module's top-right corner (the small AirPlay
 // icon and its label). 0.1.1 only found MPRouteLabel, so the icon stayed.
+// The module's container: the highest ancestor that's still about the module's size.
+static UIView *ModuleContainer(UIView *module) {
+    UIView *best = module, *p = module.superview;
+    for (int d = 0; p && d < 5; d++, p = p.superview) {
+        if (p.bounds.size.width <= module.bounds.size.width + 40 && p.bounds.size.height <= module.bounds.size.height + 40) best = p;
+        else break;
+    }
+    return best;
+}
+
+// Everything Apple draws in the top-right corner of the music module: the
+// small AirPlay icon may belong to the module's container, not the module.
 static NSArray *TopRightViews(UIView *module) {
+    UIView *root = ModuleContainer(module);
     NSMutableArray *all = [NSMutableArray array], *out = [NSMutableArray array];
-    CollectViews(module, 0, [UIView class], all);
+    CollectViews(root, 0, [UIView class], all);
     CGSize S = module.bounds.size;
+    UIView *overlay = [module viewWithTag:OVERLAY_TAG];
     for (UIView *v in all) {
-        if (v.bounds.size.width < 4 || v.bounds.size.width > S.width * 0.4) continue;
+        if (v == module || [module isDescendantOfView:v]) continue;       // containers of the module
+        if (overlay && [v isDescendantOfView:overlay]) continue;          // ours
+        if (v.bounds.size.width < 4 || v.bounds.size.width > S.width * 0.4 || v.bounds.size.height > S.height * 0.4) continue;
         CGRect r = [v convertRect:v.bounds toView:module];
         NSString *n = NSStringFromClass([v class]);
-        BOOL corner = CGRectGetMidX(r) > S.width * 0.68 && CGRectGetMidY(r) < S.height * 0.32;
+        BOOL corner = CGRectGetMidX(r) > S.width * 0.66 && CGRectGetMidY(r) < S.height * 0.34;
         BOOL routey = [n containsString:@"Route"] || [n containsString:@"Routing"] || [v.accessibilityLabel.lowercaseString containsString:@"airplay"];
         if (corner || routey) [out addObject:v];
     }
@@ -301,7 +321,8 @@ static void UnstyleModule(UIView *module) {
     CollectViews(module, 0, [UILabel class], labels);
     for (UILabel *l in labels) ShowOriginal(l);
     for (UIView *v in TopRightViews(module)) ShowOriginal(v);
-    for (UIView *b in FindTransport(module)) ClearOurTransform(b);
+    NSArray *tr = FindTransport(module);
+    for (UIView *b in tr) { ClearOurTransform(b); ClearOurTransform(b.superview); ClearOurTransform(b.superview.superview); }
 }
 
 static void StyleModule(UIView *module) {
@@ -351,14 +372,37 @@ static void StyleModule(UIView *module) {
                         animations:^{ art.image = img; } completion:nil];
     }
 
-    // Apple's previous / play / next: closer together, centered, near the bottom.
-    // Like iOS 26: tight, centered, low in the module.
+    // Like iOS 26: previous / play / next tight, centered, low in the module.
+    // Move the whole group down first, then pull each button toward the middle.
     NSArray *tr = FindTransport(module);
-    for (NSUInteger i = 0; i < tr.count; i++) {
-        UIView *b = tr[i];
-        CGPoint c = [b.superview convertPoint:b.center toView:module];
-        CGPoint target = CGPointMake(S.width / 2 + ((CGFloat)i - 1) * 44 * s, S.height * 0.855);
-        SetOurTransform(b, CGAffineTransformMakeTranslation(round(target.x - c.x), round(target.y - c.y)));
+    UIView *group = nil;
+    if (tr.count == 3) {
+        group = [tr[0] superview];
+        while (group && group != module && !([tr[1] isDescendantOfView:group] && [tr[2] isDescendantOfView:group])) group = group.superview;
+    }
+    int refused = 0;
+    if (group && group != module) {
+        CGPoint gc = [group.superview convertPoint:group.center toView:module];
+        UIView *b1 = tr[1];
+        CGPoint mid = [b1 convertPoint:CGPointMake(CGRectGetMidX(b1.bounds), CGRectGetMidY(b1.bounds)) toView:group];
+        CGFloat midInModule = gc.y - group.bounds.size.height / 2 + mid.y;
+        SetOurTransform(group, CGAffineTransformMakeTranslation(round(S.width / 2 - gc.x), round(S.height * 0.86 - midInModule)));
+        CGFloat centerX = [b1.superview convertPoint:b1.center toView:group].x;
+        for (NSUInteger i = 0; i < 3; i++) {
+            UIView *b = tr[i];
+            CGFloat x = [b.superview convertPoint:b.center toView:group].x;
+            CGFloat target = (i == 1) ? x : centerX + ((CGFloat)i - 1) * 44 * s;
+            NSValue *before = objc_getAssociatedObject(b, kOurTransform);
+            SetOurTransform(b, CGAffineTransformMakeTranslation(round(target - x), 0));
+            if (!objc_getAssociatedObject(b, kOurTransform) && !before) refused++;
+        }
+    } else {
+        for (NSUInteger i = 0; i < tr.count; i++) {
+            UIView *b = tr[i];
+            CGPoint c = [b.superview convertPoint:b.center toView:module];
+            CGPoint target = CGPointMake(S.width / 2 + ((CGFloat)i - 1) * 44 * s, S.height * 0.86);
+            SetOurTransform(b, CGAffineTransformMakeTranslation(round(target.x - c.x), round(target.y - c.y)));
+        }
     }
 
     // Hide Apple's labels and small AirPlay icon (ours replace them).
@@ -370,9 +414,12 @@ static void StyleModule(UIView *module) {
     }
     NSArray *corner = TopRightViews(module);
     for (UIView *v in corner) HideOriginal(v);
-    gMusicDebug = [NSString stringWithFormat:@"%@ %.0fx%.0f hidden-corner=%lu transport=%lu np=%@ art=%d",
+    NSMutableArray *cornerNames = [NSMutableArray array];
+    for (UIView *v in corner) [cornerNames addObject:NSStringFromClass([v class])];
+    gMusicDebug = [NSString stringWithFormat:@"%@ %.0fx%.0f corner=[%@] transport=%lu group=%@ refused=%d np=%@ art=%d",
                    NSStringFromClass([module class]), S.width, S.height,
-                   (unsigned long)corner.count, (unsigned long)tr.count,
+                   [cornerNames componentsJoinedByString:@","], (unsigned long)tr.count,
+                   group ? NSStringFromClass([group class]) : @"none", refused,
                    gNPTitle ?: @"(none)", gArtwork != nil];
 }
 
@@ -490,9 +537,22 @@ static void TeardownDirectTracking(UIView *slider) {
     objc_setAssociatedObject(slider, kApplePan, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+// Exact, instant value updates: no spring, no implicit animation, so the fill
+// sits right under the finger on every touch update.
 static void SetSliderValue(UIView *slider, float v) {
-    @try { [slider setValue:@(v) forKey:@"value"]; } @catch (__unused id e) { return; }
-    [(UIControl *)slider sendActionsForControlEvents:UIControlEventValueChanged];
+    __block BOOL ok = YES;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [UIView performWithoutAnimation:^{
+        SEL animated = NSSelectorFromString(@"setValue:animated:");
+        @try {
+            if ([slider respondsToSelector:animated]) ((void (*)(id, SEL, float, BOOL))objc_msgSend)(slider, animated, v, NO);
+            else [slider setValue:@(v) forKey:@"value"];
+        } @catch (__unused id e) { ok = NO; }
+        [slider layoutIfNeeded];
+    }];
+    [CATransaction commit];
+    if (ok) [(UIControl *)slider sendActionsForControlEvents:UIControlEventValueChanged];
 }
 
 static void IconPop(UIView *v) {
@@ -506,8 +566,20 @@ static void IconPop(UIView *v) {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
 }
 
+// The slider's outer shell: the highest ancestor that's the same size as the
+// slider, so the whole capsule stretches, not just the fill inside it.
+static UIView *SliderShell(UIView *slider) {
+    UIView *best = slider, *p = slider.superview;
+    for (int d = 0; p && d < 6; d++, p = p.superview) {
+        if (fabs(p.bounds.size.width - slider.bounds.size.width) <= 6 && fabs(p.bounds.size.height - slider.bounds.size.height) <= 6) best = p;
+        else if (p.bounds.size.width > slider.bounds.size.width + 6 || p.bounds.size.height > slider.bounds.size.height + 6) break;
+    }
+    return best;
+}
+
 // Stretch for `over` points past an end (dir 1 = top, -1 = bottom), rubber-band style.
-static void ApplyStretch(UIView *v, CGFloat over, int dir) {
+static void ApplyStretch(UIView *slider, CGFloat over, int dir) {
+    UIView *v = SliderShell(slider);
     CGFloat H = v.bounds.size.height;
     if (!gBounce || H < 1 || over <= 0) { if (!CGAffineTransformIsIdentity(v.transform)) v.transform = CGAffineTransformIdentity; return; }
     CGFloat stretch = MIN((1.0 - 1.0 / (over * 0.5 / H + 1.0)) * H, H * 0.12);
@@ -563,10 +635,11 @@ static void ApplyStretch(UIView *v, CGFloat over, int dir) {
     } else if (g.state >= UIGestureRecognizerStateEnded) {
         objc_setAssociatedObject(v, kBounce, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if (direct) SetSliderValue(v, MAX(0, MIN(1, SliderValue(v))));
-        if (!CGAffineTransformIsIdentity(v.transform))
-            [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0
+        UIView *shell = SliderShell(v);
+        if (!CGAffineTransformIsIdentity(shell.transform))
+            [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.68 initialSpringVelocity:0
                                 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState
-                             animations:^{ v.transform = CGAffineTransformIdentity; } completion:nil];
+                             animations:^{ shell.transform = CGAffineTransformIdentity; } completion:nil];
     }
 }
 @end
@@ -601,7 +674,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.1.2 debug\n music: %@\n sliders: %@", gMusicDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.1.3 debug\n music: %@\n sliders: %@", gMusicDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
