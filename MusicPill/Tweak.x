@@ -1,4 +1,7 @@
-// MusicPill 0.8.7 - made by nano
+// MusicPill 0.8.8 - made by nano
+// 0.8.8: the player grows out of the pill (a copy of the pill swells to full
+//        screen and fades as the player comes up), and Music's gray bar
+//        container is hidden along with its bar.
 // 0.8.7: the pill comes back as soon as the player starts closing (covers
 //        Music's gray closing bar), and its blur glass is rebuilt every time
 //        it reappears (iOS stops drawing a blur that was hidden mid-transition).
@@ -600,7 +603,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.8 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1111,8 +1114,16 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
 static void SetCollapsedFwd(BOOL c) { SetCollapsed(c, YES); }
 
 static const void *kMiniMask = &kMiniMask;
+static void HideMini(UIView *m, BOOL hide);
+static void HideOne(UIView *m, BOOL hide);
 static void HideMini(UIView *m, BOOL hide) {
     if (!m) return;
+    HideOne(m, hide);
+    // Music's gray container the same size as the bar (shows during its transitions).
+    UIView *c = m.superview;
+    if (c && fabs(c.bounds.size.width - m.bounds.size.width) < 2 && fabs(c.bounds.size.height - m.bounds.size.height) < 2) HideOne(c, hide);
+}
+static void HideOne(UIView *m, BOOL hide) {
     if (hide && !objc_getAssociatedObject(m, kMiniMask)) {
         m.layer.mask = [CALayer layer];   // draws nothing, still gets touches
         objc_setAssociatedObject(m, kMiniMask, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1154,12 +1165,34 @@ static void SyncPill(void) {
         // Full player opening: Music's bar stays hidden (no old-bar flash);
         // our pill fades away as a snapshot (fading the blur itself breaks it).
         if (gCollapsed) SetCollapsed(NO, NO);
+        // The player grows out of the pill: a copy of the pill swells up to
+        // full screen and melts away while the player comes up.
+        UIWindow *win = tb.window;
         UIView *snap = [pill snapshotViewAfterScreenUpdates:NO];
-        if (snap) {
-            snap.frame = pill.frame; snap.userInteractionEnabled = NO;
-            [host addSubview:snap];
-            [UIView animateWithDuration:0.22 animations:^{ snap.alpha = 0; snap.transform = CGAffineTransformMakeScale(0.96, 0.96); }
-                             completion:^(BOOL d) { [snap removeFromSuperview]; }];
+        if (snap && win) {
+            CGRect from = [pill convertRect:pill.bounds toView:win];
+            UIView *wrap = [[UIView alloc] initWithFrame:from];
+            wrap.userInteractionEnabled = NO;
+            wrap.clipsToBounds = YES;
+            wrap.layer.cornerRadius = from.size.height / 2;
+            wrap.layer.cornerCurve = kCACornerCurveContinuous;
+            snap.frame = wrap.bounds;
+            snap.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [wrap addSubview:snap];
+            UIView *tint = [[UIView alloc] initWithFrame:wrap.bounds];
+            tint.backgroundColor = [UIColor colorWithWhite:0.1 alpha:1];
+            tint.alpha = 0;
+            tint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [wrap addSubview:tint];
+            [win addSubview:wrap];
+            CGRect to = CGRectInset(win.bounds, 0, 0);
+            to.origin.y += 44; to.size.height -= 44;
+            [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0.3 options:0 animations:^{
+                wrap.frame = to;
+                wrap.layer.cornerRadius = 38;
+                tint.alpha = 1;
+            } completion:nil];
+            [UIView animateWithDuration:0.18 delay:0.22 options:0 animations:^{ wrap.alpha = 0; } completion:^(BOOL d) { [wrap removeFromSuperview]; }];
         }
         pill.hidden = YES;
         return;
