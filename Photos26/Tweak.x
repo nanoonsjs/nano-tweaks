@@ -1,4 +1,7 @@
-// Photos26 1.0.0 - made by nano
+// Photos26 1.0.1 - made by nano
+// 1.0.1: player capsule only for videos, scrubber finds the real player
+//        (asset duration, on-screen layer), Apple's frame strip hidden while
+//        ours works, top glass fixed, smaller glass buttons.
 // iOS 26 style photo/video viewer for iOS 16 Photos:
 //  Bottom: [share circle]  [heart | info | adjust]  [trash circle]
 //  Videos: a floating glass player above the thumbnails:
@@ -262,23 +265,51 @@ static void StartLink(void);
 
 #pragma mark - video player (AVPlayer from the visible AVPlayerLayer)
 
-// The player on screen: the AVPlayerLayer whose on-screen box covers the middle.
+static double Dur(AVPlayer *p) {
+    CMTime d = p.currentItem.duration;
+    if (CMTIME_IS_NUMERIC(d) && CMTimeGetSeconds(d) > 0) return CMTimeGetSeconds(d);
+    // The asset's length (looked up once per item, it can be slow).
+    static const void *kDur = &kDur;
+    AVPlayerItem *it = p.currentItem;
+    if (!it) return 0;
+    NSNumber *c = objc_getAssociatedObject(it, kDur);
+    if (c) return c.doubleValue;
+    d = it.asset.duration;
+    double s = (CMTIME_IS_NUMERIC(d) && CMTimeGetSeconds(d) > 0) ? CMTimeGetSeconds(d) : 0;
+    objc_setAssociatedObject(it, kDur, @(s), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return s;
+}
+
+static NSString *gPlayersDebug = @"";
+// The player on screen: among all AVPlayerLayers, the visible one over the
+// middle of the screen with a real length; playing ones win.
 static AVPlayer *CurrentPlayer(UIWindow *w) {
     if (!w) return nil;
     NSMutableArray *found = [NSMutableArray array];
     NSMutableArray *stack = [NSMutableArray arrayWithObject:w.layer];
     int guard = 0;
-    while (stack.count && guard++ < 6000) {
+    while (stack.count && guard++ < 8000) {
         CALayer *l = stack.lastObject; [stack removeLastObject];
-        if ([l isKindOfClass:[AVPlayerLayer class]] && ((AVPlayerLayer *)l).player.currentItem) [found addObject:l];
-        else if (l.sublayers.count) [stack addObjectsFromArray:l.sublayers];
+        if (l.hidden || l.opacity < 0.01) continue;
+        if ([l isKindOfClass:[AVPlayerLayer class]] && ((AVPlayerLayer *)l).player) [found addObject:l];
+        if (l.sublayers.count) [stack addObjectsFromArray:l.sublayers];
     }
     CGPoint mid = CGPointMake(CGRectGetMidX(w.bounds), CGRectGetMidY(w.bounds));
+    AVPlayer *best = nil; int bestScore = -1;
+    NSMutableArray *dbg = [NSMutableArray array];
     for (AVPlayerLayer *l in found) {
+        AVPlayer *p = l.player;
         CGRect f = [l convertRect:l.bounds toLayer:w.layer];
-        if (CGRectContainsPoint(f, mid)) return l.player;
+        int score = 0;
+        if (CGRectContainsPoint(f, mid)) score += 4;
+        if (CGRectIntersectsRect(f, w.bounds) && f.size.width > 50) score += 2;
+        if (Dur(p) > 0) score += 3;
+        if (p.rate > 0) score += 1;
+        if (dbg.count < 4) [dbg addObject:[NSString stringWithFormat:@"[%.1f/%.1f r%.0f s%d %.0fx%.0f]", CMTimeGetSeconds(p.currentTime), Dur(p), p.rate, score, f.size.width, f.size.height]];
+        if (score > bestScore) { bestScore = score; best = p; }
     }
-    return ((AVPlayerLayer *)found.firstObject).player;
+    gPlayersDebug = [NSString stringWithFormat:@"%lu layers %@", (unsigned long)found.count, [dbg componentsJoinedByString:@""]];
+    return best;
 }
 
 #pragma mark - bottom bar
@@ -331,7 +362,7 @@ static void SetSym(PGButton *b, NSString *name, CGFloat size) {
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat h = gScrubbing ? 12 : 8;
+    CGFloat h = gScrubbing ? 10 : 6;
     _track.frame = CGRectMake(0, (self.bounds.size.height - h) / 2, self.bounds.size.width, h);
     _track.layer.cornerRadius = h / 2;
     _fill.frame = CGRectMake(0, 0, MAX(h, _track.bounds.size.width * _progress), h);
@@ -346,9 +377,9 @@ static void SetSym(PGButton *b, NSString *name, CGFloat size) {
         [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:0 animations:^{ [self layoutIfNeeded]; [self setNeedsLayout]; [self layoutIfNeeded]; } completion:nil];
     }
     self.progress = p;
-    CMTime dur = pl.currentItem.duration;
-    if (pl && CMTIME_IS_NUMERIC(dur) && CMTimeGetSeconds(dur) > 0)
-        [pl seekToTime:CMTimeMakeWithSeconds(CMTimeGetSeconds(dur) * self.progress, 600) toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+    double dur = Dur(pl);
+    if (pl && dur > 0)
+        [pl seekToTime:CMTimeMakeWithSeconds(dur * self.progress, 600) toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled || [g isKindOfClass:[UITapGestureRecognizer class]]) {
         gScrubbing = NO;
         [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:0 animations:^{ [self setNeedsLayout]; [self layoutIfNeeded]; } completion:nil];
@@ -411,26 +442,26 @@ static void LayoutBottom(UIToolbar *tb) {
     for (UIBarButtonItem *it in tb.items) Mask(KV(it, @"view"));
 
     // Row geometry: centered on Apple's own button row.
-    CGFloat W = tb.bounds.size.width, D = 52, cy = 0; int cnt = 0;
+    CGFloat W = tb.bounds.size.width, D = 44, cy = 0; int cnt = 0;
     for (UIBarButtonItem *it in tb.items) { UIView *v = KV(it, @"view"); if (v.window) { cy += CGRectGetMidY([v convertRect:v.bounds toView:tb]); cnt++; } }
     cy = cnt ? round(cy / cnt) : 25;
-    CGFloat sideX = 15;
+    CGFloat sideX = 18;
 
     PGGlass *gl = GlassIn(c, @"share"), *gm = GlassIn(c, @"mid"), *gr = GlassIn(c, @"trash");
     SetFrame(gl, CGRectMake(sideX, cy - D / 2, D, D));
     SetFrame(gr, CGRectMake(W - sideX - D, cy - D / 2, D, D));
-    CGFloat mw = 174;
+    CGFloat mw = 150;
     SetFrame(gm, CGRectMake(round((W - mw) / 2), cy - D / 2, mw, D));
 
     PGButton *bShare = ButtonIn(c, @"share"), *bTrash = ButtonIn(c, @"trash");
     PGButton *bHeart = ButtonIn(c, @"heart"), *bInfo = ButtonIn(c, @"info"), *bEdit = ButtonIn(c, @"edit");
-    SetSym(bShare, @"square.and.arrow.up", 20);
-    SetSym(bTrash, @"trash", 20);
+    SetSym(bShare, @"square.and.arrow.up", 17);
+    SetSym(bTrash, @"trash", 17);
     BOOL fav = [ItemSymbolText(AppleItem(@"heart")) containsString:@"heart.fill"];
-    SetSym(bHeart, fav ? @"heart.fill" : @"heart", 20);
+    SetSym(bHeart, fav ? @"heart.fill" : @"heart", 17);
     bHeart.tintColor = UIColor.whiteColor;
-    SetSym(bInfo, @"info.circle", 21);
-    SetSym(bEdit, @"slider.horizontal.3", 20);
+    SetSym(bInfo, @"info.circle", 18);
+    SetSym(bEdit, @"slider.horizontal.3", 17);
     bInfo.hidden = !AppleItem(@"info");
     bHeart.hidden = !AppleItem(@"heart");
     SetFrame(bShare, gl.frame); SetFrame(bTrash, gr.frame);
@@ -440,7 +471,19 @@ static void LayoutBottom(UIToolbar *tb) {
     SetFrame(bEdit, CGRectMake(gm.frame.origin.x + third * 2, gm.frame.origin.y, third, D));
 
     // Video player capsule (only for videos: Apple shows play/pause then).
-    BOOL video = gPlayer && AppleItem(@"play") != nil;
+    // Videos only: Apple's play button is really showing (photos can keep a hidden one).
+    UIBarButtonItem *playItem = AppleItem(@"play");
+    UIView *pv = KV(playItem, @"view");
+    BOOL video = gPlayer && playItem && playItem.enabled && pv.window && !pv.hidden && pv.alpha > 0.01 && pv.bounds.size.width > 2;
+    for (UIView *p = pv.superview; p && p != tb && video; p = p.superview) if (p.hidden || p.alpha < 0.01) video = NO;
+    gBottomDebug = [gBottomDebug stringByAppendingFormat:@" video=%d", video];
+    static __weak UIView *gFilm;
+    UIView *film = FindFilmstrip(tb.window, 0);
+    if (film) gFilm = film;
+    // Apple's own frame strip goes away while our scrubber has a real player.
+    AVPlayer *pl = gAVPlayer;
+    BOOL ours = video && pl && Dur(pl) > 0;
+    if (gFilm) { if (ours) Mask(gFilm); else Unmask(gFilm); }
     PGGlass *gv = GlassIn(c, @"video");
     PGButton *bPlay = ButtonIn(c, @"play"), *bMute = ButtonIn(c, @"mute");
     PGScrubber *scrub = nil;
@@ -448,19 +491,18 @@ static void LayoutBottom(UIToolbar *tb) {
     if (!scrub) { scrub = [PGScrubber new]; [c addSubview:scrub]; }
     gv.hidden = bPlay.hidden = bMute.hidden = scrub.hidden = !video;
     if (video) {
-        UIView *film = FindFilmstrip(tb.window, 0);
         CGFloat filmTop = film ? [film convertRect:film.bounds toView:tb].origin.y : -58;
         CGFloat vy = MIN(filmTop, -40) - 12 - D;
-        CGFloat vx = 31, vw = W - vx * 2;
+        CGFloat vx = 26, vw = W - vx * 2;
         SetFrame(gv, CGRectMake(vx, vy, vw, D));
         BOOL playing = [ItemSymbolText(AppleItem(@"play")) containsString:@"pause"];
-        SetSym(bPlay, playing ? @"pause.fill" : @"play.fill", 22);
+        SetSym(bPlay, playing ? @"pause.fill" : @"play.fill", 18);
         NSString *m = ItemSymbolText(AppleItem(@"mute"));
-        SetSym(bMute, ([m containsString:@"slash"] || [m containsString:@"mute"]) ? @"speaker.slash.fill" : @"speaker.wave.2.fill", 19);
+        SetSym(bMute, ([m containsString:@"slash"] || [m containsString:@"mute"]) ? @"speaker.slash.fill" : @"speaker.wave.2.fill", 16);
         bMute.hidden = !AppleItem(@"mute");
-        SetFrame(bPlay, CGRectMake(vx + 4, vy, 48, D));
-        SetFrame(bMute, CGRectMake(vx + vw - 52, vy, 48, D));
-        CGFloat sx = vx + 58, ex = vx + vw - (AppleItem(@"mute") ? 62 : 22);
+        SetFrame(bPlay, CGRectMake(vx + 4, vy, 44, D));
+        SetFrame(bMute, CGRectMake(vx + vw - 48, vy, 44, D));
+        CGFloat sx = vx + 52, ex = vx + vw - (AppleItem(@"mute") ? 56 : 20);
         SetFrame(scrub, CGRectMake(sx, vy, ex - sx, D));
         StartLink();
     }
@@ -504,6 +546,7 @@ static void LayoutTop(UINavigationBar *nb) {
     BOOL viewer = edit && more && gToolbar && gToolbar.window == nb.window && ![gToolbar viewWithTag:BOTTOM_TAG].hidden;
     UIView *editView = KV(edit, @"view");
     if (!gEnabled || !gTopBar || !viewer) {
+        if (gTopBar && gEnabled) gTopDebug = [NSString stringWithFormat:@"skip: edit=%d more=%d toolbar=%d rights=%lu", edit != nil, more != nil, gToolbar != nil, (unsigned long)top.rightBarButtonItems.count];
         c.hidden = YES;
         if (editView) { Unmask(editView); editView.userInteractionEnabled = YES; }
         if (back && objc_getAssociatedObject(back, kShift)) { back.transform = CGAffineTransformIdentity; objc_setAssociatedObject(back, kShift, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
@@ -539,7 +582,7 @@ static void LayoutTop(UINavigationBar *nb) {
     // Edit lives in the bottom capsule now.
     if (editView) { Mask(editView); if (editView.userInteractionEnabled) editView.userInteractionEnabled = NO; }
 
-    CGFloat D = 47;
+    CGFloat D = 42;
     // Back: move it in from the edge so it sits in its circle.
     PGGlass *gb = GlassIn(c, @"back");
     gb.hidden = !back;
@@ -605,7 +648,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.0.0 debug\n bottom: %@\n top: %@\n video: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.0.1 debug\n bottom: %@\n top: %@\n video: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -649,11 +692,22 @@ static void UpdateDebug(UIWindow *w) {
             if (frame % 15 == 1 || !gAVPlayer) gAVPlayer = CurrentPlayer(tb.window);
             AVPlayer *p = gAVPlayer;
             CMTime dur = p.currentItem.duration, now = p.currentTime;
-            if (p && CMTIME_IS_NUMERIC(dur) && CMTimeGetSeconds(dur) > 0 && !gScrubbing) scrub.progress = CMTimeGetSeconds(now) / CMTimeGetSeconds(dur);
-            gVideoDebug = p ? [NSString stringWithFormat:@"player %.1f/%.1f rate=%.1f", CMTimeGetSeconds(now), CMTimeGetSeconds(dur), p.rate] : @"no AVPlayerLayer found";
+            (void)dur;
+            if (p && Dur(p) > 0 && !gScrubbing) scrub.progress = CMTimeGetSeconds(now) / Dur(p);
+            gVideoDebug = [NSString stringWithFormat:@"using %.1f/%.1f r%.1f | %@", CMTimeGetSeconds(now), Dur(p), p.rate, gPlayersDebug];
         }
         if (frame % 10 == 0) UpdateDebug(tb.window);
         UINavigationBar *nb = gNavBar;
+        if ((!nb || nb.window != tb.window) && frame % 30 == 3) {
+            NSMutableArray *stack = [NSMutableArray arrayWithObject:tb.window];
+            int guard = 0; nb = nil;
+            while (stack.count && guard++ < 3000 && !nb) {
+                UIView *v = stack.lastObject; [stack removeLastObject];
+                if ([v isKindOfClass:[UINavigationBar class]] && !v.hidden && v.alpha > 0.01 && ((UINavigationBar *)v).topItem.rightBarButtonItems.count) nb = (UINavigationBar *)v;
+                else [stack addObjectsFromArray:v.subviews];
+            }
+            if (nb) gNavBar = nb;
+        }
         if (nb && frame % 12 == 6) LayoutTop(nb);
     } @catch (__unused id e) {}
 }
