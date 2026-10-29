@@ -13,13 +13,41 @@
 	<array>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
-			<key>footerText</key><string>Glass pills for the bottom toolbar when viewing a photo or video. Close Photos from the app switcher and reopen it after changing.</string>
+			<key>footerText</key><string>Glass pills for the photo and video viewer, like iOS 26: round share and delete buttons, a middle capsule with favorite, info and edit, a glass video player above the thumbnails, and glass buttons at the top. Close Photos from the app switcher and reopen it after changing.</string>
 		</dict>
 		<dict>
 			<key>cell</key><string>PSSwitchCell</string>
 			<key>label</key><string>Enabled</string>
 			<key>key</key><string>enabled</string>
 			<key>default</key><true/>
+			<key>defaults</key><string>com.user.photosglass</string>
+			<key>PostNotification</key><string>com.user.photosglass/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Glass Top Buttons</string>
+			<key>key</key><string>topbar</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.photosglass</string>
+			<key>PostNotification</key><string>com.user.photosglass/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Glass Video Player</string>
+			<key>key</key><string>player</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.photosglass</string>
+			<key>PostNotification</key><string>com.user.photosglass/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Shows a purple box with what PhotosGlass found. Send a screenshot if something looks off, then turn it off.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Show Debug Info</string>
+			<key>key</key><string>debug</string>
+			<key>default</key><false/>
 			<key>defaults</key><string>com.user.photosglass</string>
 			<key>PostNotification</key><string>com.user.photosglass/prefschanged</string>
 		</dict>

@@ -8,6 +8,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = PhotosGlass
 PhotosGlass_FILES = Tweak.x
+PhotosGlass_FRAMEWORKS = UIKit QuartzCore AVFoundation CoreMedia
 PhotosGlass_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 
 include $(THEOS_MAKE_PATH)/tweak.mk
