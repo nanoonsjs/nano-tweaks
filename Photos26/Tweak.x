@@ -1,4 +1,8 @@
-// Photos26 1.2.0 - made by nano
+// Photos26 1.3.0 - made by nano
+// 1.3.0: thumbnails rounded the moment they appear (PUTilingView hook), smooth
+//        slow scrubbing (one seek at a time, chasing the finger), bigger video
+//        slider, iOS 26 jelly on every glass button (swells, leans toward your
+//        finger, wobbles back), top back / ... circles jelly too.
 // 1.2.0: videos stay one thumbnail in the strip (PUScrubberView never
 //        expands), playhead hidden, rounded thumbnail tiles, trash circle
 //        fixed, white top icons, liquid wobble on the top glass when you
@@ -34,6 +38,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+@interface PUTilingView : UIView @end
 #define DOM_NS @"com.user.photos26"
 #define DOM CFSTR("com.user.photos26")
 #define NOTIFY CFSTR("com.user.photos26/prefschanged")
@@ -88,7 +93,15 @@ static id KV(id obj, NSString *key) {
     if (!obj) return nil;
     @try { return [obj valueForKey:key]; } @catch (__unused id e) { return nil; }
 }
-static void SetFrame(UIView *v, CGRect r) { if (!CGRectEqualToRect(v.frame, r)) v.frame = r; }
+// Frames are only set when they change; while a view is mid-jelly (has a
+// transform) its size and center are set instead, so the wobble isn't broken.
+static void SetFrame(UIView *v, CGRect r) {
+    if (CGAffineTransformIsIdentity(v.transform)) { if (!CGRectEqualToRect(v.frame, r)) v.frame = r; return; }
+    CGRect b = CGRectMake(0, 0, r.size.width, r.size.height);
+    if (!CGRectEqualToRect(v.bounds, b)) v.bounds = b;
+    CGPoint c = CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r));
+    if (!CGPointEqualToPoint(v.center, c)) v.center = c;
+}
 static void Mask(UIView *v) {
     if (!v || objc_getAssociatedObject(v, kMasked)) return;
     v.layer.mask = [CALayer layer];
@@ -214,28 +227,115 @@ static void Forward(UIBarButtonItem *it) {
 
 @interface PGButton : UIButton
 @property (nonatomic, copy) NSString *kind;
+@property (nonatomic, weak) UIView *jelly;      // the glass that wobbles (circles)
+@property (nonatomic, weak) UIView *capsule;    // the capsule this button sits in
+@property (nonatomic, strong) UIView *bubble;   // glass bubble for capsule buttons
 @end
+
+// iOS 26 jelly: the glass swells, leans and stretches toward the finger,
+// then wobbles back when you let go.
+static void JellyPress(UIView *g) {
+    [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.8
+                        options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        g.transform = CGAffineTransformMakeScale(1.17, 1.17);
+    } completion:nil];
+}
+static void JellyFollow(UIView *g, CGPoint off) {
+    CGFloat ox = MAX(-10, MIN(10, off.x * 0.2)), oy = MAX(-8, MIN(8, off.y * 0.2));
+    CGFloat k = MIN(1, (fabs(off.x) + fabs(off.y)) / 70);
+    CGFloat sx = 1.17 + (fabs(off.x) >= fabs(off.y) ? 0.1 : -0.05) * k;
+    CGFloat sy = 1.17 + (fabs(off.y) > fabs(off.x) ? 0.1 : -0.05) * k;
+    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseOut animations:^{
+        g.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(ox, oy), sx, sy);
+    } completion:nil];
+}
+static void JellyRelease(UIView *g) {
+    [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.36 initialSpringVelocity:0.9
+                        options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        g.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
 @implementation PGButton
+- (UIView *)jellyTarget {
+    if (self.jelly) return self.jelly;
+    if (!self.bubble) {
+        PGGlass *b = [PGGlass new];
+        b.accessibilityIdentifier = @"bubble";
+        b.alpha = 0;
+        self.bubble = b;
+    }
+    if (self.bubble.superview != self.superview) [self.superview insertSubview:self.bubble belowSubview:self];
+    CGFloat d = MIN(self.bounds.size.width, self.bounds.size.height) - 2;
+    self.bubble.bounds = CGRectMake(0, 0, d, d);
+    self.bubble.center = self.center;
+    return self.bubble;
+}
+- (BOOL)beginTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
+    UIView *g = [self jellyTarget];
+    if (g == self.bubble) [UIView animateWithDuration:0.15 animations:^{ self.bubble.alpha = 1; }];
+    JellyPress(g);
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        self.transform = CGAffineTransformMakeScale(1.1, 1.1);
+        if (self.capsule) self.capsule.transform = CGAffineTransformMakeScale(1.025, 1.025);
+    } completion:nil];
+    return [super beginTrackingWithTouch:t withEvent:e];
+}
+- (BOOL)continueTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
+    CGPoint p = [t locationInView:self];
+    CGPoint off = CGPointMake(p.x - self.bounds.size.width / 2, p.y - self.bounds.size.height / 2);
+    JellyFollow([self jellyTarget], off);
+    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        self.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(MAX(-6, MIN(6, off.x * 0.12)), MAX(-5, MIN(5, off.y * 0.12))), 1.1, 1.1);
+    } completion:nil];
+    return [super continueTrackingWithTouch:t withEvent:e];
+}
+- (void)letGo {
+    UIView *g = [self jellyTarget];
+    JellyRelease(g);
+    JellyRelease(self);
+    if (self.capsule) JellyRelease(self.capsule);
+    if (g == self.bubble) [UIView animateWithDuration:0.3 delay:0.22 options:UIViewAnimationOptionAllowUserInteraction animations:^{ self.bubble.alpha = 0; } completion:nil];
+}
+- (void)endTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e { [super endTrackingWithTouch:t withEvent:e]; [self letGo]; }
+- (void)cancelTrackingWithEvent:(UIEvent *)e { [super cancelTrackingWithEvent:e]; [self letGo]; }
 @end
+
+// Jelly for Apple's own top buttons (back, ...): our glass circle wobbles.
+@interface PGTopJelly : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+static const void *kJellyGlass = &kJellyGlass;
+@implementation PGTopJelly
++ (instancetype)shared { static PGTopJelly *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [PGTopJelly new]; }); return t; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+- (void)press:(UILongPressGestureRecognizer *)g {
+    UIView *glass = objc_getAssociatedObject(g.view, kJellyGlass);
+    if (!glass) return;
+    CGPoint p = [g locationInView:glass];
+    CGPoint off = CGPointMake(p.x - glass.bounds.size.width / 2, p.y - glass.bounds.size.height / 2);
+    if (g.state == UIGestureRecognizerStateBegan) JellyPress(glass);
+    else if (g.state == UIGestureRecognizerStateChanged) JellyFollow(glass, off);
+    else if (g.state >= UIGestureRecognizerStateEnded) JellyRelease(glass);
+}
+@end
+static void AddTopJelly(UIView *v, UIView *glass) {
+    if (!v || !glass) return;
+    objc_setAssociatedObject(v, kJellyGlass, glass, OBJC_ASSOCIATION_ASSIGN);
+    for (UIGestureRecognizer *g in v.gestureRecognizers) if (g.delegate == (id)[PGTopJelly shared]) return;
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[PGTopJelly shared] action:@selector(press:)];
+    lp.minimumPressDuration = 0;
+    lp.cancelsTouchesInView = NO;
+    lp.delaysTouchesEnded = NO;
+    lp.delegate = [PGTopJelly shared];
+    [v addGestureRecognizer:lp];
+}
 
 static UIImage *Sym(NSString *name, CGFloat size) {
     UIImageSymbolConfiguration *c = [UIImageSymbolConfiguration configurationWithPointSize:size weight:UIImageSymbolWeightMedium];
     return [UIImage systemImageNamed:name withConfiguration:c];
 }
 
-// Press: squish in; release: pop out past full size.
-static void Squish(UIView *v, BOOL down) {
-    if (down) {
-        [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
-            v.transform = CGAffineTransformMakeScale(0.9, 0.9);
-        } completion:nil];
-    } else {
-        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.45 initialSpringVelocity:0.8
-                            options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
-            v.transform = CGAffineTransformIdentity;
-        } completion:nil];
-    }
-}
 
 // Container that only catches touches on our buttons and the scrubber.
 @interface PGPass : UIView @end
@@ -374,33 +474,53 @@ static void SetSym(PGButton *b, NSString *name, CGFloat size) {
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat h = gScrubbing ? 10 : 6;
+    CGFloat h = gScrubbing ? 14 : 9;
     _track.frame = CGRectMake(0, (self.bounds.size.height - h) / 2, self.bounds.size.width, h);
     _track.layer.cornerRadius = h / 2;
     _fill.frame = CGRectMake(0, 0, MAX(h, _track.bounds.size.width * _progress), h);
     _fill.layer.cornerRadius = h / 2;
 }
 - (void)setProgress:(CGFloat)p { _progress = MAX(0, MIN(1, p)); [self setNeedsLayout]; }
+// Seek smoothly: only one seek runs at a time; when it lands, jump to wherever
+// the finger is now. Slow drags stay smooth and precise.
+static double gPendingSeek = -1;
+static BOOL gSeeking;
+static void ChaseSeek(void) {
+    AVPlayer *pl = gAVPlayer;
+    if (!pl || gPendingSeek < 0) { gSeeking = NO; return; }
+    gSeeking = YES;
+    double target = gPendingSeek; gPendingSeek = -1;
+    CMTime tol = CMTimeMakeWithSeconds(1.0 / 60, 600);
+    [pl seekToTime:CMTimeMakeWithSeconds(target, 600) toleranceBefore:tol toleranceAfter:tol completionHandler:^(BOOL done) {
+        dispatch_async(dispatch_get_main_queue(), ^{ gSeeking = NO; if (gPendingSeek >= 0) ChaseSeek(); });
+    }];
+}
+static void SeekTo(double s) { gPendingSeek = s; if (!gSeeking) ChaseSeek(); }
+
 // Like Apple's: the bar moves by how far you drag, not to where your finger is.
 - (void)pan:(UIPanGestureRecognizer *)g {
     static CGFloat start;
+    static BOOL wasPlaying;
     AVPlayer *pl = gAVPlayer;
     if (g.state == UIGestureRecognizerStateBegan) {
         gScrubbing = YES;
         start = self.progress;
-        [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        wasPlaying = pl.rate > 0;
+        if (wasPlaying) pl.rate = 0;    // hold the picture still while scrubbing
+        [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{
             [self setNeedsLayout]; [self layoutIfNeeded];
+            self.superview.transform = CGAffineTransformIdentity;
         } completion:nil];
     }
     CGFloat dx = [g translationInView:self].x;
     self.progress = start + dx / MAX(1, self.bounds.size.width);
     [self layoutIfNeeded];
     double dur = Dur(pl);
-    if (pl && dur > 0)
-        [pl seekToTime:CMTimeMakeWithSeconds(dur * self.progress, 600) toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+    if (pl && dur > 0) SeekTo(dur * self.progress);
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled || g.state == UIGestureRecognizerStateFailed) {
         gScrubbing = NO;
-        [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        if (wasPlaying) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [pl play]; });
+        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{
             [self setNeedsLayout]; [self layoutIfNeeded];
         } completion:nil];
     }
@@ -553,6 +673,8 @@ static void LayoutBottom(UIToolbar *tb) {
     bInfo.hidden = !AppleItem(@"info");
     bHeart.hidden = !AppleItem(@"heart");
     SetFrame(bShare, gl.frame); SetFrame(bTrash, gr.frame);
+    bShare.jelly = gl; bTrash.jelly = gr;
+    bHeart.capsule = bInfo.capsule = bEdit.capsule = gm;
     CGFloat third = mw / 3;
     SetFrame(bHeart, CGRectMake(gm.frame.origin.x, gm.frame.origin.y, third, D));
     SetFrame(bInfo, CGRectMake(gm.frame.origin.x + third, gm.frame.origin.y, third, D));
@@ -581,18 +703,20 @@ static void LayoutBottom(UIToolbar *tb) {
     gv.hidden = bPlay.hidden = bMute.hidden = scrub.hidden = !video;
     if (video) {
         CGFloat filmTop = film ? [film convertRect:film.bounds toView:tb].origin.y : -58;
-        CGFloat vy = MIN(filmTop, -40) - 12 - D;
-        CGFloat vx = 26, vw = W - vx * 2;
-        SetFrame(gv, CGRectMake(vx, vy, vw, D));
+        CGFloat VD = 54;
+        CGFloat vy = MIN(filmTop, -40) - 12 - VD;
+        CGFloat vx = 22, vw = W - vx * 2;
+        SetFrame(gv, CGRectMake(vx, vy, vw, VD));
+        bPlay.capsule = bMute.capsule = gv;
         BOOL playing = [ItemSymbolText(AppleItem(@"play")) containsString:@"pause"];
-        SetSym(bPlay, playing ? @"pause.fill" : @"play.fill", 18);
+        SetSym(bPlay, playing ? @"pause.fill" : @"play.fill", 21);
         NSString *m = ItemSymbolText(AppleItem(@"mute"));
-        SetSym(bMute, ([m containsString:@"slash"] || [m containsString:@"mute"]) ? @"speaker.slash.fill" : @"speaker.wave.2.fill", 16);
+        SetSym(bMute, ([m containsString:@"slash"] || [m containsString:@"mute"]) ? @"speaker.slash.fill" : @"speaker.wave.2.fill", 18);
         bMute.hidden = !AppleItem(@"mute");
-        SetFrame(bPlay, CGRectMake(vx + 4, vy, 44, D));
-        SetFrame(bMute, CGRectMake(vx + vw - 48, vy, 44, D));
-        CGFloat sx = vx + 52, ex = vx + vw - (AppleItem(@"mute") ? 56 : 20);
-        SetFrame(scrub, CGRectMake(sx, vy, ex - sx, D));
+        SetFrame(bPlay, CGRectMake(vx + 5, vy + 2, 50, VD - 4));
+        SetFrame(bMute, CGRectMake(vx + vw - 55, vy + 2, 50, VD - 4));
+        CGFloat sx = vx + 60, ex = vx + vw - (AppleItem(@"mute") ? 62 : 22);
+        SetFrame(scrub, CGRectMake(sx, vy, ex - sx, VD));
         StartLink();
     }
 }
@@ -778,6 +902,7 @@ static void LayoutTop(UINavigationBar *nb) {
         if (fabs(back.transform.tx - dx) > 0.5) back.transform = CGAffineTransformMakeTranslation(dx, 0);
         objc_setAssociatedObject(back, kShift, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         SetFrame(gb, CGRectMake(15, round(CGRectGetMidY(gr) - D / 2), D, D));
+        AddTopJelly(back, gb);
     }
     // "..." circle.
     UIView *moreView = KV(more, @"view");
@@ -787,6 +912,7 @@ static void LayoutTop(UINavigationBar *nb) {
         UIView *g = GlyphIn(moreView, 0) ?: moreView;
         CGRect r = [g convertRect:g.bounds toView:nb];
         SetFrame(gm, CGRectMake(round(CGRectGetMidX(r) - D / 2), round(CGRectGetMidY(r) - D / 2), D, D));
+        AddTopJelly(moreView, gm);
     }
     // Date capsule behind the title.
     UIView *title = top.titleView;
@@ -856,7 +982,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.2.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.3.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -907,10 +1033,9 @@ static void LoopTick(AVPlayer *p) {
 
 @implementation PGTarget
 + (instancetype)shared { static PGTarget *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [PGTarget new]; }); return t; }
-- (void)down:(PGButton *)b { Squish(b, YES); }
-- (void)up:(PGButton *)b { Squish(b, NO); }
+- (void)down:(PGButton *)b { }
+- (void)up:(PGButton *)b { }
 - (void)tap:(PGButton *)b {
-    Squish(b, NO);
     NSString *k = b.kind;
     if ([k isEqualToString:@"edit"]) {
         UIBarButtonItem *ed = gEditItem;
@@ -1014,6 +1139,23 @@ static void StartLink(void) {
 %end
 
 %group Scrubber
+%hook PUTilingView
+// Round thumbnails the moment they're laid out (only the small strip, not the big photo).
+- (void)layoutSubviews {
+    %orig;
+    CGFloat H = self.bounds.size.height;
+    if (!gEnabled || H < 12 || H > 130) return;
+    for (UIView *a in self.subviews) {
+        NSArray *list = [@[a] arrayByAddingObjectsFromArray:a.subviews];
+        for (UIView *v in list) {
+            if (!([v isKindOfClass:[UIImageView class]] || [NSStringFromClass([v class]) containsString:@"FilmstripWrapper"])) continue;
+            if (v.bounds.size.height < H * 0.5) continue;
+            if (v.layer.cornerRadius != 6) { v.layer.cornerRadius = 6; if (@available(iOS 13.0, *)) v.layer.cornerCurve = kCACornerCurveContinuous; }
+            if (!v.layer.masksToBounds) v.layer.masksToBounds = YES;
+        }
+    }
+}
+%end
 %hook PUScrubberView
 // iOS 26 look: a video stays one thumbnail in the strip instead of spreading
 // into frames (our glass slider does the scrubbing).
