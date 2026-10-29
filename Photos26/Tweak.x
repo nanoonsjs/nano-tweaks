@@ -1,4 +1,7 @@
-// Photos26 1.0.1 - made by nano
+// Photos26 1.0.2 - made by nano
+// 1.0.2: no gray bar backgrounds top or bottom, thumbnails always shown,
+//        slider moves relative to your drag (like Apple's), Edit found
+//        directly when the adjust button is tapped.
 // 1.0.1: player capsule only for videos, scrubber finds the real player
 //        (asset duration, on-screen layer), Apple's frame strip hidden while
 //        ours works, top glass fixed, smaller glass buttons.
@@ -356,8 +359,7 @@ static void SetSym(PGButton *b, NSString *name, CGFloat size) {
     _track.clipsToBounds = YES;
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
     [self addGestureRecognizer:pan];
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
-    [self addGestureRecognizer:tap];
+
     return self;
 }
 - (void)layoutSubviews {
@@ -369,20 +371,28 @@ static void SetSym(PGButton *b, NSString *name, CGFloat size) {
     _fill.layer.cornerRadius = h / 2;
 }
 - (void)setProgress:(CGFloat)p { _progress = MAX(0, MIN(1, p)); [self setNeedsLayout]; }
-- (void)pan:(UIGestureRecognizer *)g {
+// Like Apple's: the bar moves by how far you drag, not to where your finger is.
+- (void)pan:(UIPanGestureRecognizer *)g {
+    static CGFloat start;
     AVPlayer *pl = gAVPlayer;
-    CGFloat p = [g locationInView:self].x / MAX(1, self.bounds.size.width);
     if (g.state == UIGestureRecognizerStateBegan) {
         gScrubbing = YES;
-        [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:0 animations:^{ [self layoutIfNeeded]; [self setNeedsLayout]; [self layoutIfNeeded]; } completion:nil];
+        start = self.progress;
+        [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            [self setNeedsLayout]; [self layoutIfNeeded];
+        } completion:nil];
     }
-    self.progress = p;
+    CGFloat dx = [g translationInView:self].x;
+    self.progress = start + dx / MAX(1, self.bounds.size.width);
+    [self layoutIfNeeded];
     double dur = Dur(pl);
     if (pl && dur > 0)
         [pl seekToTime:CMTimeMakeWithSeconds(dur * self.progress, 600) toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
-    if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled || [g isKindOfClass:[UITapGestureRecognizer class]]) {
+    if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled || g.state == UIGestureRecognizerStateFailed) {
         gScrubbing = NO;
-        [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:0 animations:^{ [self setNeedsLayout]; [self layoutIfNeeded]; } completion:nil];
+        [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            [self setNeedsLayout]; [self layoutIfNeeded];
+        } completion:nil];
     }
 }
 @end
@@ -483,7 +493,8 @@ static void LayoutBottom(UIToolbar *tb) {
     // Apple's own frame strip goes away while our scrubber has a real player.
     AVPlayer *pl = gAVPlayer;
     BOOL ours = video && pl && Dur(pl) > 0;
-    if (gFilm) { if (ours) Mask(gFilm); else Unmask(gFilm); }
+    (void)ours;
+    if (gFilm) Unmask(gFilm);   // thumbnails always stay
     PGGlass *gv = GlassIn(c, @"video");
     PGButton *bPlay = ButtonIn(c, @"play"), *bMute = ButtonIn(c, @"mute");
     PGScrubber *scrub = nil;
@@ -506,6 +517,47 @@ static void LayoutBottom(UIToolbar *tb) {
         SetFrame(scrub, CGRectMake(sx, vy, ex - sx, D));
         StartLink();
     }
+}
+
+#pragma mark - bar backgrounds
+
+static NSString *gBgDebug = @"-";
+static BOOL IsBg(UIView *v) {
+    if ([v isKindOfClass:[UIVisualEffectView class]]) return YES;
+    NSString *n = NSStringFromClass([v class]);
+    if ([n containsString:@"Background"] || [n containsString:@"Backdrop"] || [n containsString:@"Blur"] || [n containsString:@"Material"]) return YES;
+    // A plain colored strip with nothing inside.
+    if ([v class] == [UIView class] && !v.subviews.count && v.backgroundColor) {
+        CGFloat a = 0; [v.backgroundColor getWhite:NULL alpha:&a];
+        return a > 0.3;
+    }
+    return NO;
+}
+// The gray top and bottom bars (and the strip behind the thumbnails).
+static void HideBarBackgrounds(UIWindow *w, CGFloat topBand, CGFloat bottomBand) {
+    if (!w) return;
+    CGFloat H = w.bounds.size.height, W = w.bounds.size.width;
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
+    NSMutableArray *dbg = [NSMutableArray array];
+    int guard = 0;
+    while (stack.count && guard++ < 6000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v.tag == BOTTOM_TAG || v.tag == TOP_TAG || v.tag == DEBUG_TAG || [v isKindOfClass:[PGGlass class]]) continue;
+        if (v != w && IsBg(v) && !v.hidden) {
+            CGRect f = [v convertRect:v.bounds toView:nil];
+            BOOL wide = f.size.width >= W * 0.9 && f.size.height < 300;
+            BOOL inTop = f.origin.y <= 2 && CGRectGetMaxY(f) <= topBand + 12;
+            BOOL inBottom = CGRectGetMaxY(f) >= H - 2 && f.origin.y >= bottomBand - 12;
+            BOOL inStrip = f.origin.y >= bottomBand - 12 && f.size.height < 140;   // behind the thumbnails
+            if (wide && (inTop || inBottom || inStrip)) {
+                Mask(v);
+                if (dbg.count < 4) [dbg addObject:[NSString stringWithFormat:@"%@ %.0f@%.0f", NSStringFromClass([v class]), f.size.height, f.origin.y]];
+                continue;
+            }
+        }
+        [stack addObjectsFromArray:v.subviews];
+    }
+    gBgDebug = dbg.count ? [dbg componentsJoinedByString:@", "] : @"none";
 }
 
 #pragma mark - top bar
@@ -648,7 +700,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.0.1 debug\n bottom: %@\n top: %@\n video: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.0.2 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -665,7 +717,23 @@ static void UpdateDebug(UIWindow *w) {
 - (void)tap:(PGButton *)b {
     Squish(b, NO);
     NSString *k = b.kind;
-    if ([k isEqualToString:@"edit"]) Forward(gEditItem);
+    if ([k isEqualToString:@"edit"]) {
+        UIBarButtonItem *ed = gEditItem;
+        if (!ed) {
+            // Find Apple's Edit in the top bar of this window.
+            NSMutableArray *stack = [NSMutableArray arrayWithObject:b.window ?: [UIView new]];
+            int guard = 0;
+            while (stack.count && guard++ < 4000 && !ed) {
+                UIView *v = stack.lastObject; [stack removeLastObject];
+                if ([v isKindOfClass:[UINavigationBar class]])
+                    for (UINavigationItem *ni in ((UINavigationBar *)v).items)
+                        for (UIBarButtonItem *it in ni.rightBarButtonItems) if ([ItemKind(it) isEqualToString:@"edit"]) ed = it;
+                [stack addObjectsFromArray:v.subviews];
+            }
+            gEditItem = ed;
+        }
+        Forward(ed);
+    }
     else Forward(AppleItem(k));
     if ([k isEqualToString:@"heart"]) {
         // little heart pop
@@ -686,6 +754,13 @@ static void UpdateDebug(UIWindow *w) {
     static NSUInteger frame; frame++;
     @try {
         if (frame % 12 == 0) LayoutBottom(tb);
+        if (frame % 30 == 2) {
+            UINavigationBar *n = gNavBar;
+            CGFloat topBand = n.window ? CGRectGetMaxY([n convertRect:n.bounds toView:nil]) : 100;
+            UIView *film = FindFilmstrip(tb.window, 0);
+            CGFloat bottomBand = film ? [film convertRect:film.bounds toView:nil].origin.y : [tb convertRect:tb.bounds toView:nil].origin.y;
+            HideBarBackgrounds(tb.window, topBand, bottomBand);
+        }
         PGScrubber *scrub = nil;
         for (UIView *v in c.subviews) if ([v isKindOfClass:[PGScrubber class]]) scrub = (PGScrubber *)v;
         if (scrub && !scrub.hidden) {
