@@ -1,4 +1,7 @@
-// Control26 0.1.7 - made by nano
+// Control26 0.1.8 - made by nano
+// 0.1.8: previous/play/next animate on the spring engine (press sink, release
+//        pop, arrow fling + ghost, play/pause morph). Expanded connectivity:
+//        Cellular Data icon -> iOS 26 signal bars, and a debug map of it.
 // 0.1.7: star uses Music's Love command (21) and can un-love (IsNegative);
 //        loved state read from the command's active flag. Instant song changes
 //        via MediaRemote notifications, artwork slides in the skip direction,
@@ -50,6 +53,7 @@
 @interface CCUICAPackageView : UIView @end
 @interface CCUIRoundButton : UIView @end
 @interface CCUIButtonModuleView : UIView @end
+@interface CCUILabeledRoundButton : UIView @end
 
 #define DOM_NS @"com.user.control26"
 #define DOM CFSTR("com.user.control26")
@@ -58,6 +62,7 @@
 #define GLYPH_TAG   0x43323631
 #define DEBUG_TAG   0x43323632
 #define EXP_TAG     0x43323633
+#define CELL_TAG    0x43323634
 
 static BOOL gEnabled = YES, gMusic = YES, gColors = YES, gBounce = YES, gDebug = NO, gJelly = YES;
 
@@ -161,9 +166,9 @@ __attribute__((unused)) static void Forward(UIControl *c) {
 
 #pragma mark - tracked views (only while Control Center is on screen)
 
-static NSHashTable *gMediaViews, *gSliders;
+static NSHashTable *gMediaViews, *gSliders, *gConnButtons;
 static NSTimer *gTimer;
-static NSString *gMusicDebug = @"-", *gSliderDebug = @"-";
+static NSString *gMusicDebug = @"-", *gSliderDebug = @"-", *gConnDebug = @"-";
 static void Tick(void);
 
 static void StartTimer(void) {
@@ -402,32 +407,122 @@ static void ClearOurTransform(UIView *v) {
     objc_setAssociatedObject(v, kOurTransform, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+#pragma mark - spring physics (runs every screen refresh while something moves)
+
+@interface C26Spring : NSObject
+@property (nonatomic, weak) UIView *view;
+@property (nonatomic) CGFloat x, y, sx, sy, vx, vy, vsx, vsy;  // current + velocity
+@property (nonatomic) CGFloat tx, ty, tsx, tsy;                // targets
+@property (nonatomic) CGFloat angle;                           // stretch axis
+@property (nonatomic) CGFloat k, c;                            // stiffness, damping
+@end
+@implementation C26Spring
+- (instancetype)init { if ((self = [super init])) { _sx = _sy = _tsx = _tsy = 1; _k = 320; _c = 24; } return self; }
+- (BOOL)settled {
+    return fabs(_x - _tx) < 0.02 && fabs(_y - _ty) < 0.02 && fabs(_sx - _tsx) < 0.0005 && fabs(_sy - _tsy) < 0.0005 &&
+           fabs(_vx) < 0.05 && fabs(_vy) < 0.05 && fabs(_vsx) < 0.002 && fabs(_vsy) < 0.002;
+}
+- (void)step:(CGFloat)dt {
+    int n = 4; CGFloat h = dt / n;
+    for (int i = 0; i < n; i++) {
+        _vx += (-_k * (_x - _tx) - _c * _vx) * h;   _x += _vx * h;
+        _vy += (-_k * (_y - _ty) - _c * _vy) * h;   _y += _vy * h;
+        _vsx += (-_k * (_sx - _tsx) - _c * _vsx) * h; _sx += _vsx * h;
+        _vsy += (-_k * (_sy - _tsy) - _c * _vsy) * h; _sy += _vsy * h;
+    }
+}
+- (CGAffineTransform)transform {
+    CGAffineTransform t = CGAffineTransformMakeTranslation(_x, _y);
+    t = CGAffineTransformRotate(t, _angle);
+    t = CGAffineTransformScale(t, _sx, _sy);
+    return CGAffineTransformRotate(t, -_angle);
+}
+@end
+
+static const void *kSpring = &kSpring;
+static NSHashTable *gActiveSprings;
+static CADisplayLink *gSpringLink;
+
+@interface C26SpringTicker : NSObject
++ (instancetype)shared;
+@end
+@implementation C26SpringTicker
++ (instancetype)shared { static C26SpringTicker *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26SpringTicker new]; }); return t; }
+- (void)step:(CADisplayLink *)link {
+    CGFloat dt = link.targetTimestamp - link.timestamp;
+    if (dt <= 0 || dt > 0.05) dt = 1.0 / 120.0;
+    for (C26Spring *s in [gActiveSprings allObjects]) {
+        UIView *v = s.view;
+        if (!v) { [gActiveSprings removeObject:s]; continue; }
+        [s step:dt];
+        if ([s settled]) {
+            s.x = s.tx; s.y = s.ty; s.sx = s.tsx; s.sy = s.tsy; s.vx = s.vy = s.vsx = s.vsy = 0;
+            [gActiveSprings removeObject:s];
+        }
+        v.transform = [s transform];
+    }
+    if (!gActiveSprings.count) { [gSpringLink invalidate]; gSpringLink = nil; }
+}
+@end
+
+static C26Spring *SpringFor(UIView *v) {
+    C26Spring *s = objc_getAssociatedObject(v, kSpring);
+    if (!s) { s = [C26Spring new]; s.view = v; objc_setAssociatedObject(v, kSpring, s, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    return s;
+}
+
+static void WakeSpring(C26Spring *s) {
+    if (!gActiveSprings) gActiveSprings = [NSHashTable hashTableWithOptions:NSPointerFunctionsStrongMemory];
+    [gActiveSprings addObject:s];
+    if (!gSpringLink) {
+        gSpringLink = [CADisplayLink displayLinkWithTarget:[C26SpringTicker shared] selector:@selector(step:)];
+        if (@available(iOS 15.0, *)) gSpringLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+        [gSpringLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    }
+}
+
+
 @interface C26Transport : NSObject
 + (instancetype)shared;
 @end
 @implementation C26Transport
 + (instancetype)shared { static C26Transport *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26Transport new]; }); return t; }
 - (void)down:(UIButton *)b {
-    [UIView animateWithDuration:0.18 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction
-                     animations:^{ b.transform = CGAffineTransformMakeScale(0.82, 0.82); b.alpha = 0.7; } completion:nil];
+    // Press: sink quickly.
+    C26Spring *s = SpringFor(b);
+    s.k = 700; s.c = 40; s.tsx = s.tsy = 0.84; s.tx = s.ty = 0; s.angle = 0;
+    WakeSpring(s);
+    [UIView animateWithDuration:0.12 animations:^{ b.alpha = 0.75; }];
 }
 - (void)up:(UIButton *)b {
-    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction
-                     animations:^{ b.transform = CGAffineTransformIdentity; b.alpha = 1; } completion:nil];
+    // Release: pop past full size and settle.
+    C26Spring *s = SpringFor(b);
+    s.k = 320; s.c = 13; s.tsx = s.tsy = 1; s.tx = s.ty = 0;
+    s.vsx += 2.4; s.vsy += 2.4;
+    WakeSpring(s);
+    [UIView animateWithDuration:0.2 animations:^{ b.alpha = 1; }];
 }
-// The arrows "swoosh" through: out one side, back in from the other.
+// Next / previous: the arrows fling in the skip direction and spring home,
+// leaving a ghost that keeps going and fades.
 - (void)swoosh:(UIButton *)b dir:(CGFloat)dir {
-    UIView *iv = b.imageView;
-    [UIView animateWithDuration:0.13 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionAllowUserInteraction animations:^{
-        iv.transform = CGAffineTransformMakeTranslation(14 * dir, 0);
-        iv.alpha = 0;
-    } completion:^(BOOL d) {
-        iv.transform = CGAffineTransformMakeTranslation(-14 * dir, 0);
-        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
-            iv.transform = CGAffineTransformIdentity;
-            iv.alpha = 1;
-        } completion:nil];
-    }];
+    UIImageView *iv = b.imageView;
+    if (iv.image) {
+        UIImageView *ghost = [[UIImageView alloc] initWithImage:iv.image];
+        ghost.tintColor = b.tintColor;
+        ghost.frame = iv.frame;
+        ghost.alpha = 0.55;
+        ghost.userInteractionEnabled = NO;
+        [b addSubview:ghost];
+        [UIView animateWithDuration:0.34 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            ghost.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(24 * dir, 0), 1.15, 0.9);
+            ghost.alpha = 0;
+        } completion:^(BOOL d) { [ghost removeFromSuperview]; }];
+    }
+    C26Spring *s = SpringFor(iv);
+    s.k = 420; s.c = 16; s.tx = s.ty = 0; s.tsx = s.tsy = 1; s.angle = 0;
+    s.vx += 520 * dir;           // fling
+    s.vsx += 1.4; s.vsy -= 0.7;  // stretch along the fling
+    WakeSpring(s);
 }
 - (void)tap:(UIButton *)b {
     [self up:b];
@@ -441,16 +536,12 @@ static void ClearOurTransform(UIView *v) {
         NSString *sym = gIsPlaying ? @"pause.fill" : @"play.fill";
         objc_setAssociatedObject(b, kLastValue, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIImage *img = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightSemibold]];
-        [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
-            b.imageView.transform = CGAffineTransformMakeScale(0.4, 0.4);
-            b.imageView.alpha = 0.2;
-        } completion:^(BOOL d) {
-            [b setImage:img forState:UIControlStateNormal];
-            [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.8 options:UIViewAnimationOptionAllowUserInteraction animations:^{
-                b.imageView.transform = CGAffineTransformIdentity;
-                b.imageView.alpha = 1;
-            } completion:nil];
-        }];
+        [b setImage:img forState:UIControlStateNormal];
+        // Morph: the new icon grows out of a dot with a springy overshoot.
+        C26Spring *s = SpringFor(b.imageView);
+        s.sx = s.sy = 0.2; s.vsx = s.vsy = 0;
+        s.k = 380; s.c = 14; s.tsx = s.tsy = 1; s.tx = s.ty = 0; s.angle = 0;
+        WakeSpring(s);
     }
     // Pick up the new song / state right away.
     for (NSNumber *delay in @[@0.12, @0.35, @0.8]) {
@@ -971,80 +1062,6 @@ static UIView *SliderShell(UIView *slider) {
     return best;
 }
 
-#pragma mark - spring physics (runs every screen refresh while something moves)
-
-@interface C26Spring : NSObject
-@property (nonatomic, weak) UIView *view;
-@property (nonatomic) CGFloat x, y, sx, sy, vx, vy, vsx, vsy;  // current + velocity
-@property (nonatomic) CGFloat tx, ty, tsx, tsy;                // targets
-@property (nonatomic) CGFloat angle;                           // stretch axis
-@property (nonatomic) CGFloat k, c;                            // stiffness, damping
-@end
-@implementation C26Spring
-- (instancetype)init { if ((self = [super init])) { _sx = _sy = _tsx = _tsy = 1; _k = 320; _c = 24; } return self; }
-- (BOOL)settled {
-    return fabs(_x - _tx) < 0.02 && fabs(_y - _ty) < 0.02 && fabs(_sx - _tsx) < 0.0005 && fabs(_sy - _tsy) < 0.0005 &&
-           fabs(_vx) < 0.05 && fabs(_vy) < 0.05 && fabs(_vsx) < 0.002 && fabs(_vsy) < 0.002;
-}
-- (void)step:(CGFloat)dt {
-    int n = 4; CGFloat h = dt / n;
-    for (int i = 0; i < n; i++) {
-        _vx += (-_k * (_x - _tx) - _c * _vx) * h;   _x += _vx * h;
-        _vy += (-_k * (_y - _ty) - _c * _vy) * h;   _y += _vy * h;
-        _vsx += (-_k * (_sx - _tsx) - _c * _vsx) * h; _sx += _vsx * h;
-        _vsy += (-_k * (_sy - _tsy) - _c * _vsy) * h; _sy += _vsy * h;
-    }
-}
-- (CGAffineTransform)transform {
-    CGAffineTransform t = CGAffineTransformMakeTranslation(_x, _y);
-    t = CGAffineTransformRotate(t, _angle);
-    t = CGAffineTransformScale(t, _sx, _sy);
-    return CGAffineTransformRotate(t, -_angle);
-}
-@end
-
-static const void *kSpring = &kSpring;
-static NSHashTable *gActiveSprings;
-static CADisplayLink *gSpringLink;
-
-@interface C26SpringTicker : NSObject
-+ (instancetype)shared;
-@end
-@implementation C26SpringTicker
-+ (instancetype)shared { static C26SpringTicker *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26SpringTicker new]; }); return t; }
-- (void)step:(CADisplayLink *)link {
-    CGFloat dt = link.targetTimestamp - link.timestamp;
-    if (dt <= 0 || dt > 0.05) dt = 1.0 / 120.0;
-    for (C26Spring *s in [gActiveSprings allObjects]) {
-        UIView *v = s.view;
-        if (!v) { [gActiveSprings removeObject:s]; continue; }
-        [s step:dt];
-        if ([s settled]) {
-            s.x = s.tx; s.y = s.ty; s.sx = s.tsx; s.sy = s.tsy; s.vx = s.vy = s.vsx = s.vsy = 0;
-            [gActiveSprings removeObject:s];
-        }
-        v.transform = [s transform];
-    }
-    if (!gActiveSprings.count) { [gSpringLink invalidate]; gSpringLink = nil; }
-}
-@end
-
-static C26Spring *SpringFor(UIView *v) {
-    C26Spring *s = objc_getAssociatedObject(v, kSpring);
-    if (!s) { s = [C26Spring new]; s.view = v; objc_setAssociatedObject(v, kSpring, s, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
-    return s;
-}
-
-static void WakeSpring(C26Spring *s) {
-    if (!gActiveSprings) gActiveSprings = [NSHashTable hashTableWithOptions:NSPointerFunctionsStrongMemory];
-    [gActiveSprings addObject:s];
-    if (!gSpringLink) {
-        gSpringLink = [CADisplayLink displayLinkWithTarget:[C26SpringTicker shared] selector:@selector(step:)];
-        if (@available(iOS 15.0, *)) gSpringLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
-        [gSpringLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-    }
-}
-
 // Stretch for `over` points past an end (dir 1 = top, -1 = bottom), rubber-band style.
 static void ApplyStretch(UIView *slider, CGFloat over, int dir) {
     UIView *v = SliderShell(slider);
@@ -1204,6 +1221,64 @@ static void AddJelly(UIView *v) {
     [v addGestureRecognizer:lp];
 }
 
+#pragma mark - expanded connectivity (hold the Wi-Fi block)
+
+static NSString *ConnTitle(UIView *b) {
+    id t = KV(b, @"title");
+    if ([t isKindOfClass:[NSString class]] && [t length]) return t;
+    NSMutableArray *labels = [NSMutableArray array];
+    CollectViews(b, 0, [UILabel class], labels);
+    for (UILabel *l in labels) if (l.text.length) return l.text;
+    return @"";
+}
+
+static UIView *RoundButtonIn(UIView *b) {
+    id rb = KV(b, @"buttonView");
+    if ([rb isKindOfClass:[UIView class]]) return rb;
+    NSMutableArray *all = [NSMutableArray array];
+    CollectViews(b, 0, [UIView class], all);
+    for (UIView *v in all) if ([NSStringFromClass([v class]) containsString:@"RoundButton"]) return v;
+    return nil;
+}
+
+static void StyleConnButton(UIView *b) {
+    NSString *title = ConnTitle(b);
+    BOOL cellular = [title containsString:@"Cellular"] || [title containsString:@"Mobile"];
+    UIView *round = RoundButtonIn(b);
+    if (!round) return;
+    UIImageView *bars = (UIImageView *)[round viewWithTag:CELL_TAG];
+    if (bars.superview != round) bars = nil;
+    if (!gEnabled || !cellular) { [bars removeFromSuperview]; return; }
+
+    // Apple's antenna glyph(s) inside the round button.
+    NSMutableArray *all = [NSMutableArray array], *glyphs = [NSMutableArray array];
+    CollectViews(round, 0, [UIView class], all);
+    for (UIView *v in all) {
+        if (v.tag == CELL_TAG) continue;
+        NSString *n = NSStringFromClass([v class]);
+        BOOL g = [n containsString:@"CAPackage"] || [n containsString:@"Glyph"] || ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image);
+        if (g && v.bounds.size.width <= round.bounds.size.width * 0.8) [glyphs addObject:v];
+    }
+    if (!bars) {
+        bars = [UIImageView new];
+        bars.tag = CELL_TAG;
+        bars.contentMode = UIViewContentModeCenter;
+        bars.tintColor = UIColor.whiteColor;
+        bars.userInteractionEnabled = NO;
+        [round addSubview:bars];
+    }
+    [round bringSubviewToFront:bars];
+    CGFloat side = round.bounds.size.width;
+    UIImage *img = [UIImage systemImageNamed:@"cellularbars" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:side * 0.32 weight:UIImageSymbolWeightSemibold]]
+                   ?: [UIImage systemImageNamed:@"chart.bar.fill"];
+    if (bars.image != img && ![objc_getAssociatedObject(bars, kLastValue) isEqual:@(side)]) {
+        bars.image = img;
+        objc_setAssociatedObject(bars, kLastValue, @(side), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    SetFrame(bars, round.bounds);
+    for (UIView *g in glyphs) HideOriginal(g);
+}
+
 #pragma mark - debug
 
 static void UpdateDebug(UIWindow *w) {
@@ -1221,7 +1296,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.1.7 debug\n music: %@\n cmds: %@\n sliders: %@", gMusicDebug, gCmdDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.1.8 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1248,6 +1323,20 @@ static void Tick(void) {
                                     (unsigned long)AllAppleGlyphs(s).count, objc_getAssociatedObject(s, kDirect) ? @"direct" : @"apple"]];
     }
     if (gDebug) gSliderDebug = [dbg componentsJoinedByString:@"\n  "];
+    NSMutableArray *cdbg = [NSMutableArray array];
+    for (UIView *b in [gConnButtons allObjects]) {
+        if (!b.window || !InControlCenter(b)) continue;
+        anyVisible = YES; win = b.window;
+        @try { StyleConnButton(b); } @catch (__unused id e) {}
+        if (gDebug && cdbg.count < 8) {
+            UIView *r = RoundButtonIn(b);
+            CGRect f = [b convertRect:b.bounds toView:nil];
+            [cdbg addObject:[NSString stringWithFormat:@"%@ %@ %.0f,%.0f %.0fx%.0f round=%@ sel=%d",
+                             ConnTitle(b), NSStringFromClass([b class]), f.origin.x, f.origin.y, f.size.width, f.size.height,
+                             r ? NSStringFromClass([r class]) : @"none", [r isKindOfClass:[UIControl class]] ? ((UIControl *)r).isSelected : -1]];
+        }
+    }
+    if (gDebug) gConnDebug = cdbg.count ? [cdbg componentsJoinedByString:@"\n  "] : @"(hold the Wi-Fi block to open it)";
     if (win) UpdateDebug(win);
     // Control Center closed: stop the timer until it opens again.
     if (!anyVisible) { [gTimer invalidate]; gTimer = nil; }
@@ -1316,6 +1405,19 @@ static void Tick(void) {
 }
 %end
 
+%group Conn
+%hook CCUILabeledRoundButton
+- (void)didMoveToWindow {
+    %orig;
+    if (self.window) {
+        if (!gConnButtons) gConnButtons = [NSHashTable weakObjectsHashTable];
+        [gConnButtons addObject:self];
+        StartTimer();
+    }
+}
+%end
+%end
+
 %group Jelly1
 %hook CCUIRoundButton
 - (void)didMoveToWindow { %orig; if (self.window && InControlCenter(self)) AddJelly(self); }
@@ -1339,6 +1441,8 @@ static void Tick(void) {
 
 static BOOL gMediaHooked, gCCHooked, gMRUHooked, gGlyphHooked, gJ1Hooked, gJ2Hooked;
 static void InitJ1(void) { %init(Jelly1); }
+static BOOL gConnHooked;
+static void InitConn(void) { %init(Conn); }
 static void InitJ2(void) { %init(Jelly2); }
 static void InitMedia(void)  { %init(Media); }
 static void InitCC(void)     { %init(SlidersCC); }
@@ -1352,6 +1456,7 @@ static void TryLateHooks(void) {
     if (!gGlyphHooked && NSClassFromString(@"CCUICAPackageView"))      { gGlyphHooked = YES; InitGlyphs(); }
     if (!gJ1Hooked && NSClassFromString(@"CCUIRoundButton"))           { gJ1Hooked = YES; InitJ1(); }
     if (!gJ2Hooked && NSClassFromString(@"CCUIButtonModuleView"))      { gJ2Hooked = YES; InitJ2(); }
+    if (!gConnHooked && NSClassFromString(@"CCUILabeledRoundButton"))  { gConnHooked = YES; InitConn(); }
 }
 
 static void StartLateHooks(void) {
@@ -1359,7 +1464,7 @@ static void StartLateHooks(void) {
     __block int tries = 0;
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         TryLateHooks();
-        if ((gMediaHooked && gCCHooked && gMRUHooked && gGlyphHooked && gJ1Hooked && gJ2Hooked) || ++tries > 120) [t invalidate];
+        if ((gMediaHooked && gCCHooked && gMRUHooked && gGlyphHooked && gJ1Hooked && gJ2Hooked && gConnHooked) || ++tries > 120) [t invalidate];
     }];
 }
 
