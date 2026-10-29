@@ -1,4 +1,7 @@
-// Photos26 2.1.0 - made by nano
+// Photos26 2.1.1 - made by nano
+// 2.1.1: the Years/Months/Days bar is styled the moment it appears (hooked
+//        directly, no flicker on launch) and the dark backdrop behind it is
+//        hidden too.
 // 2.1.0: Years / Months / Days / All Photos bar: compact liquid glass pill
 //        that hides when you scroll up and bounces back when you scroll down.
 // 2.0.2: grid top buttons drawn entirely by us inside Apple's button (Apple's
@@ -73,6 +76,7 @@
 @interface PUTilingView : UIView @end
 @interface PXCuratedLibraryOverlayButton : UIView @end
 @interface _PXUIScrollView : UIScrollView @end
+@interface _PXCuratedLibraryZoomLevelSegmentedControl : UIView @end
 #define DOM_NS @"com.user.photos26"
 #define DOM CFSTR("com.user.photos26")
 #define NOTIFY CFSTR("com.user.photos26/prefschanged")
@@ -1301,6 +1305,7 @@ static void SetSegShown(BOOL shown, BOOL animated) {
         [UIView animateWithDuration:0.32 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseIn animations:a completion:nil];
 }
 
+static void StyleSegBar(UIView *bar);
 static void StyleSegments(UIWindow *w) {
     if (!w || !gEnabled || HasScrubber(w)) return;
     UIView *bar = gSegBar;
@@ -1317,6 +1322,35 @@ static void StyleSegments(UIWindow *w) {
         gSegDebug = bar ? [NSString stringWithFormat:@"%@ %.0fx%.0f", NSStringFromClass([bar class]), bar.bounds.size.width, bar.bounds.size.height] : @"not found";
     }
     if (!bar) return;
+    StyleSegBar(bar);
+}
+
+// The dark capsule Apple draws behind the bar lives next to it, not inside it.
+static void HideSegBackdrop(UIView *bar) {
+    CGRect bf = [bar convertRect:bar.bounds toView:nil];
+    UIView *child = bar;
+    int up = 0;
+    for (UIView *p = bar.superview; p && up < 3; child = p, p = p.superview, up++) {
+        for (UIView *s in p.subviews) {
+            if (s == child || [bar isDescendantOfView:s]) continue;
+            CGRect f = [s convertRect:s.bounds toView:nil];
+            BOOL near = fabs(CGRectGetMidY(f) - CGRectGetMidY(bf)) < 30 && f.size.height < bf.size.height * 2.5 && f.size.width >= bf.size.width * 0.8;
+            if (!near) continue;
+            NSString *n = NSStringFromClass([s class]);
+            BOOL bg = [s isKindOfClass:[UIVisualEffectView class]] || [n containsString:@"Background"] || [n containsString:@"Blur"] || [n containsString:@"Material"] || [n containsString:@"Backdrop"] ||
+                      (s.backgroundColor && CGColorGetAlpha(s.backgroundColor.CGColor) > 0.05 && s.layer.cornerRadius > 8);
+            if (bg) Mask(s);
+        }
+        // An ancestor drawing the capsule itself.
+        CGRect pf = [p convertRect:p.bounds toView:nil];
+        if (pf.size.height < bf.size.height * 2.5 && p.layer.cornerRadius > 8 && p.backgroundColor && CGColorGetAlpha(p.backgroundColor.CGColor) > 0.05) p.backgroundColor = UIColor.clearColor;
+    }
+}
+
+static void StyleSegBar(UIView *bar) {
+    if (!gEnabled) return;
+    if (gSegBar != bar) { gSegBar = bar; gSegShown = YES; }
+    HideSegBackdrop(bar);
     // Liquid glass instead of Apple's dark capsule (the selected-segment pill stays).
     CGSize S = bar.bounds.size;
     PGGlass *g = nil;
@@ -1468,7 +1502,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 2.1.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n segments: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gSegDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 2.1.1 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n segments: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gSegDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1668,6 +1702,20 @@ static void StartLink(void) {
 }
 %end
 
+%group SegCtl
+%hook _PXCuratedLibraryZoomLevelSegmentedControl
+// Styled the moment it lays out, so it never shows full size first.
+- (void)layoutSubviews {
+    %orig;
+    @try { StyleSegBar(self); } @catch (__unused id e) {}
+}
+- (void)didMoveToWindow {
+    %orig;
+    if (self.window) { @try { StyleSegBar(self); } @catch (__unused id e) {} }
+}
+%end
+%end
+
 %group SegScroll
 %hook _PXUIScrollView
 // Scroll up: the Years/Months/Days bar hides. Scroll down: it bounces back.
@@ -1749,6 +1797,7 @@ static void InitOverlay(void) {
     static BOOL done; if (done) return; done = YES;
     %init(Overlay);
     if (objc_getClass("_PXUIScrollView")) %init(SegScroll);
+    if (objc_getClass("_PXCuratedLibraryZoomLevelSegmentedControl")) %init(SegCtl);
 }
 static void InitScrubber(void) { static BOOL done; if (done) return; done = YES; %init(Scrubber); }
 
