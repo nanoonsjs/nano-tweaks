@@ -1,4 +1,8 @@
-// Photos26 1.3.0 - made by nano
+// Photos26 1.4.0 - made by nano
+// 1.4.0: hold the video slider: the player turns into a big iOS 26 timer
+//        (elapsed 00:01.30 on the left, length on the right, thick bar);
+//        jelly runs on real spring physics every frame (no more janky
+//        restarted animations).
 // 1.3.0: thumbnails rounded the moment they appear (PUTilingView hook), smooth
 //        slow scrubbing (one seek at a time, chasing the finger), bigger video
 //        slider, iOS 26 jelly on every glass button (swells, leans toward your
@@ -232,29 +236,72 @@ static void Forward(UIBarButtonItem *it) {
 @property (nonatomic, strong) UIView *bubble;   // glass bubble for capsule buttons
 @end
 
-// iOS 26 jelly: the glass swells, leans and stretches toward the finger,
-// then wobbles back when you let go.
-static void JellyPress(UIView *g) {
-    [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.8
-                        options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        g.transform = CGAffineTransformMakeScale(1.17, 1.17);
-    } completion:nil];
+// iOS 26 jelly, on real springs: every frame each view's offset and scale
+// move toward a target with stiffness k and damping c. Holding sets snappy
+// targets that follow the finger; letting go sets a soft, wobbly spring home.
+@interface PGJS : NSObject
+@property (nonatomic, weak) UIView *view;
+@property (nonatomic) CGFloat x, y, sx, sy, vx, vy, vsx, vsy, tx, ty, tsx, tsy, k, c;
+@end
+@implementation PGJS
+- (instancetype)init { if ((self = [super init])) { _sx = _sy = _tsx = _tsy = 1; _k = 300; _c = 20; } return self; }
+@end
+static const void *kJS = &kJS;
+static NSHashTable *gJSActive;
+static CADisplayLink *gJSLink;
+@interface PGJSTicker : NSObject
++ (instancetype)shared;
+@end
+@implementation PGJSTicker
++ (instancetype)shared { static PGJSTicker *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [PGJSTicker new]; }); return t; }
+- (void)step:(CADisplayLink *)l {
+    CGFloat dt = l.targetTimestamp - l.timestamp;
+    if (dt <= 0 || dt > 0.05) dt = 1.0 / 120;
+    for (PGJS *s in [gJSActive allObjects]) {
+        UIView *v = s.view;
+        if (!v) { [gJSActive removeObject:s]; continue; }
+        int n = 4; CGFloat h = dt / n;
+        for (int i = 0; i < n; i++) {
+            s.vx += (-s.k * (s.x - s.tx) - s.c * s.vx) * h;     s.x += s.vx * h;
+            s.vy += (-s.k * (s.y - s.ty) - s.c * s.vy) * h;     s.y += s.vy * h;
+            s.vsx += (-s.k * (s.sx - s.tsx) - s.c * s.vsx) * h; s.sx += s.vsx * h;
+            s.vsy += (-s.k * (s.sy - s.tsy) - s.c * s.vsy) * h; s.sy += s.vsy * h;
+        }
+        BOOL done = fabs(s.x - s.tx) < 0.05 && fabs(s.y - s.ty) < 0.05 && fabs(s.sx - s.tsx) < 0.001 && fabs(s.sy - s.tsy) < 0.001 &&
+                    fabs(s.vx) < 0.1 && fabs(s.vy) < 0.1 && fabs(s.vsx) < 0.005 && fabs(s.vsy) < 0.005;
+        if (done) { s.x = s.tx; s.y = s.ty; s.sx = s.tsx; s.sy = s.tsy; s.vx = s.vy = s.vsx = s.vsy = 0; [gJSActive removeObject:s]; }
+        v.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(s.x, s.y), s.sx, s.sy);
+    }
+    if (!gJSActive.count) { [gJSLink invalidate]; gJSLink = nil; }
 }
+@end
+static void JellyTo(UIView *v, CGFloat tx, CGFloat ty, CGFloat sx, CGFloat sy, CGFloat k, CGFloat c) {
+    if (!v) return;
+    PGJS *s = objc_getAssociatedObject(v, kJS);
+    if (!s) {
+        s = [PGJS new]; s.view = v;
+        CGAffineTransform t0 = v.transform;   // start from wherever it is now
+        s.x = t0.tx; s.y = t0.ty; s.sx = sqrt(t0.a * t0.a + t0.c * t0.c); s.sy = sqrt(t0.b * t0.b + t0.d * t0.d);
+        objc_setAssociatedObject(v, kJS, s, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    s.tx = tx; s.ty = ty; s.tsx = sx; s.tsy = sy; s.k = k; s.c = c;
+    if (!gJSActive) gJSActive = [NSHashTable hashTableWithOptions:NSPointerFunctionsStrongMemory];
+    [gJSActive addObject:s];
+    if (!gJSLink) {
+        gJSLink = [CADisplayLink displayLinkWithTarget:[PGJSTicker shared] selector:@selector(step:)];
+        if (@available(iOS 15.0, *)) gJSLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+        [gJSLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    }
+}
+static void JellyPress(UIView *g) { JellyTo(g, 0, 0, 1.16, 1.16, 380, 21); }
+// Lean toward the finger (rubber-banded) and stretch along the drag.
 static void JellyFollow(UIView *g, CGPoint off) {
-    CGFloat ox = MAX(-10, MIN(10, off.x * 0.2)), oy = MAX(-8, MIN(8, off.y * 0.2));
-    CGFloat k = MIN(1, (fabs(off.x) + fabs(off.y)) / 70);
-    CGFloat sx = 1.17 + (fabs(off.x) >= fabs(off.y) ? 0.1 : -0.05) * k;
-    CGFloat sy = 1.17 + (fabs(off.y) > fabs(off.x) ? 0.1 : -0.05) * k;
-    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseOut animations:^{
-        g.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(ox, oy), sx, sy);
-    } completion:nil];
+    CGFloat ax = tanh(off.x / 55), ay = tanh(off.y / 55);
+    CGFloat sx = 1.16 + 0.09 * fabs(ax) - 0.05 * fabs(ay);
+    CGFloat sy = 1.16 + 0.09 * fabs(ay) - 0.05 * fabs(ax);
+    JellyTo(g, 11 * ax, 9 * ay, sx, sy, 520, 30);
 }
-static void JellyRelease(UIView *g) {
-    [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.36 initialSpringVelocity:0.9
-                        options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        g.transform = CGAffineTransformIdentity;
-    } completion:nil];
-}
+static void JellyRelease(UIView *g) { JellyTo(g, 0, 0, 1, 1, 210, 8.5); }
 
 @implementation PGButton
 - (UIView *)jellyTarget {
@@ -275,19 +322,15 @@ static void JellyRelease(UIView *g) {
     UIView *g = [self jellyTarget];
     if (g == self.bubble) [UIView animateWithDuration:0.15 animations:^{ self.bubble.alpha = 1; }];
     JellyPress(g);
-    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
-        self.transform = CGAffineTransformMakeScale(1.1, 1.1);
-        if (self.capsule) self.capsule.transform = CGAffineTransformMakeScale(1.025, 1.025);
-    } completion:nil];
+    JellyTo(self, 0, 0, 1.08, 1.08, 380, 22);
+    if (self.capsule) JellyTo(self.capsule, 0, 0, 1.03, 1.03, 320, 20);
     return [super beginTrackingWithTouch:t withEvent:e];
 }
 - (BOOL)continueTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
     CGPoint p = [t locationInView:self];
     CGPoint off = CGPointMake(p.x - self.bounds.size.width / 2, p.y - self.bounds.size.height / 2);
     JellyFollow([self jellyTarget], off);
-    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        self.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(MAX(-6, MIN(6, off.x * 0.12)), MAX(-5, MIN(5, off.y * 0.12))), 1.1, 1.1);
-    } completion:nil];
+    JellyTo(self, 6 * tanh(off.x / 55), 5 * tanh(off.y / 55), 1.08, 1.08, 520, 30);
     return [super continueTrackingWithTouch:t withEvent:e];
 }
 - (void)letGo {
@@ -360,6 +403,15 @@ static NSMutableDictionary *gItems;        // kind -> weak box of Apple's item
 static __weak AVPlayer *gAVPlayer;
 static CADisplayLink *gLink;
 static BOOL gScrubbing;
+static void LayoutBottom(UIToolbar *tb);
+static __weak UIToolbar *gToolbarFwd;
+static NSString *Clock(double s, BOOL hundredths) {
+    if (!(s >= 0)) s = 0;
+    int m = (int)(s / 60), sec = (int)s % 60;
+    if (hundredths) return [NSString stringWithFormat:@"%02d:%02d.%02d", m, sec, (int)((s - floor(s)) * 100)];
+    int ts = (int)round(s);
+    return [NSString stringWithFormat:@"%02d:%02d", ts / 60, ts % 60];
+}
 static NSString *gBottomDebug = @"-", *gTopDebug = @"-", *gVideoDebug = @"-";
 
 @interface PGBox : NSObject
@@ -474,7 +526,7 @@ static void SetSym(PGButton *b, NSString *name, CGFloat size) {
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat h = gScrubbing ? 14 : 9;
+    CGFloat h = gScrubbing ? 16 : 9;
     _track.frame = CGRectMake(0, (self.bounds.size.height - h) / 2, self.bounds.size.width, h);
     _track.layer.cornerRadius = h / 2;
     _fill.frame = CGRectMake(0, 0, MAX(h, _track.bounds.size.width * _progress), h);
@@ -507,9 +559,10 @@ static void SeekTo(double s) { gPendingSeek = s; if (!gSeeking) ChaseSeek(); }
         start = self.progress;
         wasPlaying = pl.rate > 0;
         if (wasPlaying) pl.rate = 0;    // hold the picture still while scrubbing
-        [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{
-            [self setNeedsLayout]; [self layoutIfNeeded];
-            self.superview.transform = CGAffineTransformIdentity;
+        // The player grows into the iOS 26 timer.
+        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.68 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+            UIToolbar *tb = gToolbarFwd; if (tb) LayoutBottom(tb);
+            [self.superview layoutIfNeeded]; [self setNeedsLayout]; [self layoutIfNeeded];
         } completion:nil];
     }
     CGFloat dx = [g translationInView:self].x;
@@ -517,10 +570,16 @@ static void SeekTo(double s) { gPendingSeek = s; if (!gSeeking) ChaseSeek(); }
     [self layoutIfNeeded];
     double dur = Dur(pl);
     if (pl && dur > 0) SeekTo(dur * self.progress);
+    for (UIView *v in self.superview.subviews) if ([v isKindOfClass:[UILabel class]]) {
+        UILabel *l = (UILabel *)v;
+        if ([l.accessibilityIdentifier isEqualToString:@"elapsed"]) l.text = Clock(dur * self.progress, YES);
+        else if ([l.accessibilityIdentifier isEqualToString:@"total"]) l.text = Clock(dur, NO);
+    }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled || g.state == UIGestureRecognizerStateFailed) {
         gScrubbing = NO;
         if (wasPlaying) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [pl play]; });
-        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+            UIToolbar *tb = gToolbarFwd; if (tb) LayoutBottom(tb);
             [self setNeedsLayout]; [self layoutIfNeeded];
         } completion:nil];
     }
@@ -706,6 +765,38 @@ static void LayoutBottom(UIToolbar *tb) {
         CGFloat VD = 54;
         CGFloat vy = MIN(filmTop, -40) - 12 - VD;
         CGFloat vx = 22, vw = W - vx * 2;
+        gToolbarFwd = tb;
+        UILabel *le = nil, *lt = nil;
+        for (UIView *v in c.subviews) if ([v isKindOfClass:[UILabel class]]) {
+            if ([v.accessibilityIdentifier isEqualToString:@"elapsed"]) le = (UILabel *)v;
+            if ([v.accessibilityIdentifier isEqualToString:@"total"]) lt = (UILabel *)v;
+        }
+        if (!le) { le = [UILabel new]; le.accessibilityIdentifier = @"elapsed"; [c addSubview:le]; }
+        if (!lt) { lt = [UILabel new]; lt.accessibilityIdentifier = @"total"; lt.textAlignment = NSTextAlignmentRight; [c addSubview:lt]; }
+        for (UILabel *l in @[le, lt]) {
+            l.font = [UIFont monospacedDigitSystemFontOfSize:19 weight:UIFontWeightSemibold];
+            l.textColor = UIColor.whiteColor;
+            l.userInteractionEnabled = NO;
+        }
+        if (gScrubbing) {
+            // iOS 26 timer: taller capsule, times on top, a thick bar across the bottom.
+            CGFloat TH = 80, ty = vy + VD - TH;
+            SetFrame(gv, CGRectMake(vx, ty, vw, TH));
+            SetFrame(le, CGRectMake(vx + 24, ty + 12, vw / 2 - 24, 26));
+            SetFrame(lt, CGRectMake(vx + vw / 2, ty + 12, vw / 2 - 24, 26));
+            le.alpha = lt.alpha = 1;
+            bPlay.alpha = bMute.alpha = 0;
+            bPlay.transform = bMute.transform = CGAffineTransformMakeScale(0.5, 0.5);
+            SetFrame(scrub, CGRectMake(vx + 22, ty + 40, vw - 44, 34));
+            le.hidden = lt.hidden = NO;
+            gv.hidden = NO;
+            StartLink();
+            return;
+        }
+        le.alpha = lt.alpha = 0;
+        if (bPlay.alpha < 1) { bPlay.alpha = bMute.alpha = 1; bPlay.transform = bMute.transform = CGAffineTransformIdentity; }
+        SetFrame(le, CGRectMake(vx + 24, vy + 6, vw / 2 - 24, 26));
+        SetFrame(lt, CGRectMake(vx + vw / 2, vy + 6, vw / 2 - 24, 26));
         SetFrame(gv, CGRectMake(vx, vy, vw, VD));
         bPlay.capsule = bMute.capsule = gv;
         BOOL playing = [ItemSymbolText(AppleItem(@"play")) containsString:@"pause"];
@@ -982,7 +1073,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.3.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.4.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
