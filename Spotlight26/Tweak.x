@@ -1,4 +1,6 @@
-// Spotlight26 0.1.0 - made by nano
+// Spotlight26 0.1.1 - made by nano
+// 0.1.1: iOS 16 runs Spotlight as its own app (com.apple.Spotlight), so the
+//        tweak now loads there too. Debug shows which process it's in.
 // iOS 26 style Spotlight for iOS 16 (rootless, SpringBoard).
 //  - The search bar moves to the top and grows out of the notch into a black
 //    glass pill (Apple's search header is only moved with a transform; its
@@ -67,7 +69,9 @@ static UIViewController *OwnerVC(UIView *v) {
     return [r isKindOfClass:[UIViewController class]] ? (UIViewController *)r : nil;
 }
 
+static BOOL gInSpotlightApp;
 static BOOL IsSpotlightField(UIView *f) {
+    if (gInSpotlightApp) return YES;
     int d = 0;
     for (UIView *p = f; p && d < 30; p = p.superview, d++) {
         NSString *n = NSStringFromClass([p class]);
@@ -366,8 +370,8 @@ static void UpdateDebug(UIWindow *w) {
     for (UIView *p = f.superview; p && d < 6; p = p.superview, d++) [chain addObject:[NSString stringWithFormat:@"%@(%.0f)", NSStringFromClass([p class]), p.bounds.size.height]];
     NSMutableArray *vcs = [NSMutableArray array];
     for (UIViewController *p = OwnerVC(f); p; p = p.parentViewController) [vcs addObject:NSStringFromClass([p class])];
-    NSString *text = [NSString stringWithFormat:@" Spotlight26 0.1.0 debug\n field: %@ %@\n chain: %@\n vcs: %@\n header: %@ ty=%.0f\n results: %@ inset=%.0f vc=%@\n cards: %@",
-                      NSStringFromClass([f class]), NSStringFromCGRect([f convertRect:f.bounds toView:nil]),
+    NSString *text = [NSString stringWithFormat:@" Spotlight26 0.1.1 debug (%@)\n field: %@ %@\n chain: %@\n vcs: %@\n header: %@ ty=%.0f\n results: %@ inset=%.0f vc=%@\n cards: %@",
+                      [[NSBundle mainBundle] bundleIdentifier], NSStringFromClass([f class]), NSStringFromCGRect([f convertRect:f.bounds toView:nil]),
                       [chain componentsJoinedByString:@" > "], [vcs componentsJoinedByString:@" > "],
                       NSStringFromClass([h class]), h.transform.ty,
                       s ? NSStringFromClass([s class]) : @"none", s.adjustedContentInset.top, NSStringFromClass([gInsetVC class]), gCardsDebug];
@@ -450,9 +454,17 @@ static void UpdateDebug(UIWindow *w) {
 
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
-    if (![bid isEqualToString:@"com.apple.springboard"]) return;
+    gInSpotlightApp = [bid isEqualToString:@"com.apple.Spotlight"];
+    if (!gInSpotlightApp && ![bid isEqualToString:@"com.apple.springboard"]) return;
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     [[NSNotificationCenter defaultCenter] addObserver:[S26Ticker shared] selector:@selector(textChanged:) name:UITextFieldTextDidChangeNotification object:nil];
+    // Spotlight's app stays alive between pulls: replay the notch grow each time it comes back.
+    for (NSString *name in @[UIApplicationWillEnterForegroundNotification, UISceneWillEnterForegroundNotification, UIApplicationDidEnterBackgroundNotification])
+        [[NSNotificationCenter defaultCenter] addObserverForName:name object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+            @try { ResetAll(); } @catch (__unused id e) {}
+            gAppeared = NO;
+            if (gField.window) StartLink();
+        }];
     %init;
 }
