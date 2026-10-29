@@ -1,4 +1,8 @@
-// Photos26 1.1.0 - made by nano
+// Photos26 1.2.0 - made by nano
+// 1.2.0: videos stay one thumbnail in the strip (PUScrubberView never
+//        expands), playhead hidden, rounded thumbnail tiles, trash circle
+//        fixed, white top icons, liquid wobble on the top glass when you
+//        swipe to another photo, seamless video looping.
 // 1.1.0: rounded iOS 26 thumbnails, playhead line hidden, Recently Deleted
 //        (no gray bars, glass Delete / Recover, glass top), back-arrow circle,
 //        thumbnail strip map in debug to stop the video frame spread next.
@@ -37,7 +41,7 @@
 #define TOP_TAG    0x50473631
 #define DEBUG_TAG  0x50473632
 
-static BOOL gEnabled = YES, gTopBar = YES, gPlayer = YES, gDebug = NO;
+static BOOL gEnabled = YES, gTopBar = YES, gPlayer = YES, gDebug = NO, gLoop = YES;
 
 static const void *kMasked = &kMasked;
 static const void *kBusy = &kBusy;
@@ -71,6 +75,7 @@ static void LoadPrefs(void) {
     gTopBar  = PrefBool(f, @"topbar", YES);
     gPlayer  = PrefBool(f, @"player", YES);
     gDebug   = PrefBool(f, @"debug", NO);
+    gLoop    = PrefBool(f, @"loop", YES);
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
     dispatch_async(dispatch_get_main_queue(), ^{ LoadPrefs(); });
@@ -474,16 +479,16 @@ static void LayoutBottom(UIToolbar *tb) {
         for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view"));
         c = EnsureContainer(tb);
         gToolbar = tb; gTextMode = YES;
-        for (UIView *v in c.subviews) v.hidden = !([v isKindOfClass:[PGGlass class]] && [v.accessibilityIdentifier hasPrefix:@"t"]);
+        for (UIView *v in c.subviews) v.hidden = !([v isKindOfClass:[PGGlass class]] && [v.accessibilityIdentifier hasPrefix:@"txt"]);
         int i = 0;
         for (UIView *g in textViews) {
-            PGGlass *gl = GlassIn(c, [NSString stringWithFormat:@"t%d", i++]);
+            PGGlass *gl = GlassIn(c, [NSString stringWithFormat:@"txt%d", i++]);
             gl.hidden = NO;
             CGRect r = [g convertRect:g.bounds toView:c];
             CGFloat w = r.size.width + 40, h = 44;
             SetFrame(gl, CGRectMake(round(CGRectGetMidX(r) - w / 2), round(CGRectGetMidY(r) - h / 2), round(w), h));
         }
-        for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"t"] && [[v.accessibilityIdentifier substringFromIndex:1] intValue] >= i) v.hidden = YES;
+        for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"txt"] && [[v.accessibilityIdentifier substringFromIndex:3] intValue] >= i) v.hidden = YES;
         // Under Apple's text buttons (they stay Apple's own, just on glass).
         if (tb.subviews.firstObject != c) { [c removeFromSuperview]; [tb insertSubview:c atIndex:0]; }
         UIView *bg = nil;
@@ -495,7 +500,7 @@ static void LayoutBottom(UIToolbar *tb) {
         return;
     }
     gTextMode = NO;
-    for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"t"]) v.hidden = YES;
+    for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"txt"]) v.hidden = YES;
     // Only the photo/video viewer toolbar: it has both share and trash.
     if (!found[@"share"] || !found[@"trash"]) { c.hidden = YES; for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view")); gBottomDebug = [NSString stringWithFormat:@"not viewer: %@", [kinds componentsJoinedByString:@","]]; return; }
     gItems = found;
@@ -518,7 +523,7 @@ static void LayoutBottom(UIToolbar *tb) {
         });
     }
     c.hidden = NO;
-    for (UIView *v in c.subviews) if (![v.accessibilityIdentifier hasPrefix:@"t"] || ![v isKindOfClass:[PGGlass class]]) { if ([v isKindOfClass:[PGButton class]] || [v isKindOfClass:[PGGlass class]]) v.hidden = NO; }
+    for (UIView *v in c.subviews) if (![v.accessibilityIdentifier hasPrefix:@"txt"]) { if ([v isKindOfClass:[PGButton class]] || [v isKindOfClass:[PGGlass class]]) v.hidden = NO; }
     if (tb.clipsToBounds) tb.clipsToBounds = NO;
     [tb bringSubviewToFront:c];
     SetFrame(c, tb.bounds);
@@ -649,6 +654,11 @@ static void StyleFilmstrip(UIWindow *w) {
         NSString *n = NSStringFromClass([v class]);
         counts[n] = @([counts[n] intValue] + 1);
         CGSize z = v.bounds.size;
+        if ([n containsString:@"Playhead"]) { Mask(v); continue; }
+        if (([v isKindOfClass:[UIImageView class]] || [n containsString:@"FilmstripWrapper"]) && z.height >= H * 0.5 && z.width >= 8) {
+            if (v.layer.cornerRadius != 6) { v.layer.cornerRadius = 6; if (@available(iOS 13.0, *)) v.layer.cornerCurve = kCACornerCurveContinuous; }
+            if (!v.layer.masksToBounds) v.layer.masksToBounds = YES;
+        }
         if ([v isKindOfClass:[UICollectionViewCell class]]) {
             UIView *cv = ((UICollectionViewCell *)v).contentView;
             if (v.layer.cornerRadius != 7) { v.layer.cornerRadius = 7; if (@available(iOS 13.0, *)) v.layer.cornerCurve = kCACornerCurveContinuous; }
@@ -789,6 +799,8 @@ static void LayoutTop(UINavigationBar *nb) {
             [stack addObjectsFromArray:v.subviews];
         }
     }
+    for (UIView *v in @[back ?: [UIView new], moreView ?: [UIView new]]) if (![v.tintColor isEqual:UIColor.whiteColor]) v.tintColor = UIColor.whiteColor;
+    if (![nb.tintColor isEqual:UIColor.whiteColor]) nb.tintColor = UIColor.whiteColor;
     PGGlass *gt = GlassIn(c, @"title");
     gt.hidden = !title.window;
     if (title.window) {
@@ -800,7 +812,29 @@ static void LayoutTop(UINavigationBar *nb) {
         while (stack.count) { UIView *v = stack.lastObject; [stack removeLastObject]; if ([v isKindOfClass:[UILabel class]]) [labels addObject:v]; [stack addObjectsFromArray:v.subviews]; }
         for (UILabel *l in labels) tw = MAX(tw, [l sizeThatFits:CGSizeMake(400, 40)].width);
         CGFloat w = MAX(tw + 64, 150), h = MAX(D, MIN(56, tr.size.height + 12));
-        SetFrame(gt, CGRectMake(round(CGRectGetMidX(tr) - w / 2), round(CGRectGetMidY(tr) - h / 2), round(w), round(h)));
+        CGRect nf = CGRectMake(round(CGRectGetMidX(tr) - w / 2), round(CGRectGetMidY(tr) - h / 2), round(w), round(h));
+        NSMutableString *txt = [NSMutableString string];
+        for (UILabel *l in labels) if (l.text) [txt appendString:l.text];
+        static NSString *lastTitle;
+        if (lastTitle && ![txt isEqualToString:lastTitle] && !CGRectIsEmpty(gt.frame)) {
+            // New photo: the capsule morphs to the new width and wobbles like liquid.
+            [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.9
+                                options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+                gt.frame = nf; [gt layoutIfNeeded];
+            } completion:nil];
+            CAKeyframeAnimation *sx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"];
+            sx.values = @[@1, @1.09, @0.95, @1.025, @1]; sx.keyTimes = @[@0, @0.18, @0.45, @0.72, @1]; sx.duration = 0.62;
+            CAKeyframeAnimation *sy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
+            sy.values = @[@1, @0.88, @1.06, @0.98, @1]; sy.keyTimes = sx.keyTimes; sy.duration = 0.62;
+            for (CAKeyframeAnimation *a in @[sx, sy]) a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+            [gt.layer addAnimation:sx forKey:@"wx"]; [gt.layer addAnimation:sy forKey:@"wy"];
+            for (UIView *circle in @[GlassIn(c, @"back"), GlassIn(c, @"more")]) {
+                CAKeyframeAnimation *s = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+                s.values = @[@1, @0.9, @1.05, @0.99, @1]; s.keyTimes = sx.keyTimes; s.duration = 0.55; s.beginTime = CACurrentMediaTime() + 0.04;
+                [circle.layer addAnimation:s forKey:@"w"];
+            }
+        } else SetFrame(gt, nf);
+        lastTitle = [txt copy];
     }
     gTopDebug = [NSString stringWithFormat:@"back=%@ title=%@ more=%d edit=%d", NSStringFromClass([back class]), NSStringFromClass([title class]), moreView != nil, editView != nil];
 }
@@ -822,12 +856,51 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.1.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.2.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
     SetFrame(l, CGRectMake(12, w.bounds.size.height * 0.3, width, sz.height + 6));
     [w bringSubviewToFront:l];
+}
+
+#pragma mark - looping
+
+static CFTimeInterval gLastPlayingAt;
+static BOOL gLoopBusy;
+static void ResumePlay(AVPlayer *p) {
+    // Keep Apple's play button in step: press it if Apple thinks it's paused.
+    UIBarButtonItem *play = AppleItem(@"play");
+    if (play && ![ItemSymbolText(play) containsString:@"pause"]) Forward(play);
+    else [p play];
+}
+static void LoopNow(AVPlayer *p) {
+    if (!p || gLoopBusy) return;
+    gLoopBusy = YES;
+    [p seekToTime:kCMTimeZero toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL done) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (p.rate == 0) ResumePlay(p);
+            gLoopBusy = NO;
+        });
+    }];
+}
+static void LoopTick(AVPlayer *p) {
+    if (!p) return;
+    static const void *kLoopSet = &kLoopSet;
+    if (!objc_getAssociatedObject(p, kLoopSet)) {
+        objc_setAssociatedObject(p, kLoopSet, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        p.actionAtItemEnd = AVPlayerActionAtItemEndNone;   // don't stop at the end
+        __weak AVPlayer *wp = p;
+        [[NSNotificationCenter defaultCenter] addObserverForName:AVPlayerItemDidPlayToEndTimeNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+            AVPlayer *pl = wp;
+            if (pl && gLoop && gEnabled && n.object == pl.currentItem) LoopNow(pl);
+        }];
+    }
+    CFTimeInterval now = CACurrentMediaTime();
+    if (p.rate > 0) gLastPlayingAt = now;
+    // Backup: it stopped right at the end just after playing.
+    double d = Dur(p), cur = CMTimeGetSeconds(p.currentTime);
+    if (p.rate == 0 && d > 0 && cur >= d - 0.2 && now - gLastPlayingAt < 0.8) LoopNow(p);
 }
 
 #pragma mark - taps and the per-frame update
@@ -888,6 +961,7 @@ static void UpdateDebug(UIWindow *w) {
         for (UIView *v in c.subviews) if ([v isKindOfClass:[PGScrubber class]]) scrub = (PGScrubber *)v;
         if (scrub && !scrub.hidden) {
             if (frame % 15 == 1 || !gAVPlayer) gAVPlayer = CurrentPlayer(tb.window);
+            if (gLoop) LoopTick(gAVPlayer);
             AVPlayer *p = gAVPlayer;
             CMTime dur = p.currentItem.duration, now = p.currentTime;
             (void)dur;
@@ -939,6 +1013,17 @@ static void StartLink(void) {
 }
 %end
 
+%group Scrubber
+%hook PUScrubberView
+// iOS 26 look: a video stays one thumbnail in the strip instead of spreading
+// into frames (our glass slider does the scrubbing).
+- (long long)_expandedItemType {
+    if (gEnabled && gPlayer) return 0;
+    return %orig;
+}
+%end
+%end
+
 %hook UINavigationBar
 - (void)layoutSubviews {
     %orig;
@@ -949,10 +1034,16 @@ static void StartLink(void) {
 }
 %end
 
+static void InitScrubber(void) { static BOOL done; if (done) return; done = YES; %init(Scrubber); }
+
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
     if (![bid isEqualToString:@"com.apple.mobileslideshow"]) return;
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     %init;
+    if (objc_getClass("PUScrubberView")) InitScrubber();
+    else dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (objc_getClass("PUScrubberView")) InitScrubber();
+    });
 }
