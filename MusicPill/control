@@ -1,8 +1,8 @@
 Package: com.user.musicpill
 Name: MusicPill
-Version: 0.2.0
+Version: 0.3.0
 Architecture: iphoneos-arm64
-Description: Renames the Listen Now tab in Apple Music to Home with a house icon (Xcode build). Made by nano.
+Description: Apple Music: round now-playing pill and a Home tab with a house icon. Made by nano.
 Maintainer: nano
 Author: nano
 Section: Tweaks

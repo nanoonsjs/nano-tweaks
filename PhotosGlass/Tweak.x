@@ -1,4 +1,4 @@
-// PhotosGlass 0.1.0 - made by nano
+// PhotosGlass 0.3.0 - made by nano
 // Photos-only. Turns the bottom toolbar into iOS 26 style glass pills:
 // [share]  [middle buttons]  [delete]
 //
@@ -91,23 +91,52 @@ static UIView *ContainerFor(UIToolbar *tb) {
     return c;
 }
 
+// The visible glyph inside a bar button: its icon image or its text label.
+// Bar button views are wider than the icon (tap padding, edge margins), so
+// centering on the button view put the pills off-center.
+static UIView *Glyph(UIView *v, int depth) {
+    for (UIView *s in v.subviews) {
+        if (s.hidden || s.alpha < 0.01 || s.bounds.size.width < 2 || s.bounds.size.height < 2) continue;
+        if ([s isKindOfClass:[UIImageView class]] && ((UIImageView *)s).image) return s;
+        if ([s isKindOfClass:[UILabel class]] && ((UILabel *)s).text.length) return s;
+        if (depth < 5) { UIView *g = Glyph(s, depth + 1); if (g) return g; }
+    }
+    return nil;
+}
+
+typedef struct { CGRect r; BOOL text; } PGItem;
+
+static CGRect SinglePill(PGItem it, CGFloat cy, CGFloat H) {
+    // Icons get a circle; text buttons (Delete, Recover...) get a capsule that fits the word.
+    CGFloat w = it.text ? MAX(H, CGRectGetWidth(it.r) + 32) : H;
+    return CGRectMake(round(CGRectGetMidX(it.r) - w / 2), round(cy - H / 2), round(w), H);
+}
+
 static void LayoutPills(UIToolbar *tb) {
     UIView *existing = objc_getAssociatedObject(tb, kContainer);
     if (!gEnabled) { existing.hidden = YES; return; }
 
-    NSMutableArray<NSValue *> *frames = [NSMutableArray array];
+    PGItem items[8];
+    int n = 0;
     for (UIBarButtonItem *item in tb.items) {
         UIView *v = KV(item, @"view");
         if (![v isKindOfClass:[UIView class]] || v.hidden || v.alpha < 0.01 || !v.window) continue;
         if (v.bounds.size.width < 2) continue;
-        [frames addObject:[NSValue valueWithCGRect:[v convertRect:v.bounds toView:tb]]];
+        if (n >= 8) { n = 99; break; }
+        UIView *g = Glyph(v, 0);
+        UIView *target = g ?: v;
+        items[n].r = [target convertRect:target.bounds toView:tb];
+        items[n].text = [g isKindOfClass:[UILabel class]];
+        n++;
     }
     // Only the photo/video viewer toolbar (3-8 buttons). Leave anything else alone.
-    if (frames.count < 3 || frames.count > 8) { existing.hidden = YES; return; }
-    [frames sortUsingComparator:^NSComparisonResult(NSValue *a, NSValue *b) {
-        CGFloat x = CGRectGetMinX(a.CGRectValue), y = CGRectGetMinX(b.CGRectValue);
-        return x < y ? NSOrderedAscending : (x > y ? NSOrderedDescending : NSOrderedSame);
-    }];
+    if (n < 3 || n > 8) { existing.hidden = YES; return; }
+    // Left to right.
+    for (int i = 1; i < n; i++) {
+        PGItem k = items[i]; int j = i - 1;
+        while (j >= 0 && CGRectGetMinX(items[j].r) > CGRectGetMinX(k.r)) { items[j + 1] = items[j]; j--; }
+        items[j + 1] = k;
+    }
 
     StyleToolbarOnce(tb);
     UIView *c = ContainerFor(tb);
@@ -115,16 +144,15 @@ static void LayoutPills(UIToolbar *tb) {
     SetFrameIfChanged(c, tb.bounds);
 
     CGFloat cy = 0;
-    for (NSValue *f in frames) cy += CGRectGetMidY(f.CGRectValue);
-    cy /= frames.count;
+    for (int i = 0; i < n; i++) cy += CGRectGetMidY(items[i].r);
+    cy /= n;
 
-    const CGFloat H = 50, pad = 12;
-    CGRect first = frames.firstObject.CGRectValue, last = frames.lastObject.CGRectValue;
+    const CGFloat H = 50, pad = 22;
     CGRect mid = CGRectNull;
-    for (NSUInteger i = 1; i + 1 < frames.count; i++) mid = CGRectUnion(mid, frames[i].CGRectValue);
+    for (int i = 1; i + 1 < n; i++) mid = CGRectUnion(mid, items[i].r);
 
-    CGRect r0 = CGRectMake(round(CGRectGetMidX(first) - H / 2), round(cy - H / 2), H, H);
-    CGRect r2 = CGRectMake(round(CGRectGetMidX(last) - H / 2), round(cy - H / 2), H, H);
+    CGRect r0 = SinglePill(items[0], cy, H);
+    CGRect r2 = SinglePill(items[n - 1], cy, H);
     CGFloat mw = MAX(CGRectGetWidth(mid) + pad * 2, H);
     CGRect r1 = CGRectMake(round(CGRectGetMidX(mid) - mw / 2), round(cy - H / 2), round(mw), H);
 

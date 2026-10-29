@@ -24,6 +24,26 @@
 			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
 		</dict>
 		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Round Now Playing Bar</string>
+			<key>key</key><string>round</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Shows a purple box listing what MusicPill found near the tab bar. Send a screenshot of it if the bar isn't round, then turn this off.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Show Debug Info</string>
+			<key>key</key><string>debug</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
 			<key>cell</key><string>PSGroupCell</string>
 			<key>footerText</key><string>Made by nano</string>
 		</dict>
