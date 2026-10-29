@@ -1,4 +1,9 @@
-// Control26 0.2.2 - made by nano
+// Control26 0.3.0 - made by nano
+// 0.3.0: expanded cards show instantly (no rise-in, styled on layout),
+//        Dark Mode / Night Shift / True Tone get real icons and taps that
+//        reach Apple (gesture fallback), artwork shrinks when paused and
+//        springs up when playing, "Not Playing" 10% smaller, tap the
+//        brightness / volume icon to open the module.
 // 0.2.2: iOS 26 tiles (square, brighter glass rim, up/down chevron after the
 //        status), menu probing for Wi-Fi/Bluetooth lists.
 // 0.2.1: Wi-Fi/Bluetooth arrows expand Apple's nested module, rounder bars,
@@ -842,14 +847,29 @@ static void StyleModule(UIView *module) {
     UILabel *title = (UILabel *)[o viewWithTag:4], *artist = (UILabel *)[o viewWithTag:5];
 
     CGFloat a = round(56 * s), d = round(42 * s);
-    SetFrame(art, CGRectMake(m, m, a, a));
+    // Set through bounds/center so the play/pause scale can live on its transform.
+    CGRect af0 = CGRectMake(m, m, a, a);
+    if (!CGRectEqualToRect(art.bounds, CGRectMake(0, 0, a, a))) art.bounds = CGRectMake(0, 0, a, a);
+    if (!CGPointEqualToPoint(art.center, CGPointMake(CGRectGetMidX(af0), CGRectGetMidY(af0)))) art.center = CGPointMake(CGRectGetMidX(af0), CGRectGetMidY(af0));
     art.layer.cornerRadius = 12 * s;
+    {
+        // Like Music: the artwork sits a little smaller while paused and springs up when playing.
+        BOOL big = gNPTitle == nil || gIsPlaying;
+        NSNumber *lastBig = objc_getAssociatedObject(art, kBounce);
+        if (!lastBig || lastBig.boolValue != big) {
+            objc_setAssociatedObject(art, kBounce, @(big), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            CGAffineTransform tr = big ? CGAffineTransformIdentity : CGAffineTransformMakeScale(0.86, 0.86);
+            if (!lastBig) art.transform = tr;
+            else [UIView animateWithDuration:big ? 0.6 : 0.45 delay:0 usingSpringWithDamping:big ? 0.55 : 0.85 initialSpringVelocity:big ? 0.8 : 0.2
+                                     options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ art.transform = tr; } completion:nil];
+        }
+    }
     SetFrame(glass, CGRectMake(S.width - m - d, m, d, d));
     SetFrame(air, CGRectInset(glass.frame, round(10 * s), round(10 * s)));
     glass.layer.cornerRadius = d / 2;
     air.hidden = glass.hidden = NO;
 
-    UIFont *tf = [UIFont systemFontOfSize:16 * s weight:UIFontWeightSemibold];
+    UIFont *tf = [UIFont systemFontOfSize:16 * s * (gNPTitle ? 1 : 0.9) weight:UIFontWeightSemibold];   // "Not Playing" 10% smaller
     UIFont *af = [UIFont systemFontOfSize:16 * s weight:UIFontWeightRegular];
     if (![title.font isEqual:tf]) title.font = tf;
     if (![artist.font isEqual:af]) artist.font = af;
@@ -966,7 +986,38 @@ static NSString *GlyphSymbol(int kind, float v) {
     return @"speaker.wave.3.fill";
 }
 
+// Tap the brightness / volume icon (bottom of the slider) to open the module.
+@interface C26SliderTap : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+@implementation C26SliderTap
++ (instancetype)shared { static C26SliderTap *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26SliderTap new]; }); return t; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)touch {
+    UIView *v = g.view;
+    CGPoint p = [touch locationInView:v];
+    return gEnabled && p.y > v.bounds.size.height * 0.62;   // the icon area
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+- (void)tap:(UITapGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateEnded) return;
+    for (UIViewController *p = OwnerVC(g.view); p; p = p.parentViewController) {
+        if ([NSStringFromClass([p class]) containsString:@"ContainerViewController"] && [p respondsToSelector:NSSelectorFromString(@"expandModule")]) {
+            ((void (*)(id, SEL))objc_msgSend)(p, NSSelectorFromString(@"expandModule"));
+            return;
+        }
+    }
+}
+@end
+static void AddIconTap(UIView *slider) {
+    for (UIGestureRecognizer *g in slider.gestureRecognizers) if (g.delegate == (id)[C26SliderTap shared]) return;
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:[C26SliderTap shared] action:@selector(tap:)];
+    tap.delegate = [C26SliderTap shared];
+    tap.cancelsTouchesInView = NO;
+    [slider addGestureRecognizer:tap];
+}
+
 static void StyleSlider(UIView *slider) {
+    if (slider.bounds.size.height < 300) AddIconTap(slider);   // compact sliders only
     int kind = SliderKind(slider);
     UIView *apple = AppleGlyph(slider);
     UIImageView *mine = (UIImageView *)[slider viewWithTag:GLYPH_TAG];
@@ -1368,6 +1419,9 @@ static NSString *ConnKey(NSString *title) {
     if ([title containsString:@"Cellular"] || [title containsString:@"Mobile"]) return @"cell";
     if ([title containsString:@"Bluetooth"]) return @"bt";
     if ([title containsString:@"Hotspot"]) return @"hotspot";
+    if ([title containsString:@"Dark Mode"]) return @"dark";
+    if ([title containsString:@"Night Shift"]) return @"night";
+    if ([title containsString:@"True Tone"]) return @"truetone";
     return title.length ? title : @"?";
 }
 
@@ -1406,7 +1460,10 @@ static UIImage *ConnIcon(NSString *key) {
     UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold];
     NSArray *names = @{ @"air": @[@"airplane"], @"wifi": @[@"wifi"], @"airdrop": @[@"airdrop", @"dot.radiowaves.left.and.right"],
                         @"cell": @[@"cellularbars", @"antenna.radiowaves.left.and.right"],
-                        @"hotspot": @[@"personalhotspot", @"link"] }[key] ?: @[@"circle.grid.2x2.fill"];
+                        @"hotspot": @[@"personalhotspot", @"link"],
+                        @"dark": @[@"circle.lefthalf.filled", @"moon.fill"],
+                        @"night": @[@"sun.horizon.fill", @"sun.haze.fill", @"moon.stars.fill"],
+                        @"truetone": @[@"sun.max.fill"] }[key] ?: @[@"circle.grid.2x2.fill"];
     if ([key isEqualToString:@"bt"]) return BluetoothImage(22);
     for (NSString *n in names) { UIImage *i = [UIImage systemImageNamed:n withConfiguration:cfg]; if (i) return i; }
     return nil;
@@ -1415,6 +1472,8 @@ static UIImage *ConnIcon(NSString *key) {
 static UIColor *ConnOnColor(NSString *key) {
     if ([key isEqualToString:@"air"]) return UIColor.systemOrangeColor;
     if ([key isEqualToString:@"cell"] || [key isEqualToString:@"hotspot"]) return UIColor.systemGreenColor;
+    if ([key isEqualToString:@"night"]) return UIColor.systemOrangeColor;
+    if ([key isEqualToString:@"dark"]) return [UIColor colorWithWhite:0.15 alpha:1];
     return UIColor.systemBlueColor;
 }
 
@@ -1465,6 +1524,39 @@ static BOOL FireLongPress(UIGestureRecognizer *gr) {
         fired = YES;
     }
     return fired;
+}
+
+// Press Apple's round button: its control actions if it has any, otherwise
+// its tap gesture (Display toggles like Dark Mode use a gesture).
+static NSString *gPressDebug = @"-";
+static void PressApple(UIControl *round, UIView *labeled) {
+    if (round.allTargets.count) {
+        [round sendActionsForControlEvents:UIControlEventTouchUpInside];
+        [round sendActionsForControlEvents:UIControlEventPrimaryActionTriggered];
+        gPressDebug = [NSString stringWithFormat:@"actions on %@", NSStringFromClass([round class])];
+        return;
+    }
+    for (UIView *v = round; v; v = v.superview) {
+        for (UIGestureRecognizer *gr in v.gestureRecognizers) {
+            if (![gr isKindOfClass:[UITapGestureRecognizer class]] || !gr.enabled) continue;
+            NSArray *targets = nil;
+            @try { targets = [gr valueForKey:@"_targets"]; } @catch (__unused id e) {}
+            for (id tg in targets) {
+                id target = nil; SEL action = NULL;
+                @try { target = [tg valueForKey:@"_target"]; } @catch (__unused id e) {}
+                Ivar iv = class_getInstanceVariable([tg class], "_action");
+                if (iv) action = *(SEL *)((uint8_t *)(__bridge void *)tg + ivar_getOffset(iv));
+                if (!target || !action || ![target respondsToSelector:action] || [NSStringFromClass([target class]) hasPrefix:@"C26"]) continue;
+                C26GRProxy *p = [C26GRProxy alloc]; p.gr = gr; p.fakeState = UIGestureRecognizerStateEnded;
+                ((void (*)(id, SEL, id))objc_msgSend)(target, action, p);
+                gPressDebug = [NSString stringWithFormat:@"tap -[%@ %@]", NSStringFromClass([target class]), NSStringFromSelector(action)];
+                return;
+            }
+        }
+        if (v == labeled) break;
+    }
+    [round sendActionsForControlEvents:UIControlEventTouchUpInside];
+    gPressDebug = @"no actions or taps found";
 }
 
 // Open the network / device list Apple shows on a long press.
@@ -1659,7 +1751,7 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     UIControl *t = self.target;
     BOOL arrow = ([_key isEqualToString:@"wifi"] || [_key isEqualToString:@"bt"]) && _touchStart.y > _sub.frame.origin.y - 8;
     if (arrow) { @try { OpenConnMenu(self.apple, t); } @catch (__unused id e) { gMenuDebug = @"menu threw"; } return; }
-    if (t && t.enabled) [t sendActionsForControlEvents:UIControlEventTouchUpInside];
+    if (t && t.enabled) PressApple(t, self.apple);
     for (NSNumber *d in @[@0.06, @0.2, @0.5])
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ @try { Tick(); } @catch (__unused id e) {} });
 }
@@ -1774,7 +1866,7 @@ static void StyleConnectivity(NSArray *buttons) {
     if (gDebug) gGlassDebug = gdbg.count ? [gdbg componentsJoinedByString:@", "] : @"none found";
 
     NSMutableSet *used = [NSMutableSet set];
-    CGFloat y = 0; int index = 0;
+    CGFloat y = 0;
     for (NSArray *r in rows) {
         BOOL isTile = [r[0] isEqualToString:@"wifi"] || [r[0] isEqualToString:@"airdrop"] || [r[0] isEqualToString:@"cell"] || [r[0] isEqualToString:@"bt"];
         CGFloat h = isTile ? tileH : pillH;
@@ -1815,20 +1907,8 @@ static void StyleConnectivity(NSArray *buttons) {
             }
             CGFloat a = (card.target && !card.target.enabled) ? 0.5 : 1;
             if (card.alpha != a && !fresh) card.alpha = a;
-            if (fresh) {
-                // cards rise in one after another
-                card.alpha = 0;
-                C26Spring *s = SpringFor(card);
-                s.sx = s.sy = 0.86; s.y = 18; s.vx = s.vy = s.vsx = s.vsy = 0;
-                s.k = 260; s.c = 17; s.tsx = s.tsy = 1; s.ty = 0; s.tx = 0; s.angle = 0;
-                card.transform = [s transform];
-                CGFloat delay = 0.035 * index;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    WakeSpring(s);
-                    [UIView animateWithDuration:0.22 animations:^{ card.alpha = a; }];
-                });
-            }
-            index++;
+            if (fresh) card.alpha = a;   // show right away, no entrance animation
+
             // Apple's own button stays (for state) but draws nothing.
             if (!objc_getAssociatedObject(b, kConnMask)) {
                 b.layer.mask = [CALayer layer];
@@ -1857,7 +1937,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.2.2 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.3.0 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1914,7 +1994,7 @@ static void Tick(void) {
         [cdbg addObject:[NSString stringWithFormat:@"cards=%lu host=%@ wifi targets=%lu gestures=%@", (unsigned long)gConnOverlay.subviews.count,
                          NSStringFromClass([gConnOverlay.superview class]), (unsigned long)targets, [g componentsJoinedByString:@","]]];
         [cdbg addObject:[NSString stringWithFormat:@"bars=%@ glass=%@", gBarsDebug, gGlassDebug]];
-        [cdbg addObject:[NSString stringWithFormat:@"menu=%@", gMenuDebug]];
+        [cdbg addObject:[NSString stringWithFormat:@"menu=%@ press=%@", gMenuDebug, gPressDebug]];
     }
     if (gDebug) gConnDebug = cdbg.count ? [cdbg componentsJoinedByString:@"\n  "] : @"(hold the Wi-Fi block to open it)";
     if (win) UpdateDebug(win);
@@ -1987,6 +2067,14 @@ static void Tick(void) {
 
 %group Conn
 %hook CCUILabeledRoundButton
+- (void)layoutSubviews {
+    %orig;
+    // Expanded module laying out: style it on the very next turn, not on the timer.
+    static BOOL queued;
+    if (queued || !self.window || self.bounds.size.width < 100) return;
+    queued = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{ queued = NO; @try { Tick(); } @catch (__unused id e) {} });
+}
 - (void)didMoveToWindow {
     %orig;
     if (self.window) {
