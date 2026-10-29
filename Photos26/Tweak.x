@@ -1,4 +1,6 @@
-// Photos26 2.0.2 - made by nano
+// Photos26 2.1.0 - made by nano
+// 2.1.0: Years / Months / Days / All Photos bar: compact liquid glass pill
+//        that hides when you scroll up and bounces back when you scroll down.
 // 2.0.2: grid top buttons drawn entirely by us inside Apple's button (Apple's
 //        pieces only hidden, never moved or resized): no flicker while
 //        scrolling, full "Select" text, gap to ... in Library and Albums.
@@ -70,6 +72,7 @@
 
 @interface PUTilingView : UIView @end
 @interface PXCuratedLibraryOverlayButton : UIView @end
+@interface _PXUIScrollView : UIScrollView @end
 #define DOM_NS @"com.user.photos26"
 #define DOM CFSTR("com.user.photos26")
 #define NOTIFY CFSTR("com.user.photos26/prefschanged")
@@ -1258,6 +1261,83 @@ static void LayoutTop(UINavigationBar *nb) {
     gTopDebug = [NSString stringWithFormat:@"back=%@ title=%@ more=%d edit=%d", NSStringFromClass([back class]), NSStringFromClass([title class]), moreView != nil, editView != nil];
 }
 
+#pragma mark - Years / Months / Days / All Photos bar
+
+static __weak UIView *gSegBar;
+static BOOL gSegShown = YES;
+static NSString *gSegDebug = @"-";
+#define SEG_SCALE 0.84
+
+static UILabel *FindLabel(UIView *root, NSString *text, int maxDepth) {
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
+    int guard = 0;
+    while (stack.count && guard++ < 6000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if ([v isKindOfClass:[UICollectionViewCell class]]) continue;
+        if ([v isKindOfClass:[UILabel class]] && [((UILabel *)v).text isEqualToString:text]) return (UILabel *)v;
+        [stack addObjectsFromArray:v.subviews];
+    }
+    return nil;
+}
+
+static CGAffineTransform SegTransform(BOOL shown) {
+    // Shrink around the bottom middle so it sits low and compact.
+    CGAffineTransform t = CGAffineTransformMakeScale(SEG_SCALE, SEG_SCALE);
+    if (!shown) t = CGAffineTransformConcat(CGAffineTransformMakeScale(0.7, 0.7), CGAffineTransformMakeTranslation(0, 110));
+    return t;
+}
+
+static void SetSegShown(BOOL shown, BOOL animated) {
+    UIView *bar = gSegBar;
+    if (!bar) return;
+    if (shown == gSegShown && animated) return;
+    gSegShown = shown;
+    void (^a)(void) = ^{ bar.transform = SegTransform(shown); bar.alpha = shown ? 1 : 0; };
+    if (!animated) { a(); return; }
+    if (shown)   // liquid bounce back in
+        [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.9
+                            options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:a completion:nil];
+    else
+        [UIView animateWithDuration:0.32 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseIn animations:a completion:nil];
+}
+
+static void StyleSegments(UIWindow *w) {
+    if (!w || !gEnabled || HasScrubber(w)) return;
+    UIView *bar = gSegBar;
+    static CFTimeInterval lastSearch;
+    if ((!bar || bar.window != w) && CACurrentMediaTime() - lastSearch > 1.0) {
+        lastSearch = CACurrentMediaTime();
+        UILabel *years = FindLabel(w, @"Years", 0);
+        bar = nil;
+        for (UIView *p = years.superview; p && p != w; p = p.superview) {
+            if (FindLabel(p, @"All Photos", 0)) { bar = p; break; }
+        }
+        gSegBar = bar;
+        if (bar) { gSegShown = YES; bar.transform = SegTransform(YES); }
+        gSegDebug = bar ? [NSString stringWithFormat:@"%@ %.0fx%.0f", NSStringFromClass([bar class]), bar.bounds.size.width, bar.bounds.size.height] : @"not found";
+    }
+    if (!bar) return;
+    // Liquid glass instead of Apple's dark capsule (the selected-segment pill stays).
+    CGSize S = bar.bounds.size;
+    PGGlass *g = nil;
+    for (UIView *s in bar.subviews) if ([s isKindOfClass:[PGGlass class]]) g = (PGGlass *)s;
+    for (UIView *s in bar.subviews) {
+        if (s == g) continue;
+        BOOL full = s.bounds.size.width >= S.width * 0.9 && s.bounds.size.height >= S.height * 0.8;
+        NSString *n = NSStringFromClass([s class]);
+        BOOL bg = [s isKindOfClass:[UIVisualEffectView class]] || [n containsString:@"Background"] || [n containsString:@"Blur"] || [n containsString:@"Material"];
+        if (full && bg) Mask(s);
+    }
+    if (bar.backgroundColor && CGColorGetAlpha(bar.backgroundColor.CGColor) > 0.05) bar.backgroundColor = UIColor.clearColor;
+    if (!g) { g = [PGGlass new]; [bar insertSubview:g atIndex:0]; }
+    SetFrame(g, bar.bounds);
+    // Keep our size / hidden state if Apple resets it.
+    if (!bar.layer.animationKeys.count && !CGAffineTransformEqualToTransform(bar.transform, SegTransform(gSegShown))) {
+        bar.transform = SegTransform(gSegShown);
+        bar.alpha = gSegShown ? 1 : 0;
+    }
+}
+
 #pragma mark - grid top buttons (Select / Cancel / ...)
 
 static const void *kOvlKind = &kOvlKind;
@@ -1388,7 +1468,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 2.0.2 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 2.1.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n segments: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gSegDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1588,6 +1668,27 @@ static void StartLink(void) {
 }
 %end
 
+%group SegScroll
+%hook _PXUIScrollView
+// Scroll up: the Years/Months/Days bar hides. Scroll down: it bounces back.
+- (void)setContentOffset:(CGPoint)o {
+    CGFloat before = self.contentOffset.y;
+    %orig;
+    UIView *bar = gSegBar;
+    if (!gEnabled || !bar || bar.window != self.window || self.bounds.size.height < 400) return;
+    if (!(self.isDragging || self.isDecelerating)) return;
+    static CGFloat run;
+    CGFloat dy = o.y - before;
+    if ((dy > 0) != (run > 0)) run = 0;
+    run += dy;
+    CGFloat maxY = self.contentSize.height - self.bounds.size.height + self.adjustedContentInset.bottom;
+    if (o.y >= maxY - 30) { SetSegShown(YES, YES); return; }
+    if (run > 24) SetSegShown(YES, YES);
+    else if (run < -24) SetSegShown(NO, YES);
+}
+%end
+%end
+
 %group Overlay
 %hook PXCuratedLibraryOverlayButton
 - (void)layoutSubviews {
@@ -1644,7 +1745,11 @@ static void StartLink(void) {
 }
 %end
 
-static void InitOverlay(void) { static BOOL done; if (done) return; done = YES; %init(Overlay); }
+static void InitOverlay(void) {
+    static BOOL done; if (done) return; done = YES;
+    %init(Overlay);
+    if (objc_getClass("_PXUIScrollView")) %init(SegScroll);
+}
 static void InitScrubber(void) { static BOOL done; if (done) return; done = YES; %init(Scrubber); }
 
 %ctor {
@@ -1660,7 +1765,7 @@ static void InitScrubber(void) { static BOOL done; if (done) return; done = YES;
             UIWindow *key = nil;
             for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
                 if ([s isKindOfClass:[UIWindowScene class]]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) key = w;
-            @try { StyleGridTop(key); } @catch (__unused id e) {}
+            @try { StyleGridTop(key); StyleSegments(key); } @catch (__unused id e) {}
         }];
     });
     if (objc_getClass("PXCuratedLibraryOverlayButton")) InitOverlay();
