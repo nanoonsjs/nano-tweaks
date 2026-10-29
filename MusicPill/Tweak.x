@@ -1,4 +1,8 @@
-// MusicPill 0.8.0 - made by nano
+// MusicPill 0.8.1 - made by nano
+// 0.8.1: collapsed row redone: our own iOS 26 pill (artwork, full-size title
+//        with the E badge, artist, play) instead of shrinking Music's bar,
+//        circles sized / spaced like iOS 26, the search circle no longer
+//        blows up, and a more liquid morph (stretch, overshoot, settle).
 // 0.8.0: iOS 26 tab bar collapse. Scrolling down squeezes the tab bar into a
 //        glass circle (current tab), Search splits off into its own circle,
 //        and the pill drops into the row between them (skip button hides).
@@ -59,6 +63,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
+#import <objc/message.h>
 #import <MediaPlayer/MediaPlayer.h>
 
 // UIKit's private live-mirror view: draws another view's current contents
@@ -351,12 +356,7 @@ static UIView *InnerContent(UIView *c) {
 static CGRect gCollapsedPill;   // where the pill sits when collapsed (root coords)
 static CGAffineTransform PillTransform(UIView *m) {
     CGFloat W = m.bounds.size.width, H = m.bounds.size.height;
-    if (gCollapsed && !CGRectIsEmpty(gCollapsedPill) && gLastTabBar) {
-        UIView *root = gLastTabBar.superview;
-        CGRect u = UntransformedRect(m, root);
-        CGFloat s = MIN(gCollapsedPill.size.height / H, gCollapsedPill.size.width / W);
-        return CGAffineTransformScale(CGAffineTransformMakeTranslation(CGRectGetMidX(gCollapsedPill) - CGRectGetMidX(u), CGRectGetMidY(gCollapsedPill) - CGRectGetMidY(u)), s, s);
-    }
+
     // Total horizontal inset for Normal / Compact / Small.
     CGFloat inset = gSize == 0 ? 24 : (gSize == 1 ? 56 : 96);
     CGFloat s = W > inset + 100 ? (W - inset) / W : 1;
@@ -568,7 +568,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -589,6 +589,7 @@ static void Update(UITabBar *tb) {
     if (gCollapsed) {
         UIViewController *rv = tb.window.rootViewController;
         if (rv.presentedViewController) SetCollapsed(NO, NO);
+        else { UIView *m = objc_getAssociatedObject(tb, kMini); if (m.alpha > 0.01) m.alpha = 0; }
     }
     UIView *root = tb.superview;
     if (!root || !tb.window) return;
@@ -624,8 +625,6 @@ static void Update(UITabBar *tb) {
 - (void)tapSearch;
 @end
 
-static NSHashTable *gUnclipped;        // ancestors we let the pill draw outside of
-static __weak UIView *gCollapsedMini;  // pill whose touches reach outside its container
 
 static UIView *TabButtonRow(UITabBar *tb, CGFloat *rowY, UIView *root) {
     UIView *first = nil;
@@ -661,7 +660,8 @@ static UIView *GlassCircle(NSString *ident, UIView *host) {
     return c;
 }
 static void LayoutCircle(UIView *c, CGRect f) {
-    c.frame = f;
+    c.bounds = CGRectMake(0, 0, f.size.width, f.size.height);
+    c.center = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
     UIView *g = [c viewWithTag:1];
     g.frame = c.bounds;
     g.layer.cornerRadius = MIN(f.size.width, f.size.height) / 2;
@@ -686,34 +686,139 @@ static UIView *CollapseHost(UITabBar *tb) {
     return h;
 }
 
-// The skip button: rightmost small control in the pill.
-static UIView *NextButton(UIView *mini) {
-    NSMutableArray *stack = [NSMutableArray arrayWithObject:mini];
-    UIView *best = nil; CGFloat bestX = -1;
-    while (stack.count) {
-        UIView *v = stack.lastObject; [stack removeLastObject];
-        if ([v isKindOfClass:[UIControl class]] && v != mini && !v.hidden && v.bounds.size.width < 70) {
-            CGFloat x = CGRectGetMidX([v convertRect:v.bounds toView:mini]);
-            if (x > bestX) { bestX = x; best = v; }
+
+
+static void SetCollapsedFwd(BOOL c);
+// ---- our compact iOS 26 pill (shown only while collapsed) ----
+typedef Boolean (*MRSendFn)(int command, CFDictionaryRef options);
+static void SendMR(int cmd) {
+    static MRSendFn send; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
+        if (h) send = (MRSendFn)dlsym(h, "MRMediaRemoteSendCommand");
+    });
+    if (send) send(cmd, NULL);
+}
+
+// Stand-in for a gesture recognizer so Music's tap handler sees "ended".
+@interface MPGRProxy : NSProxy
+@property (nonatomic, strong) UIGestureRecognizer *gr;
+@end
+@implementation MPGRProxy
+- (UIGestureRecognizerState)state { return UIGestureRecognizerStateEnded; }
+- (BOOL)isKindOfClass:(Class)c { return [_gr isKindOfClass:c]; }
+- (BOOL)respondsToSelector:(SEL)s { return [_gr respondsToSelector:s]; }
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)s { return [_gr methodSignatureForSelector:s]; }
+- (void)forwardInvocation:(NSInvocation *)i { [i invokeWithTarget:_gr]; }
+@end
+
+// Open the full player the way a tap on Music's bar does.
+static BOOL OpenPlayer(UIView *mini) {
+    for (UIView *v = mini; v; v = v.superview) {
+        for (UIGestureRecognizer *g in v.gestureRecognizers) {
+            if (![g isKindOfClass:[UITapGestureRecognizer class]] || !g.enabled) continue;
+            NSArray *targets = nil;
+            @try { targets = [g valueForKey:@"_targets"]; } @catch (__unused id e) {}
+            for (id tg in targets) {
+                id target = nil; SEL action = NULL;
+                @try { target = [tg valueForKey:@"_target"]; } @catch (__unused id e) {}
+                Ivar iv = class_getInstanceVariable([tg class], "_action");
+                if (iv) action = *(SEL *)((uint8_t *)(__bridge void *)tg + ivar_getOffset(iv));
+                if (!target || !action || ![target respondsToSelector:action] || [NSStringFromClass([target class]) hasPrefix:@"MP"]) continue;
+                MPGRProxy *p = [MPGRProxy alloc]; p.gr = g;
+                ((void (*)(id, SEL, id))objc_msgSend)(target, action, p);
+                return YES;
+            }
         }
-        [stack addObjectsFromArray:v.subviews];
+        if ([NSStringFromClass([v class]) isEqualToString:@"PaletteContainerView"] || [NSStringFromClass([v class]) hasSuffix:@".PaletteContainerView"]) break;
     }
-    return best;
+    return NO;
 }
 
-static void SetUnclipped(UIView *mini, UIView *root, BOOL on) {
-    if (!gUnclipped) gUnclipped = [NSHashTable weakObjectsHashTable];
-    if (on) {
-        for (UIView *p = mini; p && p != root; p = p.superview) if (p.clipsToBounds && p != mini) { p.clipsToBounds = NO; [gUnclipped addObject:p]; }
-        gCollapsedMini = mini;
-    } else {
-        for (UIView *p in [gUnclipped allObjects]) p.clipsToBounds = YES;
-        [gUnclipped removeAllObjects];
-        gCollapsedMini = nil;
-    }
+@interface MPMiniPill : UIView
+@property (nonatomic, strong) UIVisualEffectView *glass;
+@property (nonatomic, strong) UIImageView *art, *badge;
+@property (nonatomic, strong) UILabel *title, *artist;
+@property (nonatomic, strong) UIButton *play;
+- (void)refresh;
+@end
+@implementation MPMiniPill
+- (instancetype)initWithFrame:(CGRect)f {
+    if (!(self = [super initWithFrame:f])) return nil;
+    _glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    _glass.userInteractionEnabled = NO; _glass.clipsToBounds = YES;
+    _glass.layer.cornerCurve = kCACornerCurveContinuous;
+    _glass.layer.borderWidth = 0.75; _glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+    [self addSubview:_glass];
+    _art = [UIImageView new]; _art.contentMode = UIViewContentModeScaleAspectFill; _art.clipsToBounds = YES;
+    _art.layer.cornerRadius = 8; _art.layer.cornerCurve = kCACornerCurveContinuous;
+    _art.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    [self addSubview:_art];
+    _title = [UILabel new]; _title.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; _title.textColor = UIColor.whiteColor;
+    [self addSubview:_title];
+    _artist = [UILabel new]; _artist.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular]; _artist.textColor = [UIColor colorWithWhite:1 alpha:0.62];
+    [self addSubview:_artist];
+    _badge = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"e.square.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightMedium]]];
+    _badge.tintColor = [UIColor colorWithWhite:1 alpha:0.62]; _badge.contentMode = UIViewContentModeCenter;
+    [self addSubview:_badge];
+    _play = [UIButton buttonWithType:UIButtonTypeSystem];
+    _play.tintColor = UIColor.whiteColor;
+    [_play addTarget:self action:@selector(togglePlay) forControlEvents:UIControlEventTouchUpInside];
+    [self addSubview:_play];
+    [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(open)]];
+    return self;
 }
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGSize S = self.bounds.size;
+    _glass.frame = self.bounds; _glass.layer.cornerRadius = S.height / 2;
+    CGFloat a = S.height - 14;
+    _art.frame = CGRectMake(8, 7, a, a);
+    CGFloat x = 8 + a + 11, pw = 44, maxW = S.width - x - pw - 6;
+    CGFloat bw = _badge.hidden ? 0 : 18;
+    CGFloat tw = MIN(ceil([_title sizeThatFits:CGSizeMake(400, 30)].width), maxW - bw);
+    _title.frame = CGRectMake(x, S.height / 2 - 20, tw, 21);
+    _badge.frame = CGRectMake(x + tw + 3, S.height / 2 - 19, 15, 19);
+    _artist.frame = CGRectMake(x, S.height / 2 + 1, maxW, 18);
+    _play.frame = CGRectMake(S.width - pw - 6, (S.height - pw) / 2, pw, pw);
+}
+- (void)refresh {
+    MPMusicPlayerController *p = [MPMusicPlayerController systemMusicPlayer];
+    MPMediaItem *it = p.nowPlayingItem;
+    NSString *t = it.title ?: @"Not Playing", *ar = it.artist ?: @"";
+    if (![_title.text isEqualToString:t]) _title.text = t;
+    if (![_artist.text isEqualToString:ar]) _artist.text = ar;
+    _badge.hidden = !it.isExplicitItem;
+    UIImage *img = [it.artwork imageWithSize:CGSizeMake(120, 120)];
+    if (img != _art.image && (img || !it)) _art.image = img;
+    BOOL playing = p.playbackState == MPMusicPlaybackStatePlaying;
+    NSString *sym = playing ? @"pause.fill" : @"play.fill";
+    if (![_play.accessibilityValue isEqualToString:sym]) {
+        _play.accessibilityValue = sym;
+        [_play setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    }
+    [self setNeedsLayout];
+}
+- (void)togglePlay {
+    SendMR(2);
+    UIImageView *iv = _play.imageView;
+    CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    k.values = @[@1, @0.6, @1.12, @1]; k.keyTimes = @[@0, @0.3, @0.7, @1]; k.duration = 0.35;
+    [iv.layer addAnimation:k forKey:@"p"];
+    for (NSNumber *d in @[@0.15, @0.5]) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self refresh]; });
+}
+- (void)open {
+    UITabBar *tb = gLastTabBar;
+    UIView *mini = tb ? objc_getAssociatedObject(tb, kMini) : nil;
+    if (!OpenPlayer(mini)) SetCollapsedFwd(NO);
+}
+@end
 
-static const CGFloat kCD = 50;   // collapsed circle size
+static const CGFloat kCD = 52;     // circle / pill height, like iOS 26
+static const CGFloat kSide = 30;   // circles' distance from the screen edges
+static const CGFloat kGap = 14;    // gap between circle and pill
+static NSTimer *gPillTimer;
+
 static void SetCollapsed(BOOL collapse, BOOL animated) {
     UITabBar *tb = gLastTabBar;
     UIView *root = tb.superview;
@@ -722,57 +827,88 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
     if (collapse && (!gCollapse || !gRound || !tb.window || tb.hidden || !mini.window || !objc_getAssociatedObject(mini, kStyled))) return;
     UIView *host = CollapseHost(tb);
     UIView *tab = GlassCircle(@"tab", host), *search = GlassCircle(@"search", host);
+    MPMiniPill *pill = nil;
+    for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
+    if (!pill) { pill = [MPMiniPill new]; pill.hidden = YES; [host addSubview:pill]; }
     CGFloat W = root.bounds.size.width, rowY = 0;
     TabButtonRow(tb, &rowY, root);
     CGRect tr = UntransformedRect(tb, root);
     CGRect wide = CGRectMake(CGRectGetMinX(tr) + 14, rowY - 29, tr.size.width - 28, 58);   // the tab bar's pill
-    CGRect left = CGRectMake(16, rowY - kCD / 2, kCD, kCD), right = CGRectMake(W - 16 - kCD, rowY - kCD / 2, kCD, kCD);
-    CGRect rightStart = CGRectMake(CGRectGetMaxX(wide) - kCD - 4, rowY - kCD / 2, kCD, kCD);
-    gCollapsedPill = CGRectMake(CGRectGetMaxX(left) + 10, rowY - 24, CGRectGetMinX(right) - 10 - CGRectGetMaxX(left) - 10, 48);
+    CGRect left = CGRectMake(kSide, rowY - kCD / 2, kCD, kCD), right = CGRectMake(W - kSide - kCD, rowY - kCD / 2, kCD, kCD);
+    CGRect rightStart = CGRectMake(CGRectGetMaxX(wide) - kCD - 6, rowY - kCD / 2, kCD, kCD);
+    gCollapsedPill = CGRectMake(CGRectGetMaxX(left) + kGap, rowY - kCD / 2, CGRectGetMinX(right) - kGap - CGRectGetMaxX(left) - kGap, kCD);
+    CGRect miniRect = [mini convertRect:mini.bounds toView:host];   // where Music's bar is drawn now
     UIImageView *ti = (UIImageView *)[tab viewWithTag:2], *si = (UIImageView *)[search viewWithTag:2];
     ti.image = SelectedTabImage(tb); ti.tintColor = tb.tintColor ?: UIColor.systemPinkColor;
-    si.image = [UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]];
+    si.image = [UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]];
     si.tintColor = UIColor.whiteColor;
-    UIView *next = NextButton(mini);
     gCollapsed = collapse;
-    CGAffineTransform mt = PillTransform(mini);
-    objc_setAssociatedObject(mini, kApplied, [NSValue valueWithCGAffineTransform:mt], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     UIViewAnimationOptions o = UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState;
+    // Liquid squish: stretch along the motion, then settle with a little wobble.
+    void (^wobble)(UIView *, CGFloat, CGFloat, CGFloat) = ^(UIView *v, CGFloat sx, CGFloat sy, CFTimeInterval delay) {
+        CAKeyframeAnimation *kx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"];
+        kx.values = @[@1, @(sx), @(1 + (1 - sx) * 0.6), @(1 - (1 - sx) * 0.2), @1];
+        CAKeyframeAnimation *ky = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
+        ky.values = @[@1, @(sy), @(1 + (1 - sy) * 0.6), @(1 - (1 - sy) * 0.2), @1];
+        for (CAKeyframeAnimation *k in @[kx, ky]) {
+            k.keyTimes = @[@0, @0.28, @0.55, @0.8, @1]; k.duration = 0.62;
+            k.beginTime = CACurrentMediaTime() + delay;
+            k.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+            k.additive = NO;
+        }
+        [v.layer addAnimation:kx forKey:@"wx"]; [v.layer addAnimation:ky forKey:@"wy"];
+    };
+    if (gPillTimer) { [gPillTimer invalidate]; gPillTimer = nil; }
     if (collapse) {
-        SetUnclipped(mini, root, YES);
-        tab.hidden = search.hidden = NO;
-        LayoutCircle(tab, wide); tab.alpha = 0.0;
-        LayoutCircle(search, rightStart); search.alpha = 0; search.transform = CGAffineTransformMakeScale(0.6, 0.6);
+        tab.hidden = search.hidden = pill.hidden = NO;
+        tab.transform = search.transform = CGAffineTransformIdentity;
+        LayoutCircle(tab, wide); tab.alpha = 0;
+        LayoutCircle(search, rightStart); search.alpha = 0;
         ti.alpha = 0;
-        [UIView animateWithDuration:0.14 delay:0 options:o animations:^{ tab.alpha = 1; tb.alpha = 0; } completion:nil];
-        // The tab bar's glass squeezes into the left circle; Search pops out to the right.
-        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.4 options:o animations:^{
+        [pill refresh];
+        pill.frame = miniRect; [pill layoutIfNeeded]; pill.alpha = 0;
+        // 1. The bar's glass takes over from Music's tab bar, and Music's mini bar hands over to our pill.
+        [UIView animateWithDuration:0.12 delay:0 options:o animations:^{ tab.alpha = 1; tb.alpha = 0; pill.alpha = 1; mini.alpha = 0; } completion:nil];
+        // 2. The bar squeezes into the left circle (overshoots a touch, settles).
+        [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.68 initialSpringVelocity:0.6 options:o animations:^{
             LayoutCircle(tab, left);
         } completion:nil];
-        [UIView animateWithDuration:0.25 delay:0.18 options:o animations:^{ ti.alpha = 1; } completion:nil];
-        [UIView animateWithDuration:0.55 delay:0.05 usingSpringWithDamping:0.66 initialSpringVelocity:0.5 options:o animations:^{
-            LayoutCircle(search, right); search.alpha = 1; search.transform = CGAffineTransformIdentity;
+        wobble(tab, 0.9, 1.12, 0.08);
+        [UIView animateWithDuration:0.22 delay:0.2 options:o animations:^{ ti.alpha = 1; } completion:nil];
+        // 3. Search buds off the right end and rolls into its own circle.
+        [UIView animateWithDuration:0.18 delay:0.04 options:o animations:^{ search.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.66 delay:0.04 usingSpringWithDamping:0.62 initialSpringVelocity:0.7 options:o animations:^{
+            LayoutCircle(search, right);
         } completion:nil];
-        // The pill drops into the row, a bit narrower, and the skip button goes.
-        [UIView animateWithDuration:0.55 delay:0.02 usingSpringWithDamping:0.78 initialSpringVelocity:0.3 options:o animations:^{
-            mini.transform = mt; next.alpha = 0;
+        wobble(search, 1.18, 0.88, 0.04);
+        // 4. The pill drops into the row and narrows.
+        [UIView animateWithDuration:0.64 delay:0.02 usingSpringWithDamping:0.72 initialSpringVelocity:0.4 options:o animations:^{
+            pill.frame = gCollapsedPill; [pill layoutIfNeeded];
         } completion:nil];
+        wobble(pill, 1.05, 0.9, 0.06);
+        gPillTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *tm) { [pill refresh]; }];
     } else {
-        [UIView animateWithDuration:0.18 delay:0.12 options:o animations:^{ tb.alpha = 1; } completion:nil];
-        [UIView animateWithDuration:0.12 delay:0 options:o animations:^{ ti.alpha = 0; } completion:nil];
-        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.3 options:o animations:^{
+        CGRect miniHome = miniRect;
+        [UIView animateWithDuration:0.2 delay:0.16 options:o animations:^{ tb.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.1 delay:0 options:o animations:^{ ti.alpha = 0; } completion:nil];
+        [UIView animateWithDuration:0.56 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.4 options:o animations:^{
             LayoutCircle(tab, wide);
         } completion:nil];
-        [UIView animateWithDuration:0.18 delay:0.2 options:o animations:^{ tab.alpha = 0; } completion:^(BOOL d) { if (!gCollapsed) tab.hidden = YES; }];
-        [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:o animations:^{
-            LayoutCircle(search, rightStart); search.alpha = 0; search.transform = CGAffineTransformMakeScale(0.6, 0.6);
-        } completion:^(BOOL d) { if (!gCollapsed) { search.hidden = YES; search.transform = CGAffineTransformIdentity; } }];
-        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.3 options:o animations:^{
-            mini.transform = mt; next.alpha = 1;
-        } completion:^(BOOL d) { if (!gCollapsed) SetUnclipped(mini, root, NO); }];
+        wobble(tab, 1.06, 0.9, 0.0);
+        [UIView animateWithDuration:0.2 delay:0.24 options:o animations:^{ tab.alpha = 0; } completion:^(BOOL d) { if (!gCollapsed) tab.hidden = YES; }];
+        [UIView animateWithDuration:0.44 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:o animations:^{
+            LayoutCircle(search, rightStart);
+        } completion:nil];
+        [UIView animateWithDuration:0.18 delay:0.18 options:o animations:^{ search.alpha = 0; } completion:^(BOOL d) { if (!gCollapsed) search.hidden = YES; }];
+        // Our pill rises back up to Music's bar and hands over.
+        [UIView animateWithDuration:0.56 delay:0 usingSpringWithDamping:0.76 initialSpringVelocity:0.3 options:o animations:^{
+            pill.frame = miniHome; [pill layoutIfNeeded];
+        } completion:nil];
+        [UIView animateWithDuration:0.16 delay:0.32 options:o animations:^{ pill.alpha = 0; mini.alpha = 1; } completion:^(BOOL d) { if (!gCollapsed) pill.hidden = YES; }];
     }
-    gCollapseDebug = [NSString stringWithFormat:@"%@ row=%.0f pill=%@ next=%@", collapse ? @"collapsed" : @"expanded", rowY, NSStringFromCGRect(gCollapsedPill), NSStringFromClass([next class])];
+    gCollapseDebug = [NSString stringWithFormat:@"%@ row=%.0f pill=%@ mini=%@", collapse ? @"collapsed" : @"expanded", rowY, NSStringFromCGRect(gCollapsedPill), NSStringFromCGRect(miniRect)];
 }
+static void SetCollapsedFwd(BOOL c) { SetCollapsed(c, YES); }
 
 @implementation MPCollapse
 + (instancetype)shared { static MPCollapse *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPCollapse new]; }); return t; }
@@ -880,16 +1016,6 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
 %end
 
 %hook UIView
-- (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
-    if (gCollapsed) {
-        UIView *m = gCollapsedMini;
-        if (m && m.window && self != m && [m isDescendantOfView:self]) {
-            CGPoint q = [self convertPoint:p toView:m];
-            if ([m pointInside:q withEvent:e]) return YES;
-        }
-    }
-    return %orig;
-}
 // Music's gray circles we cleared behind the top buttons stay clear.
 - (void)setBackgroundColor:(UIColor *)color {
     if (color && gNavGlass && objc_getAssociatedObject(self, kClearedBG)) { %orig(UIColor.clearColor); return; }
