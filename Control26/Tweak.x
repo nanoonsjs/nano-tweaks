@@ -1,4 +1,6 @@
-// Control26 0.1.9 - made by nano
+// Control26 0.2.0 - made by nano
+// 0.2.0: live signal bars, no outer glass behind the cards, Wi-Fi/Bluetooth
+//        arrows open their lists, white icons when off, Airplane take-off.
 // 0.1.9: expanded connectivity (hold Wi-Fi) rebuilt as iOS 26 glass cards:
 //        Airplane/Hotspot pills, Wi-Fi/AirDrop/Cellular/Bluetooth tiles.
 // 0.1.8: previous/play/next animate on the spring engine (press sink, release
@@ -43,6 +45,7 @@
 //  - Everything runs from a timer that exists only while Control Center is
 //    on screen, wrapped in @try.
 #import <UIKit/UIKit.h>
+#import <UIKit/UIGestureRecognizerSubclass.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
@@ -1245,41 +1248,105 @@ static UIView *RoundButtonIn(UIView *b) {
     return nil;
 }
 
+#pragma mark - live signal bars
+
+// Bars drawn by us: `active` lit, the rest dimmed.
+@interface C26Bars : UIView
+@property (nonatomic) int active, total;
+@property (nonatomic, strong) UIColor *color;
+@end
+@implementation C26Bars
+- (instancetype)initWithFrame:(CGRect)f {
+    if ((self = [super initWithFrame:f])) { _active = 4; _total = 4; _color = UIColor.whiteColor; self.userInteractionEnabled = NO; self.backgroundColor = UIColor.clearColor; }
+    return self;
+}
+- (void)setActive:(int)a total:(int)n color:(UIColor *)c {
+    if (n < 1) n = 4;
+    if (a == _active && n == _total && [c isEqual:_color]) return;
+    _active = a; _total = n; _color = c;
+    [self setNeedsLayout];
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    int n = _total;
+    while ((int)self.layer.sublayers.count < n) [self.layer addSublayer:[CALayer layer]];
+    while ((int)self.layer.sublayers.count > n) [self.layer.sublayers.lastObject removeFromSuperlayer];
+    CGSize S = self.bounds.size;
+    CGFloat gap = S.width * 0.09, w = (S.width - gap * (n - 1)) / n;
+    for (int i = 0; i < n; i++) {
+        CALayer *l = self.layer.sublayers[i];
+        CGFloat h = S.height * (0.34 + 0.66 * (i + 1) / n);
+        l.frame = CGRectMake(i * (w + gap), S.height - h, w, h);
+        l.cornerRadius = w * 0.32;
+        l.backgroundColor = [_color colorWithAlphaComponent:(i < _active ? 1 : 0.32)].CGColor;
+    }
+}
+@end
+
+static __weak UIView *gSignalView;
+static NSString *gBarsDebug = @"-";
+static void FindSignalView(UIView *v, int d) {
+    if (gSignalView || d > 30) return;
+    if ([NSStringFromClass([v class]) containsString:@"CellularSignalView"] && v.window) { gSignalView = v; return; }
+    for (UIView *s in v.subviews) FindSignalView(s, d + 1);
+}
+// Current cellular bars, from the status bar's own signal view.
+static void SignalBars(int *active, int *total) {
+    static CFTimeInterval last; static int a = 4, n = 4;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - last > 1.0) {
+        last = now;
+        UIView *sv = gSignalView;
+        if (!sv || !sv.window) {
+            gSignalView = nil;
+            for (UIScene *sc in UIApplication.sharedApplication.connectedScenes)
+                if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *w in ((UIWindowScene *)sc).windows) FindSignalView(w, 0);
+            if (!gSignalView) for (UIWindow *w in UIApplication.sharedApplication.windows) FindSignalView(w, 0);
+            sv = gSignalView;
+        }
+        id act = KV(sv, @"numberOfActiveBars"), tot = KV(sv, @"numberOfBars");
+        NSString *src = @"statusbar";
+        if (!act) {
+            id tm = nil; Class c = NSClassFromString(@"SBTelephonyManager");
+            if ([c respondsToSelector:@selector(sharedTelephonyManager)]) tm = [c performSelector:@selector(sharedTelephonyManager)];
+            act = KV(tm, @"signalStrengthBars"); tot = KV(tm, @"maxSignalStrengthBars");
+            src = @"telephony";
+        }
+        if ([act respondsToSelector:@selector(intValue)]) a = [act intValue]; else src = @"none";
+        if ([tot respondsToSelector:@selector(intValue)] && [tot intValue] > 0) n = [tot intValue];
+        if (a > n) a = n;
+        gBarsDebug = [NSString stringWithFormat:@"%d/%d %@ %@", a, n, src, sv ? NSStringFromClass([sv class]) : @""];
+    }
+    *active = a; *total = n;
+}
+
 static void StyleConnButton(UIView *b) {
     NSString *title = ConnTitle(b);
     BOOL cellular = [title containsString:@"Cellular"] || [title containsString:@"Mobile"];
     UIView *round = RoundButtonIn(b);
     if (!round) return;
-    UIImageView *bars = (UIImageView *)[round viewWithTag:CELL_TAG];
-    if (bars.superview != round) bars = nil;
+    C26Bars *bars = (C26Bars *)[round viewWithTag:CELL_TAG];
+    if (bars.superview != round || ![bars isKindOfClass:[C26Bars class]]) { [bars removeFromSuperview]; bars = nil; }
     if (!gEnabled || !cellular) { [bars removeFromSuperview]; return; }
 
-    // Apple's antenna glyph(s) inside the round button.
     NSMutableArray *all = [NSMutableArray array], *glyphs = [NSMutableArray array];
     CollectViews(round, 0, [UIView class], all);
     for (UIView *v in all) {
-        if (v.tag == CELL_TAG) continue;
+        if (v.tag == CELL_TAG || [v isKindOfClass:[C26Bars class]]) continue;
         NSString *n = NSStringFromClass([v class]);
         BOOL g = [n containsString:@"CAPackage"] || [n containsString:@"Glyph"] || ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image);
         if (g && v.bounds.size.width <= round.bounds.size.width * 0.8) [glyphs addObject:v];
     }
     if (!bars) {
-        bars = [UIImageView new];
+        bars = [C26Bars new];
         bars.tag = CELL_TAG;
-        bars.contentMode = UIViewContentModeCenter;
-        bars.tintColor = UIColor.whiteColor;
-        bars.userInteractionEnabled = NO;
         [round addSubview:bars];
     }
     [round bringSubviewToFront:bars];
-    CGFloat side = round.bounds.size.width;
-    UIImage *img = [UIImage systemImageNamed:@"cellularbars" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:side * 0.32 weight:UIImageSymbolWeightSemibold]]
-                   ?: [UIImage systemImageNamed:@"chart.bar.fill"];
-    if (bars.image != img && ![objc_getAssociatedObject(bars, kLastValue) isEqual:@(side)]) {
-        bars.image = img;
-        objc_setAssociatedObject(bars, kLastValue, @(side), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    SetFrame(bars, round.bounds);
+    CGFloat side = round.bounds.size.width, bw = side * 0.38, bh = side * 0.3;
+    SetFrame(bars, CGRectMake((side - bw) / 2, (round.bounds.size.height - bh) / 2, bw, bh));
+    int a, n; SignalBars(&a, &n);
+    [bars setActive:a total:n color:UIColor.whiteColor];
     for (UIView *g in glyphs) HideOriginal(g);
 }
 
@@ -1350,7 +1417,84 @@ static UIColor *ConnOnColor(NSString *key) {
 @property (nonatomic, strong) UIImageView *icon, *chevron;
 @property (nonatomic, strong) UILabel *title, *sub;
 @property (nonatomic, strong) CAGradientLayer *sheen;
+@property (nonatomic, strong) C26Bars *bars;
+@property (nonatomic, weak) UIView *apple;      // Apple's labeled button
+@property (nonatomic) CGPoint touchStart;
 @end
+
+// Stands in for a gesture recognizer so Apple's long-press handler sees "began".
+@interface C26GRProxy : NSProxy
+@property (nonatomic, strong) UIGestureRecognizer *gr;
+@property (nonatomic) UIGestureRecognizerState fakeState;
+@end
+@implementation C26GRProxy
+- (UIGestureRecognizerState)state { return _fakeState; }
+- (BOOL)isKindOfClass:(Class)c { return [_gr isKindOfClass:c]; }
+- (BOOL)respondsToSelector:(SEL)s { return [_gr respondsToSelector:s]; }
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)s { return [_gr methodSignatureForSelector:s]; }
+- (void)forwardInvocation:(NSInvocation *)i { [i invokeWithTarget:_gr]; }
+@end
+
+static NSString *gMenuDebug = @"-";
+static BOOL FireLongPress(UIGestureRecognizer *gr) {
+    NSArray *targets = nil;
+    @try { targets = [gr valueForKey:@"_targets"]; } @catch (__unused id e) {}
+    BOOL fired = NO;
+    for (id t in targets) {
+        id target = nil; SEL action = NULL;
+        @try { target = [t valueForKey:@"_target"]; } @catch (__unused id e) {}
+        Ivar iv = class_getInstanceVariable([t class], "_action");
+        if (iv) action = *(SEL *)((uint8_t *)(__bridge void *)t + ivar_getOffset(iv));
+        if (!target || !action || [NSStringFromClass([target class]) hasPrefix:@"C26"]) continue;
+        if (![target respondsToSelector:action]) continue;
+        C26GRProxy *p = [C26GRProxy alloc]; p.gr = gr;
+        p.fakeState = UIGestureRecognizerStateBegan;
+        ((void (*)(id, SEL, id))objc_msgSend)(target, action, p);
+        p.fakeState = UIGestureRecognizerStateEnded;
+        ((void (*)(id, SEL, id))objc_msgSend)(target, action, p);
+        gMenuDebug = [NSString stringWithFormat:@"fired %@ -[%@ %@]", NSStringFromClass([gr class]), NSStringFromClass([target class]), NSStringFromSelector(action)];
+        fired = YES;
+    }
+    return fired;
+}
+
+// Open the network / device list Apple shows on a long press.
+static void OpenConnMenu(UIView *labeled, UIControl *round) {
+    NSMutableArray *views = [NSMutableArray array];
+    if (round) [views addObject:round];
+    if (labeled) [views addObject:labeled];
+    for (UIView *v = round.superview; v && v != labeled; v = v.superview) [views addObject:v];
+    UIViewController *vc = OwnerVC(labeled);
+    if (vc.view) [views addObject:vc.view];
+    for (UIView *v in views)
+        for (UIGestureRecognizer *gr in v.gestureRecognizers) {
+            if (!gr.enabled) continue;
+            BOOL lp = [gr isKindOfClass:[UILongPressGestureRecognizer class]] || [NSStringFromClass([gr class]) containsString:@"Press"];
+            if (lp && [gr isKindOfClass:[UILongPressGestureRecognizer class]] && ((UILongPressGestureRecognizer *)gr).minimumPressDuration < 0.05) continue; // our jelly
+            if (lp && FireLongPress(gr)) return;
+        }
+    for (UIView *v in views)
+        for (id<UIInteraction> it in v.interactions)
+            if ([it isKindOfClass:[UIContextMenuInteraction class]] && [(id)it respondsToSelector:NSSelectorFromString(@"_presentMenuAtLocation:")]) {
+                CGPoint c = CGPointMake(CGRectGetMidX(v.bounds), CGRectGetMidY(v.bounds));
+                ((void (*)(id, SEL, CGPoint))objc_msgSend)(it, NSSelectorFromString(@"_presentMenuAtLocation:"), c);
+                gMenuDebug = @"context menu";
+                return;
+            }
+    // Nothing found: list what the controller can do so the next build can call it.
+    NSMutableArray *m = [NSMutableArray array];
+    for (Class c = [vc class]; c && c != [UIViewController class] && m.count < 10; c = class_getSuperclass(c)) {
+        unsigned int cnt = 0; Method *ms = class_copyMethodList(c, &cnt);
+        for (unsigned int i = 0; i < cnt && m.count < 10; i++) {
+            NSString *n = NSStringFromSelector(method_getName(ms[i]));
+            if ([n rangeOfString:@"menu" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                [n rangeOfString:@"press" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                [n rangeOfString:@"expand" options:NSCaseInsensitiveSearch].location != NSNotFound) [m addObject:n];
+        }
+        free(ms);
+    }
+    gMenuDebug = [NSString stringWithFormat:@"no menu; vc=%@ %@", NSStringFromClass([vc class]), [m componentsJoinedByString:@" "]];
+}
 @implementation C26ConnCard
 - (instancetype)initWithKey:(NSString *)key pill:(BOOL)pill {
     if (!(self = [super initWithFrame:CGRectZero])) return nil;
@@ -1378,7 +1522,12 @@ static UIColor *ConnOnColor(NSString *key) {
     _sub.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
     _sub.textColor = [UIColor colorWithWhite:1 alpha:0.62];
     [self addSubview:_sub];
-    if (!pill) {
+    if ([key isEqualToString:@"cell"]) {
+        _bars = [C26Bars new];
+        [_circle addSubview:_bars];
+        _icon.hidden = YES;
+    }
+    if (!pill && ![key isEqualToString:@"cell"]) {
         _chevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightBold]]];
         _chevron.tintColor = [UIColor colorWithWhite:1 alpha:0.55];
         _chevron.contentMode = UIViewContentModeCenter;
@@ -1412,6 +1561,46 @@ static UIColor *ConnOnColor(NSString *key) {
     }
     _circle.layer.cornerRadius = d / 2;
     _icon.frame = _circle.bounds;
+    _bars.frame = CGRectMake((d - 19) / 2, (d - 15) / 2 - 0.5, 19, 15);
+}
+- (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
+    _touchStart = [touch locationInView:self];
+    return [super beginTrackingWithTouch:touch withEvent:event];
+}
+- (BOOL)whiteWhenOff { return [@[@"wifi", @"cell", @"bt", @"airdrop"] containsObject:_key]; }
+- (void)takeOff {
+    // The plane leaves up-right, comes back in from the lower left, and an
+    // orange shine sweeps across the pill.
+    UIImageView *ic = _icon;
+    [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        ic.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(34, -26), 0.6, 0.6);
+        ic.alpha = 0;
+    } completion:^(BOOL f) {
+        ic.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(-30, 22), 0.6, 0.6);
+        [UIView animateWithDuration:0.55 delay:0.04 usingSpringWithDamping:0.62 initialSpringVelocity:0.6 options:0 animations:^{
+            ic.transform = CGAffineTransformIdentity;
+            ic.alpha = 1;
+        } completion:nil];
+    }];
+    CAGradientLayer *band = [CAGradientLayer layer];
+    UIColor *o = UIColor.systemOrangeColor;
+    band.colors = @[(id)[o colorWithAlphaComponent:0].CGColor, (id)[o colorWithAlphaComponent:0.55].CGColor, (id)[o colorWithAlphaComponent:0].CGColor];
+    band.startPoint = CGPointMake(0, 0.5); band.endPoint = CGPointMake(1, 0.5);
+    CGFloat w = self.bounds.size.width * 0.45;
+    band.frame = CGRectMake(-w, 0, w, self.bounds.size.height);
+    CALayer *clip = [CALayer layer];
+    clip.frame = self.bounds; clip.cornerRadius = self.layer.cornerRadius; clip.masksToBounds = YES;
+    [clip addSublayer:band];
+    [self.layer insertSublayer:clip above:_sheen];
+    CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"position.x"];
+    a.fromValue = @(-w / 2); a.toValue = @(self.bounds.size.width + w / 2);
+    a.duration = 0.7; a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    a.removedOnCompletion = NO; a.fillMode = kCAFillModeForwards;
+    [band addAnimation:a forKey:@"sweep"];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.75 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [clip removeFromSuperlayer]; });
+    C26Spring *s = SpringFor(self);
+    s.k = 260; s.c = 11; s.vsx += 1.1; s.vsy += 1.1; s.vx += 160;
+    WakeSpring(s);
 }
 - (void)down {
     C26Spring *s = SpringFor(self);
@@ -1424,7 +1613,8 @@ static UIColor *ConnOnColor(NSString *key) {
     s.k = 300; s.c = 13; s.tsx = s.tsy = 1; s.tx = s.ty = 0;
     s.vsx += kick; s.vsy += kick;
     WakeSpring(s);
-    [UIView animateWithDuration:0.25 animations:^{ self.backgroundColor = [UIColor colorWithWhite:1 alpha:0.13]; }];
+    BOOL airOn = [_key isEqualToString:@"air"] && _on;
+    [UIView animateWithDuration:0.25 animations:^{ self.backgroundColor = airOn ? [UIColor.systemOrangeColor colorWithAlphaComponent:0.22] : [UIColor colorWithWhite:1 alpha:0.13]; }];
 }
 - (void)cancel { [self relax:0]; }
 - (void)fire {
@@ -1434,6 +1624,8 @@ static UIColor *ConnOnColor(NSString *key) {
     c.sx = c.sy = 0.78; c.k = 360; c.c = 12; c.tsx = c.tsy = 1;
     WakeSpring(c);
     UIControl *t = self.target;
+    BOOL arrow = ([_key isEqualToString:@"wifi"] || [_key isEqualToString:@"bt"]) && _touchStart.x > self.bounds.size.width - 64;
+    if (arrow) { @try { OpenConnMenu(self.apple, t); } @catch (__unused id e) { gMenuDebug = @"menu threw"; } return; }
     if (t && t.enabled) [t sendActionsForControlEvents:UIControlEventTouchUpInside];
     for (NSNumber *d in @[@0.06, @0.2, @0.5])
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ @try { Tick(); } @catch (__unused id e) {} });
@@ -1441,8 +1633,13 @@ static UIColor *ConnOnColor(NSString *key) {
 - (void)setOn:(BOOL)on animated:(BOOL)animated {
     _on = on;
     void (^apply)(void) = ^{
-        self.circle.backgroundColor = on ? ConnOnColor(self.key) : [UIColor colorWithWhite:1 alpha:0.2];
+        BOOL white = !on && [self whiteWhenOff];
+        self.circle.backgroundColor = on ? ConnOnColor(self.key) : (white ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.2]);
+        self.icon.tintColor = white ? [UIColor colorWithWhite:0.12 alpha:1] : UIColor.whiteColor;
+        if ([self.key isEqualToString:@"air"])
+            self.backgroundColor = on ? [UIColor.systemOrangeColor colorWithAlphaComponent:0.22] : [UIColor colorWithWhite:1 alpha:0.13];
     };
+    if (animated && on && [_key isEqualToString:@"air"]) [self takeOff];
     if (animated) [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionAllowUserInteraction animations:apply completion:nil];
     else apply();
 }
@@ -1451,9 +1648,16 @@ static UIColor *ConnOnColor(NSString *key) {
 static const void *kConnMask = &kConnMask;
 static __weak UIView *gConnOverlay;  // catches touches in the gaps so Apple's hidden buttons never fire
 
+static NSHashTable *gConnGlass;
+static NSString *gGlassDebug = @"-";
 static void RemoveConnOverlay(void) {
     UIView *o = gConnOverlay;
     if (o) [o removeFromSuperview];
+    for (UIView *g in [gConnGlass allObjects]) {
+        g.layer.mask = nil;
+        objc_setAssociatedObject(g, kConnMask, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [gConnGlass removeAllObjects];
     for (UIView *b in [gConnButtons allObjects]) {
         if (objc_getAssociatedObject(b, kConnMask)) {
             b.layer.mask = nil;
@@ -1511,6 +1715,31 @@ static void StyleConnectivity(NSArray *buttons) {
     [host bringSubviewToFront:o];
     SetFrame(o, frame);
 
+    // The module's own glass panel behind the cards: siblings on the way up
+    // that are material/backdrop views about the size of the module.
+    if (!gConnGlass) gConnGlass = [NSHashTable weakObjectsHashTable];
+    CGRect areaW = [sv convertRect:area toView:nil];
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    NSMutableArray *gdbg = [NSMutableArray array];
+    UIView *child = sv; int up = 0;
+    for (UIView *p = sv.superview; p && up < 7; child = p, p = p.superview, up++) {
+        for (UIView *s in p.subviews) {
+            if (s == child || s == o || s.tag == CONN_TAG) continue;
+            NSString *n = NSStringFromClass([s class]);
+            if (!([n containsString:@"Material"] || [n containsString:@"Backdrop"] || [n containsString:@"Background"] || [n containsString:@"Blur"])) continue;
+            CGRect f = [s convertRect:s.bounds toView:nil];
+            if (f.size.width >= screenW * 0.97 || f.size.width < areaW.size.width * 0.8) continue;
+            if (!CGRectIntersectsRect(f, areaW)) continue;
+            if (!objc_getAssociatedObject(s, kConnMask)) {
+                s.layer.mask = [CALayer layer];
+                objc_setAssociatedObject(s, kConnMask, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [gConnGlass addObject:s];
+            }
+            if (gDebug && gdbg.count < 4) [gdbg addObject:[NSString stringWithFormat:@"%@ %.0fx%.0f", n, f.size.width, f.size.height]];
+        }
+    }
+    if (gDebug) gGlassDebug = gdbg.count ? [gdbg componentsJoinedByString:@", "] : @"none found";
+
     NSMutableSet *used = [NSMutableSet set];
     CGFloat y = 0; int index = 0;
     for (NSArray *r in rows) {
@@ -1536,6 +1765,12 @@ static void StyleConnectivity(NSArray *buttons) {
             } else SetFrame(card, f);
             UIControl *round = (UIControl *)RoundButtonIn(b);
             card.target = [round isKindOfClass:[UIControl class]] ? round : nil;
+            card.apple = b;
+            if (card.bars) {
+                int a, n; SignalBars(&a, &n);
+                BOOL white = !(card.target && card.target.isSelected);
+                [card.bars setActive:a total:n color:white ? [UIColor colorWithWhite:0.12 alpha:1] : UIColor.whiteColor];
+            }
             NSString *title = ConnTitle(b), *sub = ConnSubtitle(b);
             if (![card.title.text isEqualToString:title]) card.title.text = title;
             if (![card.sub.text isEqualToString:sub]) card.sub.text = sub;
@@ -1589,7 +1824,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.1.9 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.2.0 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1622,7 +1857,7 @@ static void Tick(void) {
         anyVisible = YES; win = b.window;
         @try { StyleConnButton(b); } @catch (__unused id e) {}
         if (b.bounds.size.width > 100 && !b.hidden && b.alpha > 0.01) [expanded addObject:b];
-        if (gDebug && cdbg.count < 7) {
+        if (gDebug && cdbg.count < 3) {
             UIView *r = RoundButtonIn(b);
             CGRect f = [b convertRect:b.bounds toView:nil];
             [cdbg addObject:[NSString stringWithFormat:@"%@ %@ %.0f,%.0f %.0fx%.0f round=%@ sel=%d",
@@ -1645,11 +1880,13 @@ static void Tick(void) {
         NSUInteger targets = [r isKindOfClass:[UIControl class]] ? r.allTargets.count : 0;
         [cdbg addObject:[NSString stringWithFormat:@"cards=%lu host=%@ wifi targets=%lu gestures=%@", (unsigned long)gConnOverlay.subviews.count,
                          NSStringFromClass([gConnOverlay.superview class]), (unsigned long)targets, [g componentsJoinedByString:@","]]];
+        [cdbg addObject:[NSString stringWithFormat:@"bars=%@ glass=%@", gBarsDebug, gGlassDebug]];
+        [cdbg addObject:[NSString stringWithFormat:@"menu=%@", gMenuDebug]];
     }
     if (gDebug) gConnDebug = cdbg.count ? [cdbg componentsJoinedByString:@"\n  "] : @"(hold the Wi-Fi block to open it)";
     if (win) UpdateDebug(win);
     // Control Center closed: stop the timer until it opens again.
-    if (!anyVisible) { [gTimer invalidate]; gTimer = nil; }
+    if (!anyVisible) { RemoveConnOverlay(); [gTimer invalidate]; gTimer = nil; }
 }
 
 #pragma mark - hooks
