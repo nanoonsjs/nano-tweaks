@@ -1,4 +1,6 @@
-// MusicPill 0.5.1 - made by nano
+// MusicPill 0.5.2 - made by nano
+// 0.5.2: pill is always Small (size setting removed) and is forced back to Small
+//        after the full player closes, even when Music leaves its own transform on it.
 // 0.5.1: pill stays small after closing the full player; see-through background always on.
 // 0.5.0: pill size setting (Normal / Compact / Small) and swipe left/right on
 //        the pill for next/previous track.
@@ -29,7 +31,8 @@
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 // The see-through background is always on (no longer a setting).
 static const BOOL gHideBG = YES;
-static int gSize = 1; // 0 Normal, 1 Compact, 2 Small
+// Fixed at Small (the size picked in Settings in 0.5.0). 0 Normal, 1 Compact, 2 Small.
+static const int gSize = 2;
 static NSString *gPrefsSource = @"defaults";
 static __weak UITabBar *gLastTabBar;
 
@@ -69,15 +72,6 @@ static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
     return v ? [v boolValue] : def;
 }
 
-static int PrefInt(NSDictionary *file, NSString *key, int def) {
-    id v = file[key];
-    if (!v) {
-        CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM);
-        if (cf) v = (__bridge_transfer id)cf;
-    }
-    return v ? [v intValue] : def;
-}
-
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSString *src = nil;
@@ -87,7 +81,6 @@ static void LoadPrefs(void) {
     gRound  = PrefBool(file, @"round", YES);
     gDebug  = PrefBool(file, @"debug", NO);
     gSwipe  = PrefBool(file, @"swipe", YES);
-    gSize   = MAX(0, MIN(2, PrefInt(file, @"size", 1)));
 }
 
 static void Update(UITabBar *tb);
@@ -243,18 +236,19 @@ static CGAffineTransform PillTransform(UIView *m) {
     return CGAffineTransformScale(CGAffineTransformMakeTranslation(0, ty), s, s);
 }
 
-static void ApplyPillTransform(UIView *m) {
+// force: the bar is settled (no animation running, full player closed), so put
+// our size back no matter what transform Music left on it. Closing the full
+// player leaves Music's own (non-identity) transform behind, which is why
+// 0.5.1 never shrank it again.
+static void ApplyPillTransform(UIView *m, BOOL force) {
     CGAffineTransform t = PillTransform(m);
     NSValue *last = objc_getAssociatedObject(m, kApplied);
-    // Only touch it when it's at rest (identity) or still what we set last time,
-    // so we never fight Music's own animations.
-    BOOL ours = CGAffineTransformIsIdentity(m.transform) ||
+    BOOL ours = force || CGAffineTransformIsIdentity(m.transform) ||
                 (last && CGAffineTransformEqualToTransform(m.transform, last.CGAffineTransformValue));
     if (ours && !CGAffineTransformEqualToTransform(m.transform, t)) {
-        // Coming back from identity after we'd already styled it (e.g. the full
-        // player was opened and closed and Music reset it): ease back down
-        // instead of snapping.
-        if (last && CGAffineTransformIsIdentity(m.transform) && m.window) {
+        // Already styled once and now coming back from Music's reset: ease
+        // back down instead of snapping.
+        if (last && m.window) {
             [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0
                                 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState
                              animations:^{ m.transform = t; } completion:nil];
@@ -349,7 +343,7 @@ static void StylePill(UIView *m) {
     } else if (!gHideBG && glass) {
         [glass removeFromSuperview];
     }
-    ApplyPillTransform(m);
+    ApplyPillTransform(m, NO);
     AddSwipes(m);
 }
 
@@ -428,7 +422,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.5.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.5.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found,
                       [c componentsJoinedByString:@"\n "]];
@@ -498,11 +492,14 @@ static void StartWatchdog(void) {
         UIView *mini = objc_getAssociatedObject(tb, kMini);
         if (!mini || !mini.window || mini.hidden || mini.alpha < 0.01) return;
         if (mini.layer.animationKeys.count) return; // let Music's animation finish first
+        // Don't touch it while the full player is up.
+        UIViewController *root = mini.window.rootViewController;
+        if (root.presentedViewController && !root.presentedViewController.isBeingDismissed) return;
         if (!objc_getAssociatedObject(mini, kStyled)) return;
         @try {
             CGFloat r = mini.bounds.size.height / 2;
             if (mini.layer.cornerRadius != r) mini.layer.cornerRadius = r;
-            ApplyPillTransform(mini);
+            ApplyPillTransform(mini, YES);
         } @catch (__unused id e) {}
     }];
 }
