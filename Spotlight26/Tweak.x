@@ -1,4 +1,8 @@
-// Spotlight26 0.1.3 - made by nano
+// Spotlight26 0.2.0 - made by nano
+// 0.2.0: no flicker (the pill stays pinned and retracts into the notch when
+//        Spotlight closes), liquid two-spring notch stretch + rim shine,
+//        iOS 26 resting look (only the app icons, on black glass, no section
+//        titles or other rows), "Search or Ask", no magnifier.
 // 0.1.3: grows out of the notch every time Spotlight opens, big iOS 26 top
 //        pill, status bar hidden, black glass on the suggestion cards,
 //        results pushed below the pill with contentInset.
@@ -28,7 +32,7 @@
 #define CARD_TAG   0x53323632
 #define PILL_RADIUS 40
 
-static BOOL gHideSB = YES;
+static BOOL gHideSB = YES, gRest = YES;
 static BOOL gEnabled = YES, gTop = YES, gNotch = YES, gCards = YES, gBounce = YES, gDebug = NO;
 
 static const void *kMasked = &kMasked;
@@ -66,6 +70,7 @@ static void LoadPrefs(void) {
     gBounce  = PrefBool(f, @"bounce", YES);
     gDebug   = PrefBool(f, @"debug", NO);
     gHideSB  = PrefBool(f, @"statusbar", YES);
+    gRest    = PrefBool(f, @"rest", YES);
     // Can't read the settings here at all? Show the debug box so we can tell.
     if (gPrefsUnreadable && !CFPreferencesCopyAppValue(CFSTR("debug"), DOM)) gDebug = YES;
 }
@@ -150,13 +155,14 @@ static void Unmask(UIView *v) {
 #pragma mark - state
 
 static __weak UITextField *gField;
-static __weak UIView *gHeader, *gScroll;
-static __weak id gInsetVC;   // the results scroll view we added inset to
+static __weak UIView *gHeader;
+static NSHashTable *gScrolls;          // Spotlight's result collection views
 static CADisplayLink *gLink;
-static BOOL gAppeared;          // notch animation already played for this opening
+static BOOL gAppeared;                 // the grow already ran for this opening
 static NSUInteger gFrame;
-static NSString *gCardsDebug = @"-";
+static NSString *gCardsDebug = @"-", *gBandDebug = @"-";
 static NSHashTable *gMaskedViews, *gCardViews;
+static NSString *gOrigPlaceholder;
 
 @interface S26Ticker : NSObject
 + (instancetype)shared;
@@ -167,8 +173,14 @@ static NSHashTable *gMaskedViews, *gCardViews;
 static void StartLink(void) {
     if (gLink) return;
     gLink = [CADisplayLink displayLinkWithTarget:[S26Ticker shared] selector:@selector(tick:)];
-    if (@available(iOS 15.0, *)) gLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
+    if (@available(iOS 15.0, *)) gLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
     [gLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+static BOOL ReallyVisible(UIView *v) {
+    if (!v.window || v.window.hidden) return NO;
+    for (UIView *p = v; p; p = p.superview) if (p.hidden || p.alpha < 0.01) return NO;
+    return YES;
 }
 
 // The search header: the highest ancestor of the field that is screen-wide but short.
@@ -183,6 +195,15 @@ static UIView *FindHeader(UITextField *f) {
     return best ?: f.superview;
 }
 
+static UIView *RootFor(UIView *header) {
+    UIView *root = header;
+    for (int d = 0; root.superview && d < 10; d++) {
+        root = root.superview;
+        if (root.bounds.size.height >= UIScreen.mainScreen.bounds.size.height * 0.9) break;
+    }
+    return root;
+}
+
 static void CollectScrolls(UIView *v, int d, UIView *skip, NSMutableArray *out) {
     if (v == skip || d > 12) return;
     for (UIView *s in v.subviews) {
@@ -192,21 +213,29 @@ static void CollectScrolls(UIView *v, int d, UIView *skip, NSMutableArray *out) 
     }
 }
 
-static UIView *FindResults(UIView *header) {
+static void FindResults(UIView *header) {
     CGFloat W = UIScreen.mainScreen.bounds.size.width;
-    UIView *root = header;
-    for (int d = 0; root.superview && d < 10; d++) {
-        root = root.superview;
-        if (root.bounds.size.height >= UIScreen.mainScreen.bounds.size.height * 0.9) break;
-    }
     NSMutableArray *all = [NSMutableArray array];
-    CollectScrolls(root, 0, header, all);
-    UIScrollView *best = nil;
-    for (UIScrollView *s in all) {
-        if (s.bounds.size.width < W * 0.9 || s.bounds.size.height < 250 || !s.window || s.hidden) continue;
-        if (!best || s.bounds.size.height * s.bounds.size.width > best.bounds.size.height * best.bounds.size.width) best = s;
-    }
-    return best;
+    CollectScrolls(RootFor(header), 0, header, all);
+    if (!gScrolls) gScrolls = [NSHashTable weakObjectsHashTable];
+    for (UIScrollView *s in all)
+        if ([s isKindOfClass:[UICollectionView class]] && s.bounds.size.width >= W * 0.9 && s.bounds.size.height >= 250) [gScrolls addObject:s];
+}
+
+static const void *kOrigAlpha = &kOrigAlpha;
+// Header contents fade during the notch animation; remember Apple's alpha.
+static void FadeContent(UIView *v, CGFloat a) {
+    NSNumber *o = objc_getAssociatedObject(v, kOrigAlpha);
+    if (!o) { o = @(v.alpha); objc_setAssociatedObject(v, kOrigAlpha, o, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    v.alpha = o.doubleValue * a;
+    v.transform = CGAffineTransformMakeScale(0.94 + 0.06 * a, 0.94 + 0.06 * a);
+}
+static void RestoreContent(UIView *v) {
+    NSNumber *o = objc_getAssociatedObject(v, kOrigAlpha);
+    if (!o) return;
+    v.alpha = o.doubleValue;
+    v.transform = CGAffineTransformIdentity;
+    objc_setAssociatedObject(v, kOrigAlpha, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 static void SetOurInset(UIScrollView *s, CGFloat ours);
@@ -216,13 +245,18 @@ static void ResetAll(void) {
     UIView *h = gHeader;
     if (h && !CGAffineTransformIsIdentity(h.transform)) h.transform = CGAffineTransformIdentity;
     [[h viewWithTag:PILL_TAG] removeFromSuperview];
+    for (UIView *v in h.subviews) RestoreContent(v);
     for (UIView *v in [gMaskedViews allObjects]) Unmask(v);
     [gMaskedViews removeAllObjects];
     for (UIView *v in [gCardViews allObjects]) [[v viewWithTag:CARD_TAG] removeFromSuperview];
     [gCardViews removeAllObjects];
-    UIScrollView *s = gInsetVC;
-    if ([s isKindOfClass:[UIScrollView class]]) SetOurInset(s, 0);
+    for (UIScrollView *s in [gScrolls allObjects]) SetOurInset(s, 0);
+    UITextField *f = gField;
+    if (f && gOrigPlaceholder && [f.placeholder isEqualToString:@"Search or Ask"]) f.placeholder = gOrigPlaceholder;
+    gAppeared = NO;
 }
+
+static void MaskTracked(UIView *v) { Mask(v); [gMaskedViews addObject:v]; }
 
 #pragma mark - search pill
 
@@ -231,10 +265,10 @@ static void HideHeaderBackgrounds(UIView *v, UITextField *f, int d) {
     if (d > 4) return;
     for (UIView *s in v.subviews) {
         if (s.tag == PILL_TAG || s == f) {
-            if (s == f) for (UIView *fs in f.subviews) if (IsBackgroundish(fs)) { Mask(fs); [gMaskedViews addObject:fs]; }
+            if (s == f) for (UIView *fs in f.subviews) if (IsBackgroundish(fs)) MaskTracked(fs);
             continue;
         }
-        if (IsBackgroundish(s) && ![s isDescendantOfView:f] && ![f isDescendantOfView:s]) { Mask(s); [gMaskedViews addObject:s]; continue; }
+        if (IsBackgroundish(s) && ![s isDescendantOfView:f] && ![f isDescendantOfView:s]) { MaskTracked(s); continue; }
         HideHeaderBackgrounds(s, f, d + 1);
     }
 }
@@ -250,49 +284,143 @@ static CGRect PillFrameIn(UIView *header, UITextField *f) {
     return CGRectMake(inset, top, header.bounds.size.width - inset * 2, bottom - top);
 }
 
-static void PlayNotchGrow(S26Glass *pill, UIView *header, UITextField *f) {
+static CGRect NotchFrameIn(UIView *header) {
     UIWindow *w = header.window;
-    CGRect final = pill.frame;
     BOOL notch = w.safeAreaInsets.top > 40;
-    CGFloat nw = notch ? 164 : 120, nh = notch ? 32 : 30;
-    CGRect start = [header convertRect:CGRectMake((w.bounds.size.width - nw) / 2, notch ? -2 : 10, nw, nh) fromView:nil];
-    pill.radius = 16;
-    pill.frame = start;
-    pill.backgroundColor = UIColor.blackColor;   // blends into the notch
-    pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0].CGColor;
-    [pill layoutIfNeeded];
-    // field contents fade in once the pill has dropped
-    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
-    fade.fromValue = @0; fade.toValue = @1;
-    fade.beginTime = CACurrentMediaTime() + 0.16; fade.duration = 0.28;
-    fade.fillMode = kCAFillModeBackwards;
-    [f.layer addAnimation:fade forKey:@"s26fade"];
-    [UIView animateWithDuration:0.62 delay:0.02 usingSpringWithDamping:0.74 initialSpringVelocity:0.4
-                        options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        pill.radius = PILL_RADIUS;
-        pill.frame = final;
-        [pill layoutIfNeeded];
-        pill.backgroundColor = [UIColor colorWithWhite:0 alpha:0.82];
-    } completion:nil];
-    [UIView animateWithDuration:0.4 delay:0.25 options:0 animations:^{
-        pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
-    } completion:nil];
+    CGFloat nw = notch ? 162 : 110, nh = notch ? 33 : 26;
+    CGRect r = notch ? CGRectMake((w.bounds.size.width - nw) / 2, -8, nw, nh + 8) : CGRectMake((w.bounds.size.width - nw) / 2, 6, nw, nh);
+    return [header convertRect:r fromView:nil];
+}
+
+#pragma mark - liquid notch animation
+
+// Two springs: the height drops fast and stiff, the width follows a beat
+// later and wobbles, so the notch looks like it stretches into the bar.
+typedef struct { CGFloat v, vel, target; } S26S;
+static struct {
+    BOOL on, retract;
+    S26S top, h, w;
+    CGFloat h0, h1;
+    CFTimeInterval start;
+} G;
+static BOOL gCollapsed;
+
+static void StepS(S26S *s, CGFloat k, CGFloat c, CGFloat dt) {
+    int n = 4; CGFloat h = dt / n;
+    for (int i = 0; i < n; i++) { s->vel += (-k * (s->v - s->target) - c * s->vel) * h; s->v += s->vel * h; }
+}
+static BOOL SettledS(S26S *s) { return fabs(s->v - s->target) < 0.3 && fabs(s->vel) < 3; }
+
+static NSArray *HeaderContents(UIView *header) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (UIView *v in header.subviews) if (v.tag != PILL_TAG && !objc_getAssociatedObject(v, kMasked)) [a addObject:v];
+    return a;
+}
+
+static void ApplyGrow(UIView *header, S26Glass *pill) {
+    CGFloat cx = header.bounds.size.width / 2;
+    CGFloat w = MAX(20, G.w.v), h = MAX(10, G.h.v);
+    pill.transform = CGAffineTransformIdentity;
+    pill.frame = CGRectMake(cx - w / 2, G.top.v, w, h);
+    [pill setNeedsLayout]; [pill layoutIfNeeded];
+    CGFloat p = (G.h1 - G.h0) != 0 ? (h - G.h0) / (G.h1 - G.h0) : 1;
+    p = MAX(0, MIN(1, p));
+    pill.backgroundColor = [UIColor colorWithWhite:0 alpha:1 - 0.18 * p];
+    pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14 * p].CGColor;
+    pill.sheen.opacity = p;
+    CGFloat ca = MAX(0, MIN(1, (p - 0.5) / 0.4));
+    for (UIView *v in HeaderContents(header)) FadeContent(v, ca);
+}
+
+static void Shimmer(S26Glass *pill) {
+    // A bright edge light runs around the rim once.
+    CGRect b = pill.bounds;
+    CAShapeLayer *ring = [CAShapeLayer layer];
+    ring.path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(b, 0.75, 0.75) cornerRadius:MIN(PILL_RADIUS, b.size.height / 2)].CGPath;
+    ring.lineWidth = 1.6; ring.fillColor = UIColor.clearColor.CGColor; ring.strokeColor = UIColor.whiteColor.CGColor;
+    CAGradientLayer *g = [CAGradientLayer layer];
+    g.frame = b;
+    g.colors = @[(id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithRed:0.75 green:0.85 blue:1 alpha:0.9].CGColor,
+                 (id)[UIColor colorWithRed:1 green:0.8 blue:0.95 alpha:0.9].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+    g.startPoint = CGPointMake(0, 0.5); g.endPoint = CGPointMake(1, 0.5);
+    g.locations = @[@-0.4, @-0.25, @-0.1, @0];
+    g.mask = ring;
+    [pill.layer addSublayer:g];
+    CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"locations"];
+    a.fromValue = @[@-0.4, @-0.25, @-0.1, @0];
+    a.toValue = @[@1.0, @1.15, @1.3, @1.4];
+    a.duration = 0.9; a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    a.removedOnCompletion = NO; a.fillMode = kCAFillModeForwards;
+    [g addAnimation:a forKey:@"run"];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.95 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [g removeFromSuperlayer]; });
+}
+
+static void StartGrow(UIView *header, UITextField *f, BOOL fromNotch) {
+    CGRect n = NotchFrameIn(header), fin = PillFrameIn(header, f);
+    if (fromNotch) {
+        G.top.v = n.origin.y; G.h.v = n.size.height; G.w.v = n.size.width;
+        G.top.vel = G.h.vel = G.w.vel = 0;
+    }
+    G.h0 = n.size.height; G.h1 = fin.size.height;
+    G.top.target = fin.origin.y; G.h.target = fin.size.height; G.w.target = fin.size.width;
+    G.h.vel += 300;            // a little kick downward
+    G.on = YES; G.retract = NO; gCollapsed = NO;
+    G.start = CACurrentMediaTime();
+}
+
+static void StartRetract(UIView *header) {
+    S26Glass *pill = (S26Glass *)[header viewWithTag:PILL_TAG];
+    if (!pill) return;
+    CGRect n = NotchFrameIn(header), cur = pill.frame;
+    if (!G.on) { G.top.v = cur.origin.y; G.h.v = cur.size.height; G.w.v = cur.size.width; G.top.vel = G.h.vel = G.w.vel = 0; }
+    G.h0 = n.size.height; G.h1 = PillFrameIn(header, gField).size.height;
+    G.top.target = n.origin.y; G.h.target = n.size.height; G.w.target = n.size.width;
+    G.on = YES; G.retract = YES;
+    G.start = CACurrentMediaTime();
+}
+
+static void StepGrow(UIView *header, CGFloat dt) {
+    S26Glass *pill = (S26Glass *)[header viewWithTag:PILL_TAG];
+    if (!G.on || !pill) return;
+    CFTimeInterval age = CACurrentMediaTime() - G.start;
+    if (G.retract) {
+        StepS(&G.top, 520, 46, dt); StepS(&G.h, 520, 46, dt);
+        StepS(&G.w, 380, 38, dt);
+    } else {
+        StepS(&G.top, 320, 26, dt); StepS(&G.h, 320, 25, dt);
+        if (age > 0.05) StepS(&G.w, 190, 13.5, dt);
+    }
+    ApplyGrow(header, pill);
+    if (SettledS(&G.top) && SettledS(&G.h) && SettledS(&G.w)) {
+        G.top.v = G.top.target; G.h.v = G.h.target; G.w.v = G.w.target;
+        ApplyGrow(header, pill);
+        G.on = NO;
+        if (G.retract) gCollapsed = YES;
+        else {
+            for (UIView *v in HeaderContents(header)) RestoreContent(v);
+            Shimmer(pill);
+        }
+    }
 }
 
 static void StylePill(UIView *header, UITextField *f) {
     UIWindow *w = header.window;
-    // 1. Move the header so the field sits just under the notch.
+    // 1. Pin the header so the field sits just under the notch.
     if (gTop) {
         CGPoint origin = [header.superview convertPoint:CGPointMake(0, header.center.y - header.bounds.size.height / 2) toView:nil];
         CGFloat fieldMid = CGRectGetMidY([f convertRect:f.bounds toView:header]);
         CGFloat targetMid = w.safeAreaInsets.top > 40 ? w.safeAreaInsets.top + 20 : w.safeAreaInsets.top + 34;
-        CGFloat ty = round(targetMid - (origin.y + fieldMid));
+        CGFloat ty = round(targetMid - (origin.y + fieldMid) + header.transform.ty - header.transform.ty);
         if (fabs(header.transform.ty - ty) > 0.5 || header.transform.a != 1) header.transform = CGAffineTransformMakeTranslation(0, ty);
     } else if (!CGAffineTransformIsIdentity(header.transform)) header.transform = CGAffineTransformIdentity;
 
-    // 2. Our black glass pill behind the field (it reaches above the header).
+    // 2. The black glass shape behind the field (it reaches above the header).
     if (header.clipsToBounds) header.clipsToBounds = NO;
     HideHeaderBackgrounds(header, f, 0);
+    if (f.leftView && !objc_getAssociatedObject(f.leftView, kMasked)) MaskTracked(f.leftView);   // no magnifier in iOS 26
+    if (!gOrigPlaceholder && f.placeholder.length && ![f.placeholder isEqualToString:@"Search or Ask"]) gOrigPlaceholder = f.placeholder;
+    if (![f.placeholder isEqualToString:@"Search or Ask"]) f.placeholder = @"Search or Ask";
+
     S26Glass *pill = (S26Glass *)[header viewWithTag:PILL_TAG];
     if (pill.superview != header) pill = nil;
     CGRect pf = PillFrameIn(header, f);
@@ -303,10 +431,14 @@ static void StylePill(UIView *header, UITextField *f) {
         pill.backgroundColor = [UIColor colorWithWhite:0 alpha:0.82];
         pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
         [header insertSubview:pill atIndex:0];
-        if (!gAppeared && gNotch && gTop) PlayNotchGrow(pill, header, f);
+    }
+    if (!gAppeared) {
         gAppeared = YES;
-    } else if (![pill.layer animationForKey:@"position"] && ![pill.layer animationForKey:@"bounds"] && !pill.layer.animationKeys.count) {
+        if (gNotch && gTop) { StartGrow(header, f, YES); ApplyGrow(header, pill); }
+        else { SetFrame(pill, pf); for (UIView *v in HeaderContents(header)) RestoreContent(v); }
+    } else if (!G.on && !gCollapsed && CGAffineTransformIsIdentity(pill.transform)) {
         SetFrame(pill, pf);
+        G.top.target = pf.origin.y; G.h.target = pf.size.height; G.w.target = pf.size.width;
     }
     if (header.subviews.firstObject != pill) [header sendSubviewToBack:pill];
 }
@@ -321,76 +453,113 @@ static void SetOurInset(UIScrollView *s, CGFloat ours) {
     BOOL atTop = s.contentOffset.y <= -s.adjustedContentInset.top + 1;
     s.contentInset = in;
     if (atTop) s.contentOffset = CGPointMake(s.contentOffset.x, -s.adjustedContentInset.top);
-    objc_setAssociatedObject(s, kInsetOurs, ours > 0 ? @(ours) : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(s, kInsetOurs, fabs(ours) > 0.1 ? @(ours) : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-static void PushResults(UIView *header, UIView *scroll) {
-    if (![scroll isKindOfClass:[UIScrollView class]]) return;
-    UIScrollView *s = (UIScrollView *)scroll;
-    if (gInsetVC != (id)s) {
-        UIScrollView *old = (UIScrollView *)gInsetVC;
-        if ([old isKindOfClass:[UIScrollView class]]) SetOurInset(old, 0);
-        gInsetVC = (id)s;
+// Where content y=0 sits on screen when scrolled to the top, without our inset.
+static CGFloat ContentStartY(UIScrollView *s) {
+    CGFloat ours = [objc_getAssociatedObject(s, kInsetOurs) doubleValue];
+    return [s.superview convertPoint:s.frame.origin toView:nil].y + s.adjustedContentInset.top - ours;
+}
+
+static BOOL IsAppRow(UICollectionViewCell *c) {
+    NSString *cn = NSStringFromClass([c class]);
+    if ([cn containsString:@"AppIcon"] || [cn containsString:@"IconRow"]) return YES;
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:c.contentView ?: c];
+    int icons = 0, guard = 0;
+    while (stack.count && guard++ < 400) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        NSString *n = NSStringFromClass([v class]);
+        CGSize z = v.bounds.size;
+        BOOL squareish = z.width >= 44 && z.width <= 90 && fabs(z.width - z.height) < 6;
+        if (squareish && ([n containsString:@"Icon"] || [v isKindOfClass:[UIImageView class]])) { icons++; continue; }
+        [stack addObjectsFromArray:v.subviews];
     }
+    return icons >= 3;
+}
+
+static void StyleAppRow(UICollectionViewCell *c) {
+    S26Glass *g = (S26Glass *)[c viewWithTag:CARD_TAG];
+    if (g.superview != c) g = nil;
+    if (!g) {
+        g = [S26Glass new];
+        g.tag = CARD_TAG;
+        g.backgroundColor = [UIColor colorWithWhite:0 alpha:0.78];
+        [gCardViews addObject:c];
+    }
+    if (c.contentView && g.superview != c) [c insertSubview:g belowSubview:c.contentView];
+    else if (!g.superview) [c insertSubview:g atIndex:0];
+    g.radius = 36;
+    SetFrame(g, CGRectInset(c.bounds, 0, -12));
+    if (c.backgroundView) MaskTracked(c.backgroundView);
+    for (UIView *x in c.subviews) if (x != g && x != c.contentView && IsBackgroundish(x)) MaskTracked(x);
+    for (UIView *x in c.contentView.subviews) if (IsBackgroundish(x) && x.bounds.size.width > c.bounds.size.width * 0.6) MaskTracked(x);
+}
+
+static void UnstyleCell(UICollectionViewCell *c) {
+    [[c viewWithTag:CARD_TAG] removeFromSuperview];
+    if (c.backgroundView) Unmask(c.backgroundView);
+    for (UIView *x in c.subviews) Unmask(x);
+    for (UIView *x in c.contentView.subviews) Unmask(x);
+}
+
+// iOS 26 resting look: with nothing typed, show only the app icons on black glass.
+static void StyleCollection(UICollectionView *cv, UIView *header, BOOL empty, NSMutableArray *dbg) {
+    BOOL rest = empty && gRest && gEnabled;
+    UICollectionViewCell *firstApp = nil;
+    int apps = 0, hidden = 0, supps = 0;
+    NSMutableSet *classes = [NSMutableSet set];
+    for (UICollectionViewCell *c in cv.visibleCells) {
+        BOOL app = IsAppRow(c);
+        if (classes.count < 4) [classes addObject:[NSString stringWithFormat:@"%@%@", NSStringFromClass([c class]), app ? @"*" : @""]];
+        if (rest && app) {
+            Unmask(c);
+            StyleAppRow(c);
+            apps++;
+            if (!firstApp || c.frame.origin.y < firstApp.frame.origin.y) firstApp = c;
+        } else if (rest) {
+            UnstyleCell(c);
+            MaskTracked(c); hidden++;
+        } else {
+            Unmask(c);
+            UnstyleCell(c);
+        }
+    }
+    for (UIView *v in cv.subviews) {
+        if (![v isKindOfClass:[UICollectionReusableView class]] || [v isKindOfClass:[UICollectionViewCell class]]) continue;
+        supps++;
+        if (rest) MaskTracked(v); else Unmask(v);
+    }
+    // Push results below the glass; at rest, put the app card right under it.
     CGFloat ours = 0;
-    if (gTop) {
-        CGRect pw = [header convertRect:PillFrameIn(header, gField) toView:nil];   // where the pill ends up
-        CGFloat contentTop = [s convertPoint:CGPointMake(0, -s.adjustedContentInset.top + [objc_getAssociatedObject(s, kInsetOurs) doubleValue]) toView:nil].y;
-        // contentTop: where results start without us (window coords, at scroll top)
-        CGFloat startY = [s.superview convertPoint:s.frame.origin toView:nil].y + (s.adjustedContentInset.top - [objc_getAssociatedObject(s, kInsetOurs) doubleValue]);
-        (void)contentTop;
-        ours = MAX(0, ceil(CGRectGetMaxY(pw) + 10 - startY));
+    if (gTop && gEnabled) {
+        CGRect pw = [header convertRect:PillFrameIn(header, gField) toView:nil];
+        CGFloat start = ContentStartY(cv);
+        CGFloat anchor = start;
+        if (rest && firstApp) anchor = start + firstApp.frame.origin.y - 12;   // card top (glass reaches 12pt above)
+        ours = ceil(CGRectGetMaxY(pw) + 14 - anchor);
+        ours = MAX(-300, MIN(300, ours));
     }
-    SetOurInset(s, ours);
+    SetOurInset(cv, ours);
+    if (dbg) [dbg addObject:[NSString stringWithFormat:@"%@ vis=%d cells=%lu apps=%d hid=%d supp=%d ours=%.0f [%@]", NSStringFromClass([cv class]), ReallyVisible(cv),
+                             (unsigned long)cv.visibleCells.count, apps, hidden, supps, ours, [[classes allObjects] componentsJoinedByString:@","]]];
 }
 
-// A card: a wide, short-ish view with rounded corners (or a background-type view).
-static BOOL IsCard(UIView *s, CGFloat minW) {
-    if (s.tag == CARD_TAG || s.hidden || s.alpha < 0.01) return NO;
-    CGSize z = s.bounds.size;
-    if (z.width < minW || z.height < 36 || z.height > 600) return NO;
-    return s.layer.cornerRadius >= 8 || IsBackgroundish(s);
-}
-static void FindCards(UIView *v, int d, CGFloat minW, NSMutableArray *out) {
-    if (d > 9) return;
+// The gray strip Spotlight keeps behind the top of the screen.
+static void HideTopBand(UIView *v, UIView *header, int d, NSMutableArray *dbg) {
+    if (d > 6) return;
+    CGFloat W = UIScreen.mainScreen.bounds.size.width;
     for (UIView *s in v.subviews) {
-        if (s.tag == CARD_TAG) continue;
-        if (IsCard(s, minW)) { [out addObject:s]; continue; }
-        FindCards(s, d + 1, minW, out);
+        if (s == header || [s isKindOfClass:[UIScrollView class]] || s.tag == DEBUG_TAG) continue;
+        if ([header isDescendantOfView:s]) { HideTopBand(s, header, d + 1, dbg); continue; }
+        CGRect f = [s convertRect:s.bounds toView:nil];
+        if (IsBackgroundish(s) && f.origin.y <= 4 && f.size.height >= 40 && f.size.height <= 330 && f.size.width >= W * 0.9) {
+            MaskTracked(s);
+            if (dbg.count < 3) [dbg addObject:[NSString stringWithFormat:@"%@ %.0f", NSStringFromClass([s class]), f.size.height]];
+            continue;
+        }
+        HideTopBand(s, header, d + 1, dbg);
     }
-}
-
-static void StyleCards(UIView *scroll) {
-    NSMutableArray *cards = [NSMutableArray array];
-    FindCards(scroll, 0, scroll.bounds.size.width * 0.6, cards);
-    NSMutableArray *info = [NSMutableArray array];
-    for (UIView *c in cards) {
-        if (info.count < 4) {
-            CGFloat a = 0; [c.backgroundColor getWhite:NULL alpha:&a];
-            NSMutableArray *subs = [NSMutableArray array];
-            for (UIView *x in c.subviews) if (subs.count < 3) [subs addObject:NSStringFromClass([x class])];
-            [info addObject:[NSString stringWithFormat:@"%@ r=%.0f bg=%.2f [%@]", NSStringFromClass([c class]), c.layer.cornerRadius, a, [subs componentsJoinedByString:@","]]];
-        }
-        S26Glass *g = (S26Glass *)[c viewWithTag:CARD_TAG];
-        if (g.superview != c) g = nil;
-        if (!g) {
-            g = [S26Glass new];
-            g.tag = CARD_TAG;
-            g.backgroundColor = [UIColor colorWithWhite:0 alpha:0.7];
-            [gCardViews addObject:c];
-        }
-        // Sit just above Apple's own background pieces, below the icons and text.
-        if (g.superview != c) {
-            NSInteger at = 0;
-            for (NSUInteger i = 0; i < c.subviews.count; i++) if (IsBackgroundish(c.subviews[i])) at = i + 1;
-            [c insertSubview:g atIndex:at];
-        }
-        CGFloat r = c.layer.cornerRadius;
-        if (r < 1) r = c.superview.layer.cornerRadius;
-        g.radius = r > 1 ? r : 22;
-        SetFrame(g, c.bounds);
-    }
-    if (gDebug) gCardsDebug = [NSString stringWithFormat:@"%lu\n   %@", (unsigned long)cards.count, [info componentsJoinedByString:@"\n   "]];
 }
 
 #pragma mark - status bar
@@ -458,18 +627,11 @@ static void UpdateDebug(UIWindow *w) {
         [w addSubview:l];
     }
     last = l;
-    UITextField *f = gField; UIView *h = gHeader; UIScrollView *s = (UIScrollView *)gScroll;
-    NSMutableArray *chain = [NSMutableArray array];
-    int d = 0;
-    for (UIView *p = f.superview; p && d < 6; p = p.superview, d++) [chain addObject:[NSString stringWithFormat:@"%@(%.0f)", NSStringFromClass([p class]), p.bounds.size.height]];
-    NSMutableArray *vcs = [NSMutableArray array];
-    for (UIViewController *p = OwnerVC(f); p; p = p.parentViewController) [vcs addObject:NSStringFromClass([p class])];
-    NSString *sbInfo = [NSString stringWithFormat:@"sb: hidden=%d vc=%@ root=%@", gSBHidden, NSStringFromClass([gSBVC class]), NSStringFromClass([w.rootViewController class])];
-    NSString *text = [NSString stringWithFormat:@" %@\n Spotlight26 0.1.3 debug (%@) prefs=%@\n field: %@ %@\n chain: %@\n vcs: %@\n header: %@ ty=%.0f\n results: %@ inset=%.0f ours=%@\n cards: %@",
-                      sbInfo, [[NSBundle mainBundle] bundleIdentifier], gPrefsSource, NSStringFromClass([f class]), NSStringFromCGRect([f convertRect:f.bounds toView:nil]),
-                      [chain componentsJoinedByString:@" > "], [vcs componentsJoinedByString:@" > "],
-                      NSStringFromClass([h class]), h.transform.ty,
-                      s ? NSStringFromClass([s class]) : @"none", s.adjustedContentInset.top, objc_getAssociatedObject(s, kInsetOurs), gCardsDebug];
+    UITextField *f = gField; UIView *h = gHeader;
+    NSString *text = [NSString stringWithFormat:@" Spotlight26 0.2.0 debug (%@) prefs=%@\n field: %@ %@ text=%lu\n header: %@ ty=%.0f grow=%d retract=%d collapsed=%d\n sb: hidden=%d root=%@\n band: %@\n results: %@",
+                      [[NSBundle mainBundle] bundleIdentifier], gPrefsSource, NSStringFromClass([f class]), NSStringFromCGRect([f convertRect:f.bounds toView:nil]),
+                      (unsigned long)f.text.length, NSStringFromClass([h class]), h.transform.ty, G.on, G.retract, gCollapsed,
+                      gSBHidden, NSStringFromClass([w.rootViewController class]), gBandDebug, gCardsDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -486,27 +648,21 @@ static void UpdateDebug(UIWindow *w) {
     if (!f || !f.window) {
         @try { ResetAll(); } @catch (__unused id e) {}
         [gLink invalidate]; gLink = nil;
-        gAppeared = NO;
         return;
     }
-    // Spotlight can stay in its window while closed: idle slowly until it shows again.
-    BOOL visible = !f.window.hidden;
-    for (UIView *p = f; p && visible; p = p.superview) if (p.hidden || p.alpha < 0.01) visible = NO;
-    if (visible && !CGRectIntersectsRect([f convertRect:f.bounds toView:nil], f.window.bounds)) visible = NO;
-    if (!visible) {
-        if (gAppeared) { @try { ResetAll(); } @catch (__unused id e) {} gAppeared = NO; }
+    if (!ReallyVisible(f)) {
         if (@available(iOS 15.0, *)) gLink.preferredFrameRateRange = CAFrameRateRangeMake(4, 4, 4);
+        gAppeared = NO;
         UpdateDebug(nil);
         return;
     }
-    if (@available(iOS 15.0, *)) if (gLink.preferredFrameRateRange.preferred != 60) gLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
+    if (@available(iOS 15.0, *)) if (gLink.preferredFrameRateRange.preferred < 60) gLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
     // Spotlight's app is frozen while closed, so a gap between frames means it
     // was just opened again: grow out of the notch again.
     static CFTimeInterval lastStamp;
-    if (lastStamp > 0 && link.timestamp - lastStamp > 0.35) {
-        @try { ResetAll(); } @catch (__unused id e) {}
-        gAppeared = NO;
-    }
+    CGFloat dt = lastStamp > 0 ? link.timestamp - lastStamp : 1.0 / 60;
+    if (dt > 0.35) gAppeared = NO;
+    if (dt > 0.05 || dt <= 0) dt = 1.0 / 60;
     lastStamp = link.timestamp;
     gFrame++;
     @try {
@@ -514,23 +670,32 @@ static void UpdateDebug(UIWindow *w) {
         if (!h || ![f isDescendantOfView:h]) { h = FindHeader(f); gHeader = h; }
         if (!gEnabled) { ResetAll(); UpdateDebug(f.window); return; }
         StylePill(h, f);
+        StepGrow(h, dt);
         if (gHideSB && gInSpotlightApp) HideStatusBar(f.window); else ShowStatusBar();
-        UIView *s = gScroll;
-        if (!s || !s.window || gFrame % 30 == 0) { s = FindResults(h); gScroll = s; }
-        if (s) {
-            PushResults(h, s);
-            if (gCards && gFrame % 6 == 0) StyleCards(s);
+        if (!gScrolls.count || gFrame % 30 == 1) FindResults(h);
+        BOOL empty = f.text.length == 0;
+        NSMutableArray *dbg = gDebug ? [NSMutableArray array] : nil;
+        for (UICollectionView *cv in [gScrolls allObjects]) {
+            if (!cv.window) continue;
+            if (!ReallyVisible(cv)) { SetOurInset(cv, 0); continue; }
+            StyleCollection(cv, h, empty, dbg);
         }
+        if (gFrame % 20 == 1) {
+            NSMutableArray *bd = [NSMutableArray array];
+            HideTopBand(RootFor(h), h, 0, bd);
+            if (bd.count) gBandDebug = [bd componentsJoinedByString:@", "];
+        }
+        if (dbg) gCardsDebug = [dbg componentsJoinedByString:@"\n  "];
         if (gFrame % 6 == 0) UpdateDebug(f.window);
     } @catch (__unused id e) {}
 }
 - (void)textChanged:(NSNotification *)n {
     if (n.object != gField || !gEnabled || !gBounce) return;
     UIView *pill = [gHeader viewWithTag:PILL_TAG];
-    if (!pill || pill.layer.animationKeys.count) return;
+    if (!pill || G.on) return;
     // A quick squish and spring back each keystroke.
     [UIView animateWithDuration:0.07 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{
-        pill.transform = CGAffineTransformMakeScale(1.025, 0.95);
+        pill.transform = CGAffineTransformMakeScale(1.02, 0.95);
     } completion:^(BOOL d) {
         [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.42 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{
             pill.transform = CGAffineTransformIdentity;
@@ -547,10 +712,8 @@ static void UpdateDebug(UIWindow *w) {
     if (!self.window) return;
     @try {
         if (!IsSpotlightField(self)) return;
-        if (gField != self) { gAppeared = NO; gHeader = nil; gScroll = nil; }
+        if (gField != self) { gAppeared = NO; gHeader = nil; }
         gField = self;
-        if (!gMaskedViews) gMaskedViews = [NSHashTable weakObjectsHashTable];
-        if (!gCardViews) gCardViews = [NSHashTable weakObjectsHashTable];
         StartLink();
     } @catch (__unused id e) {}
 }
@@ -589,9 +752,8 @@ static void Scan(void) {
             f = ScanForField(w, 0);
             if (f) break;
         }
-        if (f) { gField = f; gAppeared = NO; gHeader = nil; gScroll = nil; StartLink(); }
-    }
-    // With no field yet, still show the debug box on the key window.
+        if (f) { gField = f; gAppeared = NO; gHeader = nil; StartLink(); }
+    } else if (!gLink) StartLink();
     if (!gField && gDebug && gInSpotlightApp) {
         UIWindow *key = nil;
         for (UIWindow *w in AllWindows()) if (w.isKeyWindow) key = w;
@@ -606,16 +768,36 @@ static void Scan(void) {
     // Only Spotlight's own app treats every field as the search field; other
     // processes that use Spotlight's frameworks go by the class check.
     gInSpotlightApp = [bid rangeOfString:@"spotlight" options:NSCaseInsensitiveSearch].location != NSNotFound;
-    if (!gMaskedViews) gMaskedViews = [NSHashTable weakObjectsHashTable];
-    if (!gCardViews) gCardViews = [NSHashTable weakObjectsHashTable];
+    gMaskedViews = [NSHashTable weakObjectsHashTable];
+    gCardViews = [NSHashTable weakObjectsHashTable];
+    gScrolls = [NSHashTable weakObjectsHashTable];
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     [[NSNotificationCenter defaultCenter] addObserver:[S26Ticker shared] selector:@selector(textChanged:) name:UITextFieldTextDidChangeNotification object:nil];
-    // Spotlight's app stays alive between pulls: replay the notch grow each time it comes back.
-    for (NSString *name in @[UIApplicationWillEnterForegroundNotification, UISceneWillEnterForegroundNotification, UIApplicationDidEnterBackgroundNotification])
-        [[NSNotificationCenter defaultCenter] addObserverForName:name object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
-            @try { ResetAll(); } @catch (__unused id e) {}
-            gAppeared = NO;
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    NSOperationQueue *q = [NSOperationQueue mainQueue];
+    // Leaving Spotlight: the bar pulls back up into the notch.
+    for (NSString *name in @[UIApplicationWillResignActiveNotification, UISceneWillDeactivateNotification])
+        [nc addObserverForName:name object:nil queue:q usingBlock:^(NSNotification *n) {
+            @try { if (gEnabled && gNotch && gTop && gHeader) StartRetract(gHeader); } @catch (__unused id e) {}
+        }];
+    // Fully closed: sit collapsed in the notch so the next opening starts there.
+    for (NSString *name in @[UIApplicationDidEnterBackgroundNotification, UISceneDidEnterBackgroundNotification])
+        [nc addObserverForName:name object:nil queue:q usingBlock:^(NSNotification *n) {
+            @try {
+                UIView *h = gHeader; S26Glass *pill = (S26Glass *)[h viewWithTag:PILL_TAG];
+                if (pill && gEnabled && gNotch && gTop) {
+                    CGRect r = NotchFrameIn(h);
+                    G.top.v = G.top.target = r.origin.y; G.h.v = G.h.target = r.size.height; G.w.v = G.w.target = r.size.width;
+                    G.top.vel = G.h.vel = G.w.vel = 0; G.on = NO; gCollapsed = YES;
+                    ApplyGrow(h, pill);
+                }
+                gAppeared = NO;
+            } @catch (__unused id e) {}
+        }];
+    for (NSString *name in @[UIApplicationWillEnterForegroundNotification, UISceneWillEnterForegroundNotification, UIApplicationDidBecomeActiveNotification])
+        [nc addObserverForName:name object:nil queue:q usingBlock:^(NSNotification *n) {
+            if (gCollapsed || !G.on) { if (![n.name isEqualToString:UIApplicationDidBecomeActiveNotification] || gCollapsed) gAppeared = NO; }
             if (gField.window) StartLink();
         }];
     %init;

@@ -54,6 +54,14 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>iOS 26 Resting Look</string>
+			<key>key</key><string>rest</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.spotlight26</string>
+			<key>PostNotification</key><string>com.user.spotlight26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
 			<key>label</key><string>Bounce While Typing</string>
 			<key>key</key><string>bounce</string>
 			<key>default</key><true/>
