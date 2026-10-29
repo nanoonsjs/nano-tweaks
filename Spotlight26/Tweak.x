@@ -1,4 +1,6 @@
-// Spotlight26 0.1.1 - made by nano
+// Spotlight26 0.1.2 - made by nano
+// 0.1.2: loads into any process using Spotlight's UI frameworks, scans for the
+//        search field itself, and the debug box shows even with no field.
 // 0.1.1: iOS 16 runs Spotlight as its own app (com.apple.Spotlight), so the
 //        tweak now loads there too. Debug shows which process it's in.
 // iOS 26 style Spotlight for iOS 16 (rootless, SpringBoard).
@@ -45,15 +47,21 @@ static BOOL PrefBool(NSDictionary *f, NSString *key, BOOL def) {
     if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM); if (cf) v = (__bridge_transfer id)cf; }
     return v ? [v boolValue] : def;
 }
+static NSString *gPrefsSource = @"?";
+static BOOL gPrefsUnreadable;
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSDictionary *f = ReadPrefsFile();
+    gPrefsSource = f ? @"file" : @"none";
+    gPrefsUnreadable = (f == nil);
     gEnabled = PrefBool(f, @"enabled", YES);
     gTop     = PrefBool(f, @"top", YES);
     gNotch   = PrefBool(f, @"notch", YES);
     gCards   = PrefBool(f, @"cards", YES);
     gBounce  = PrefBool(f, @"bounce", YES);
     gDebug   = PrefBool(f, @"debug", NO);
+    // Can't read the settings here at all? Show the debug box so we can tell.
+    if (gPrefsUnreadable && !CFPreferencesCopyAppValue(CFSTR("debug"), DOM)) gDebug = YES;
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ LoadPrefs(); });
@@ -370,8 +378,8 @@ static void UpdateDebug(UIWindow *w) {
     for (UIView *p = f.superview; p && d < 6; p = p.superview, d++) [chain addObject:[NSString stringWithFormat:@"%@(%.0f)", NSStringFromClass([p class]), p.bounds.size.height]];
     NSMutableArray *vcs = [NSMutableArray array];
     for (UIViewController *p = OwnerVC(f); p; p = p.parentViewController) [vcs addObject:NSStringFromClass([p class])];
-    NSString *text = [NSString stringWithFormat:@" Spotlight26 0.1.1 debug (%@)\n field: %@ %@\n chain: %@\n vcs: %@\n header: %@ ty=%.0f\n results: %@ inset=%.0f vc=%@\n cards: %@",
-                      [[NSBundle mainBundle] bundleIdentifier], NSStringFromClass([f class]), NSStringFromCGRect([f convertRect:f.bounds toView:nil]),
+    NSString *text = [NSString stringWithFormat:@" Spotlight26 0.1.2 debug (%@) prefs=%@\n field: %@ %@\n chain: %@\n vcs: %@\n header: %@ ty=%.0f\n results: %@ inset=%.0f vc=%@\n cards: %@",
+                      [[NSBundle mainBundle] bundleIdentifier], gPrefsSource, NSStringFromClass([f class]), NSStringFromCGRect([f convertRect:f.bounds toView:nil]),
                       [chain componentsJoinedByString:@" > "], [vcs componentsJoinedByString:@" > "],
                       NSStringFromClass([h class]), h.transform.ty,
                       s ? NSStringFromClass([s class]) : @"none", s.adjustedContentInset.top, NSStringFromClass([gInsetVC class]), gCardsDebug];
@@ -452,10 +460,58 @@ static void UpdateDebug(UIWindow *w) {
 }
 %end
 
+#pragma mark - field scanner
+
+static UITextField *ScanForField(UIView *v, int d) {
+    if (d > 30) return nil;
+    for (UIView *s in v.subviews) {
+        if ([s isKindOfClass:[UITextField class]] && s.window && !s.hidden && IsSpotlightField(s)) return (UITextField *)s;
+        UITextField *f = ScanForField(s, d + 1);
+        if (f) return f;
+    }
+    return nil;
+}
+
+static NSArray *AllWindows(void) {
+    NSMutableArray *ws = [NSMutableArray array];
+    for (UIScene *sc in UIApplication.sharedApplication.connectedScenes)
+        if ([sc isKindOfClass:[UIWindowScene class]]) [ws addObjectsFromArray:((UIWindowScene *)sc).windows];
+    for (UIWindow *w in UIApplication.sharedApplication.windows) if (![ws containsObject:w]) [ws addObject:w];
+    return ws;
+}
+
+static BOOL gInSpringBoard;
+static void Scan(void) {
+    UITextField *f = gField;
+    if (!f || !f.window) {
+        for (UIWindow *w in AllWindows()) {
+            if (w.hidden) continue;
+            if (gInSpringBoard) {
+                NSString *n = [NSStringFromClass([w class]) stringByAppendingString:NSStringFromClass([w.rootViewController class]) ?: @""];
+                if (!([n containsString:@"Spotlight"] || [n containsString:@"SPUI"] || [n containsString:@"Search"])) continue;
+            }
+            f = ScanForField(w, 0);
+            if (f) break;
+        }
+        if (f) { gField = f; gAppeared = NO; gHeader = nil; gScroll = nil; StartLink(); }
+    }
+    // With no field yet, still show the debug box on the key window.
+    if (!gField && gDebug && gInSpotlightApp) {
+        UIWindow *key = nil;
+        for (UIWindow *w in AllWindows()) if (w.isKeyWindow) key = w;
+        if (!key) key = AllWindows().firstObject;
+        UpdateDebug(key);
+    }
+}
+
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
-    gInSpotlightApp = [bid isEqualToString:@"com.apple.Spotlight"];
-    if (!gInSpotlightApp && ![bid isEqualToString:@"com.apple.springboard"]) return;
+    gInSpringBoard = [bid isEqualToString:@"com.apple.springboard"];
+    // Only Spotlight's own app treats every field as the search field; other
+    // processes that use Spotlight's frameworks go by the class check.
+    gInSpotlightApp = [bid rangeOfString:@"spotlight" options:NSCaseInsensitiveSearch].location != NSNotFound;
+    if (!gMaskedViews) gMaskedViews = [NSHashTable weakObjectsHashTable];
+    if (!gCardViews) gCardViews = [NSHashTable weakObjectsHashTable];
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     [[NSNotificationCenter defaultCenter] addObserver:[S26Ticker shared] selector:@selector(textChanged:) name:UITextFieldTextDidChangeNotification object:nil];
@@ -467,4 +523,7 @@ static void UpdateDebug(UIWindow *w) {
             if (gField.window) StartLink();
         }];
     %init;
+    if (gInSpringBoard || gInSpotlightApp) dispatch_async(dispatch_get_main_queue(), ^{
+        [NSTimer scheduledTimerWithTimeInterval:gInSpringBoard ? 1.5 : 0.7 repeats:YES block:^(NSTimer *tm) { @try { Scan(); } @catch (__unused id e) {} }];
+    });
 }

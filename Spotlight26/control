@@ -1,6 +1,6 @@
 Package: com.user.spotlight26
 Name: Spotlight26
-Version: 0.1.1
+Version: 0.1.2
 Architecture: iphoneos-arm64
 Description: iOS 26 style Spotlight: the search bar grows out of the notch into a black glass pill at the top, with black glass result cards. Home screen and lock screen. Made by nano.
 Maintainer: nano
