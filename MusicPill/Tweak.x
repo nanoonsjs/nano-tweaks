@@ -1,4 +1,5 @@
-// MusicPill 0.5.0 - made by nano
+// MusicPill 0.5.1 - made by nano
+// 0.5.1: pill stays small after closing the full player; see-through background always on.
 // 0.5.0: pill size setting (Normal / Compact / Small) and swipe left/right on
 //        the pill for next/previous track.
 // Apple Music only.
@@ -25,7 +26,9 @@
 #define DEBUG_TAG 0x4D504442
 #define GLASS_TAG 0x4D50474C
 
-static BOOL gRename = YES, gRound = YES, gHideBG = YES, gDebug = NO, gSwipe = YES;
+static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
+// The see-through background is always on (no longer a setting).
+static const BOOL gHideBG = YES;
 static int gSize = 1; // 0 Normal, 1 Compact, 2 Small
 static NSString *gPrefsSource = @"defaults";
 static __weak UITabBar *gLastTabBar;
@@ -82,7 +85,6 @@ static void LoadPrefs(void) {
     gPrefsSource = src ?: @"cfprefs/defaults";
     gRename = PrefBool(file, @"rename", YES);
     gRound  = PrefBool(file, @"round", YES);
-    gHideBG = PrefBool(file, @"hidebg", YES);
     gDebug  = PrefBool(file, @"debug", NO);
     gSwipe  = PrefBool(file, @"swipe", YES);
     gSize   = MAX(0, MIN(2, PrefInt(file, @"size", 1)));
@@ -248,7 +250,18 @@ static void ApplyPillTransform(UIView *m) {
     // so we never fight Music's own animations.
     BOOL ours = CGAffineTransformIsIdentity(m.transform) ||
                 (last && CGAffineTransformEqualToTransform(m.transform, last.CGAffineTransformValue));
-    if (ours && !CGAffineTransformEqualToTransform(m.transform, t)) m.transform = t;
+    if (ours && !CGAffineTransformEqualToTransform(m.transform, t)) {
+        // Coming back from identity after we'd already styled it (e.g. the full
+        // player was opened and closed and Music reset it): ease back down
+        // instead of snapping.
+        if (last && CGAffineTransformIsIdentity(m.transform) && m.window) {
+            [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0
+                                options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState
+                             animations:^{ m.transform = t; } completion:nil];
+        } else {
+            m.transform = t;
+        }
+    }
     if (ours) objc_setAssociatedObject(m, kApplied, [NSValue valueWithCGAffineTransform:t], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
@@ -415,8 +428,8 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.5.0 debug\n prefs: %@\n rename=%d round=%d hidebg=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
-                      gPrefsSource, gRename, gRound, gHideBG, gSize, gSwipe,
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.5.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
+                      gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found,
                       [c componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
@@ -473,10 +486,32 @@ static void Update(UITabBar *tb) {
 }
 %end
 
+// Opening and closing the full player resets the bar without laying out the
+// tab bar again, so nothing re-shrank it. Check a few times a second (cheap:
+// it only compares a transform) and re-apply once the bar is settled.
+static void StartWatchdog(void) {
+    [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *timer) {
+        if (!gRound) return;
+        if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+        UITabBar *tb = gLastTabBar;
+        if (!tb) return;
+        UIView *mini = objc_getAssociatedObject(tb, kMini);
+        if (!mini || !mini.window || mini.hidden || mini.alpha < 0.01) return;
+        if (mini.layer.animationKeys.count) return; // let Music's animation finish first
+        if (!objc_getAssociatedObject(mini, kStyled)) return;
+        @try {
+            CGFloat r = mini.bounds.size.height / 2;
+            if (mini.layer.cornerRadius != r) mini.layer.cornerRadius = r;
+            ApplyPillTransform(mini);
+        } @catch (__unused id e) {}
+    }];
+}
+
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
     if (![bid isEqualToString:@"com.apple.Music"]) return;
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     %init;
+    dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); });
 }
