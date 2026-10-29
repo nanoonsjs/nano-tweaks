@@ -1,4 +1,8 @@
-// Control26 0.3.4 - made by nano
+// Control26 0.3.5 - made by nano
+// 0.3.5: smoother glide; expanded player hides Apple's route buttons by
+//        position (works when the route shows a Bluetooth speaker icon), AirPlay
+//        capsule anchored to the volume slider under the controls; star next
+//        to back on the lock screen player too.
 // 0.3.4: iOS 26 slider feel: the fill glides toward the finger every frame
 //        (smoothed, ~0.1s) instead of snapping, and a flick carries on a bit
 //        before easing to a stop.
@@ -88,6 +92,7 @@
 #define DEBUG_TAG   0x43323632
 #define EXP_TAG     0x43323633
 #define CELL_TAG    0x43323634
+#define LOCK_TAG    0x43323636
 #define CONN_TAG    0x43323635
 #define CARD_A      0.24
 #define CARD_PRESSED 0.34
@@ -794,6 +799,16 @@ static void StyleExpanded(UIView *module) {
     // Hide Apple's AirPlay icons (header and row) and the route name ("iPhone").
     NSMutableArray *all = [NSMutableArray array];
     CollectViews(module, 0, [UIView class], all);
+    NSArray *trow = FindTransport(module);
+    CGFloat rowY = -1, rowRight = S.width;
+    if (trow.count >= 3) {
+        UIView *nx = trow[2];
+        CGRect nr = [nx convertRect:nx.bounds toView:module];
+        rowY = CGRectGetMidY(nr); rowRight = CGRectGetMaxX(nr);
+    }
+    UILabel *titleLabel = nil;
+    for (UIView *v in all) if (!titleLabel && [v isKindOfClass:[UILabel class]] && gNPTitle.length && [((UILabel *)v).text isEqualToString:gNPTitle] && ![v isDescendantOfView:o]) titleLabel = (UILabel *)v;
+    CGFloat titleY = titleLabel ? CGRectGetMidY([titleLabel convertRect:titleLabel.bounds toView:module]) : -1;
     UIView *volume = nil;
     for (UIView *v in all) {
         if ([v isDescendantOfView:o]) continue;
@@ -802,10 +817,19 @@ static void StyleExpanded(UIView *module) {
             if (v.bounds.size.width < S.width * 0.6) HideMusic(v);
             continue;
         }
-        // Lowest wide slider = volume.
-        if ([n containsString:@"Slider"] && v.bounds.size.width > S.width * 0.5 && !v.hidden) {
+        // Route buttons by position (their icon becomes a speaker on Bluetooth):
+        // a small control right of the forward button, or at the end of the title row.
+        if ([v isKindOfClass:[UIControl class]] && ![v isKindOfClass:[UISlider class]] && v.bounds.size.width < 70 && ![n containsString:@"Slider"]) {
             CGRect r = [v convertRect:v.bounds toView:module];
-            if (!volume || CGRectGetMidY(r) > CGRectGetMidY([volume convertRect:volume.bounds toView:module])) volume = v;
+            BOOL rightOfRow = rowY > 0 && fabs(CGRectGetMidY(r) - rowY) < 22 && CGRectGetMinX(r) > rowRight + 4;
+            BOOL titleEnd = titleY > 0 && fabs(CGRectGetMidY(r) - titleY) < 26 && CGRectGetMidX(r) > S.width * 0.72;
+            if (rightOfRow || titleEnd) { HideMusic(v); continue; }
+        }
+        // Volume: the first wide slider below the playback buttons.
+        if ([n containsString:@"Slider"] && v.bounds.size.width > S.width * 0.5 && !v.hidden && v.alpha > 0.01) {
+            CGRect r = [v convertRect:v.bounds toView:module];
+            if (rowY > 0 && CGRectGetMidY(r) < rowY) continue;
+            if (!volume || CGRectGetMidY(r) < CGRectGetMidY([volume convertRect:volume.bounds toView:module])) volume = v;
         }
     }
 
@@ -1203,7 +1227,7 @@ static void StyleSlider(UIView *slider);
 - (void)step:(CADisplayLink *)l {
     CGFloat dt = l.targetTimestamp - l.timestamp;
     if (dt <= 0 || dt > 0.05) dt = 1.0 / 60;
-    float a = 1 - expf(-(float)dt * 22);   // ~0.1s to catch up
+    float a = 1 - expf(-(float)dt * 17);   // ~0.13s to catch up: smooth, still responsive
     for (C26Glide *g in [gGlides allObjects]) {
         UIView *s = g.slider;
         if (!s) { [gGlides removeObject:g]; continue; }
@@ -1292,7 +1316,7 @@ static void GlideTo(UIView *slider, float target) {
             C26Glide *gl = GlideFor(v);
             gl.dragging = NO;
             float vy = [g velocityInView:v].y;
-            float carry = MAX(-0.18f, MIN(0.18f, -vy / H * 0.07f));
+            float carry = MAX(-0.2f, MIN(0.2f, -vy / H * 0.085f));
             GlideTo(v, gl.target + carry);
         }
         ReleaseStretch(v, [g velocityInView:v].y);
@@ -2043,12 +2067,59 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.3.4 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.3.5 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
     SetFrame(l, CGRectMake(12, 40, width, s.height + 6));
     [w bringSubviewToFront:l];
+}
+
+#pragma mark - lock screen star
+
+static BOOL InLockScreen(UIView *v) {
+    int d = 0;
+    for (UIView *p = v; p && d < 40; p = p.superview, d++) {
+        NSString *n = NSStringFromClass([p class]);
+        if ([n hasPrefix:@"CS"] || [n containsString:@"CoverSheet"] || [n containsString:@"DashBoard"]) return YES;
+    }
+    return NO;
+}
+
+// iOS 26 lock screen player: a star (Love) right next to the back button.
+static void StyleLockStar(UIView *m) {
+    C26PassView *o = (C26PassView *)[m viewWithTag:LOCK_TAG];
+    if (o.superview != m) o = nil;
+    if (!gEnabled || !gMusic) { [o removeFromSuperview]; return; }
+    // The lock screen can stay up a long time: ask for song info only every few seconds.
+    static CFTimeInterval lastFetch;
+    if (CACurrentMediaTime() - lastFetch > 3) { lastFetch = CACurrentMediaTime(); FetchNowPlaying(); }
+    NSArray *tr = FindTransport(m);
+    if (!o) {
+        o = [C26PassView new];
+        o.tag = LOCK_TAG;
+        UIButton *star = [UIButton buttonWithType:UIButtonTypeCustom];
+        star.tag = 24;
+        star.tintColor = [UIColor colorWithWhite:1 alpha:0.75];
+        [star addTarget:[C26Expanded shared] action:@selector(star:) forControlEvents:UIControlEventTouchUpInside];
+        [o addSubview:star];
+        [m addSubview:o];
+    }
+    [m bringSubviewToFront:o];
+    SetFrame(o, m.bounds);
+    UIButton *star = (UIButton *)[o viewWithTag:24];
+    if (tr.count < 3 || ![gNPApp isEqualToString:@"com.apple.Music"]) { star.hidden = YES; return; }
+    UIView *a = tr[0], *b = tr[1];
+    CGPoint pa = [a.superview convertPoint:a.center toView:m], pb = [b.superview convertPoint:b.center toView:m];
+    CGFloat gap = MAX(pb.x - pa.x, 40), d = 44;
+    SetFrame(star, CGRectMake(round(pa.x - gap - d / 2), round(pa.y - d / 2), d, d));
+    star.hidden = NO;
+    BOOL liked = gNPLiked ? gNPLiked.boolValue : (gNPTitle && [gLikedLocally isEqualToString:gNPTitle]);
+    NSString *sym = liked ? @"star.fill" : @"star";
+    if (![objc_getAssociatedObject(star, kLastValue) isEqual:sym]) {
+        objc_setAssociatedObject(star, kLastValue, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [star setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
+    }
 }
 
 #pragma mark - tick
@@ -2057,6 +2128,11 @@ static void Tick(void) {
     BOOL anyVisible = NO;
     UIWindow *win = nil;
     for (UIView *m in [gMediaViews allObjects]) {
+        if (m.window && !InControlCenter(m) && InLockScreen(m) && !m.hidden) {
+            anyVisible = YES;
+            @try { StyleLockStar(m); } @catch (__unused id e) {}
+            continue;
+        }
         if (!m.window || !InControlCenter(m)) continue;
         anyVisible = YES; win = m.window;
         @try { StyleModule(m); } @catch (__unused id e) {}
