@@ -1,4 +1,8 @@
-// Control26 0.1.1 - made by nano
+// Control26 0.1.2 - made by nano
+// 0.1.2: real AirPlay picker in the round button (AVRoutePickerView) and the
+//        small original fully hidden; Apple's gray slider icons fully hidden;
+//        transport row found reliably and placed like iOS 26; brightness
+//        slider tracks your finger directly (1:1, every touch update).
 // 0.1.1: song info + artwork from MediaRemote ("Not Playing" when idle), round
 //        AirPlay finds Apple's button by position too, transport buttons pulled
 //        together near the bottom, smoother stretch / spring / icon changes.
@@ -18,6 +22,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
+#import <AVKit/AVKit.h>
 
 @interface MRUNowPlayingView : UIView @end
 @interface CCUIBaseSliderView : UIView @end
@@ -104,7 +109,7 @@ static void ShowOriginal(UIView *v) {
     v.alpha = 1;
 }
 
-static void Forward(UIControl *c) {
+__attribute__((unused)) static void Forward(UIControl *c) {
     if (!c) return;
     UIControlEvents ev = c.allControlEvents;
     if (ev & UIControlEventTouchUpInside) [c sendActionsForControlEvents:UIControlEventTouchUpInside];
@@ -173,40 +178,55 @@ static void CollectViews(UIView *v, int depth, Class cls, NSMutableArray *out) {
     }
 }
 
-// Apple's AirPlay button: by name, by accessibility label, or by position
-// (the control in the top-right corner of the module).
-static UIView *FindRouteButton(UIView *module) {
-    NSMutableArray *all = [NSMutableArray array];
+// Everything Apple draws in the module's top-right corner (the small AirPlay
+// icon and its label). 0.1.1 only found MPRouteLabel, so the icon stayed.
+static NSArray *TopRightViews(UIView *module) {
+    NSMutableArray *all = [NSMutableArray array], *out = [NSMutableArray array];
     CollectViews(module, 0, [UIView class], all);
     CGSize S = module.bounds.size;
-    UIView *byPos = nil;
     for (UIView *v in all) {
-        if (v.hidden || v.bounds.size.width < 8) continue;
-        NSString *n = NSStringFromClass([v class]);
-        NSString *ax = v.accessibilityLabel.lowercaseString ?: @"";
-        if ([n containsString:@"Route"] || [n containsString:@"Routing"] || [ax containsString:@"airplay"]) return v;
+        if (v.bounds.size.width < 4 || v.bounds.size.width > S.width * 0.4) continue;
         CGRect r = [v convertRect:v.bounds toView:module];
-        if (!byPos && [v isKindOfClass:[UIControl class]] && CGRectGetMidX(r) > S.width * 0.72 && CGRectGetMidY(r) < S.height * 0.3) byPos = v;
+        NSString *n = NSStringFromClass([v class]);
+        BOOL corner = CGRectGetMidX(r) > S.width * 0.68 && CGRectGetMidY(r) < S.height * 0.32;
+        BOOL routey = [n containsString:@"Route"] || [n containsString:@"Routing"] || [v.accessibilityLabel.lowercaseString containsString:@"airplay"];
+        if (corner || routey) [out addObject:v];
     }
-    return byPos;
+    return out;
 }
 
-// Apple's previous / play / next, left to right.
-static NSArray *FindTransport(UIView *module, UIView *route) {
+// Apple's previous / play / next: the three visible buttons in the bottom row.
+static NSArray *FindTransport(UIView *module) {
     NSMutableArray *ctls = [NSMutableArray array];
     CollectViews(module, 0, [UIControl class], ctls);
     CGSize S = module.bounds.size;
-    NSMutableArray *out = [NSMutableArray array];
+    NSMutableArray *row = [NSMutableArray array];
     for (UIControl *c in ctls) {
-        if (c == route || [route isDescendantOfView:c] || [c isDescendantOfView:route]) continue;
+        if (c.hidden || c.alpha < 0.01 || c.bounds.size.width < 16) continue;
+        if ([c isKindOfClass:[UISlider class]]) continue;
         CGPoint p = [c.superview convertPoint:c.center toView:module];
-        if (p.y > S.height * 0.45 && c.bounds.size.width >= 16 && c.bounds.size.width <= S.width * 0.45) [out addObject:c];
+        if (p.y < S.height * 0.45 || CGRectGetMidX([c convertRect:c.bounds toView:module]) > S.width) continue;
+        // Skip containers that hold other controls.
+        BOOL container = NO;
+        for (UIControl *o in ctls) if (o != c && [o isDescendantOfView:c]) { container = YES; break; }
+        if (!container) [row addObject:c];
     }
-    [out sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+    if (row.count < 3) return nil;
+    // Keep the controls on the most common row (same height ±12pt).
+    NSMutableArray *best = nil;
+    for (UIControl *a in row) {
+        CGFloat ya = [a.superview convertPoint:a.center toView:module].y;
+        NSMutableArray *same = [NSMutableArray array];
+        for (UIControl *b in row) if (fabs([b.superview convertPoint:b.center toView:module].y - ya) < 12) [same addObject:b];
+        if (same.count > best.count) best = same;
+    }
+    [best sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
         CGFloat x = [a.superview convertPoint:a.center toView:module].x, y = [b.superview convertPoint:b.center toView:module].x;
         return x < y ? NSOrderedAscending : (x > y ? NSOrderedDescending : NSOrderedSame);
     }];
-    return out.count == 3 ? out : nil;
+    if (best.count < 3) return nil;
+    NSUInteger mid = best.count / 2;
+    return @[best[mid - 1], best[mid], best[mid + 1]];
 }
 
 static const void *kOurTransform = &kOurTransform;
@@ -222,20 +242,6 @@ static void ClearOurTransform(UIView *v) {
     if (last && CGAffineTransformEqualToTransform(v.transform, last.CGAffineTransformValue)) v.transform = CGAffineTransformIdentity;
     objc_setAssociatedObject(v, kOurTransform, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
-
-@interface C26Target : NSObject
-+ (instancetype)shared;
-@property (nonatomic, weak) UIView *route;
-@end
-@implementation C26Target
-+ (instancetype)shared { static C26Target *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26Target new]; }); return t; }
-- (void)airplay:(UIButton *)b {
-    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-    UIView *r = self.route;
-    if ([r isKindOfClass:[UIControl class]] && ((UIControl *)r).allControlEvents) Forward((UIControl *)r);
-    else [r accessibilityActivate];
-}
-@end
 
 static C26PassView *BuildOverlay(UIView *module) {
     C26PassView *o = [C26PassView new];
@@ -256,11 +262,12 @@ static C26PassView *BuildOverlay(UIView *module) {
     glass.userInteractionEnabled = NO;
     [o addSubview:glass];
 
-    UIButton *air = [UIButton buttonWithType:UIButtonTypeCustom];
+    // Apple's own AirPlay picker button: tapping it opens the real AirPlay menu.
+    AVRoutePickerView *air = [AVRoutePickerView new];
     air.tag = 3;
-    [air setImage:[UIImage systemImageNamed:@"airplayaudio" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
     air.tintColor = UIColor.whiteColor;
-    [air addTarget:[C26Target shared] action:@selector(airplay:) forControlEvents:UIControlEventTouchUpInside];
+    air.activeTintColor = [UIColor colorWithRed:0.25 green:0.55 blue:1 alpha:1];
+    air.prioritizesVideoDevices = NO;
     [o addSubview:air];
 
     UILabel *title = [UILabel new];
@@ -293,9 +300,8 @@ static void UnstyleModule(UIView *module) {
     NSMutableArray *labels = [NSMutableArray array];
     CollectViews(module, 0, [UILabel class], labels);
     for (UILabel *l in labels) ShowOriginal(l);
-    UIView *route = FindRouteButton(module);
-    ShowOriginal(route);
-    for (UIView *b in FindTransport(module, route)) ClearOurTransform(b);
+    for (UIView *v in TopRightViews(module)) ShowOriginal(v);
+    for (UIView *b in FindTransport(module)) ClearOurTransform(b);
 }
 
 static void StyleModule(UIView *module) {
@@ -305,8 +311,6 @@ static void StyleModule(UIView *module) {
     if (!gEnabled || !gMusic) { UnstyleModule(module); return; }
 
     FetchNowPlaying();
-    UIView *route = FindRouteButton(module);
-    [C26Target shared].route = route;
 
     C26PassView *o = (C26PassView *)[module viewWithTag:OVERLAY_TAG];
     if (o.superview != module) o = BuildOverlay(module);
@@ -316,7 +320,7 @@ static void StyleModule(UIView *module) {
     CGFloat s = S.width / 163.0, m = 14 * s;
     UIImageView *art = (UIImageView *)[o viewWithTag:1];
     UIView *glass = [o viewWithTag:2];
-    UIButton *air = (UIButton *)[o viewWithTag:3];
+    UIView *air = [o viewWithTag:3];
     UILabel *title = (UILabel *)[o viewWithTag:4], *artist = (UILabel *)[o viewWithTag:5];
 
     CGFloat a = round(56 * s), d = round(42 * s);
@@ -325,7 +329,7 @@ static void StyleModule(UIView *module) {
     SetFrame(glass, CGRectMake(S.width - m - d, m, d, d));
     SetFrame(air, glass.frame);
     glass.layer.cornerRadius = d / 2;
-    air.hidden = glass.hidden = route == nil;
+    air.hidden = glass.hidden = NO;
 
     UIFont *tf = [UIFont systemFontOfSize:16 * s weight:UIFontWeightSemibold];
     UIFont *af = [UIFont systemFontOfSize:16 * s weight:UIFontWeightRegular];
@@ -348,11 +352,12 @@ static void StyleModule(UIView *module) {
     }
 
     // Apple's previous / play / next: closer together, centered, near the bottom.
-    NSArray *tr = FindTransport(module, route);
+    // Like iOS 26: tight, centered, low in the module.
+    NSArray *tr = FindTransport(module);
     for (NSUInteger i = 0; i < tr.count; i++) {
         UIView *b = tr[i];
         CGPoint c = [b.superview convertPoint:b.center toView:module];
-        CGPoint target = CGPointMake(S.width / 2 + ((CGFloat)i - 1) * 46 * s, S.height * 0.83);
+        CGPoint target = CGPointMake(S.width / 2 + ((CGFloat)i - 1) * 44 * s, S.height * 0.855);
         SetOurTransform(b, CGAffineTransformMakeTranslation(round(target.x - c.x), round(target.y - c.y)));
     }
 
@@ -363,10 +368,11 @@ static void StyleModule(UIView *module) {
         CGRect r = [l convertRect:l.bounds toView:module];
         if (CGRectGetMidY(r) < S.height * 0.75) HideOriginal(l);
     }
-    if (route) HideOriginal(route);
-    gMusicDebug = [NSString stringWithFormat:@"%@ %.0fx%.0f route=%@ transport=%lu np=%@ art=%d",
+    NSArray *corner = TopRightViews(module);
+    for (UIView *v in corner) HideOriginal(v);
+    gMusicDebug = [NSString stringWithFormat:@"%@ %.0fx%.0f hidden-corner=%lu transport=%lu np=%@ art=%d",
                    NSStringFromClass([module class]), S.width, S.height,
-                   route ? NSStringFromClass([route class]) : @"none", (unsigned long)tr.count,
+                   (unsigned long)corner.count, (unsigned long)tr.count,
                    gNPTitle ?: @"(none)", gArtwork != nil];
 }
 
@@ -396,6 +402,22 @@ static UIView *AppleGlyph(UIView *slider) {
     return nil;
 }
 
+// Every glyph Apple draws in the slider. There are two (a white one over the
+// dark part and a gray one over the white fill), which is why 0.1.1 still
+// showed a gray icon behind ours.
+static NSArray *AllAppleGlyphs(UIView *slider) {
+    NSMutableArray *all = [NSMutableArray array], *out = [NSMutableArray array];
+    CollectViews(slider, 0, [UIView class], all);
+    for (UIView *v in all) {
+        if (v.tag == GLYPH_TAG) continue;
+        NSString *n = NSStringFromClass([v class]);
+        BOOL glyphish = [n containsString:@"CAPackage"] || [n containsString:@"Glyph"] ||
+                        ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image);
+        if (glyphish && v.bounds.size.width <= 80 && v.bounds.size.height <= 80) [out addObject:v];
+    }
+    return out;
+}
+
 static NSString *GlyphSymbol(int kind, float v) {
     if (kind == 1) return v < 0.5 ? @"sun.min.fill" : @"sun.max.fill";
     if (v <= 0.001) return @"speaker.slash.fill";
@@ -411,7 +433,7 @@ static void StyleSlider(UIView *slider) {
     if (mine.superview != slider) mine = nil;
     if (!gEnabled || !gColors || !kind || !apple) {
         [mine removeFromSuperview];
-        ShowOriginal(apple);
+        for (UIView *g in AllAppleGlyphs(slider)) ShowOriginal(g);
         return;
     }
     if (!mine) {
@@ -437,53 +459,110 @@ static void StyleSlider(UIView *slider) {
     }
     UIColor *c = kind == 1 ? SUN_COLOR : VOLUME_COLOR;
     if (![mine.tintColor isEqual:c]) mine.tintColor = c;
-    HideOriginal(apple);
+    for (UIView *g in AllAppleGlyphs(slider)) HideOriginal(g);
 }
 
-// Bounce: stretch the slider when the finger goes past its top/bottom.
+#pragma mark - direct brightness tracking + bounce
+
+static const void *kDirect = &kDirect;      // @YES when we drive the slider ourselves
+static const void *kStartValue = &kStartValue;
+static const void *kApplePan = &kApplePan;
+
+// Brightness: if the slider is a UIControl that reports value changes, turn
+// off Apple's drag handler and track the finger ourselves, 1:1 on every
+// touch update. Otherwise leave Apple's tracking alone.
+static void SetupDirectTracking(UIView *slider) {
+    if (objc_getAssociatedObject(slider, kDirect)) return;
+    if (SliderKind(slider) != 1 || ![slider isKindOfClass:[UIControl class]]) return;
+    if (!(((UIControl *)slider).allControlEvents & UIControlEventValueChanged)) return;
+    if (SliderValue(slider) < 0) return;
+    id applePan = KV(slider, @"valueChangeGestureRecognizer");
+    if (![applePan isKindOfClass:[UIGestureRecognizer class]]) return;
+    ((UIGestureRecognizer *)applePan).enabled = NO;
+    objc_setAssociatedObject(slider, kApplePan, applePan, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(slider, kDirect, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void TeardownDirectTracking(UIView *slider) {
+    UIGestureRecognizer *applePan = objc_getAssociatedObject(slider, kApplePan);
+    applePan.enabled = YES;
+    objc_setAssociatedObject(slider, kDirect, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(slider, kApplePan, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void SetSliderValue(UIView *slider, float v) {
+    @try { [slider setValue:@(v) forKey:@"value"]; } @catch (__unused id e) { return; }
+    [(UIControl *)slider sendActionsForControlEvents:UIControlEventValueChanged];
+}
+
+static void IconPop(UIView *v) {
+    UIView *glyph = [v viewWithTag:GLYPH_TAG] ?: AppleGlyph(v);
+    [UIView animateWithDuration:0.14 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
+                     animations:^{ glyph.transform = CGAffineTransformMakeScale(1.18, 1.18); }
+                     completion:^(BOOL done) {
+        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction
+                         animations:^{ glyph.transform = CGAffineTransformIdentity; } completion:nil];
+    }];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+}
+
+// Stretch for `over` points past an end (dir 1 = top, -1 = bottom), rubber-band style.
+static void ApplyStretch(UIView *v, CGFloat over, int dir) {
+    CGFloat H = v.bounds.size.height;
+    if (!gBounce || H < 1 || over <= 0) { if (!CGAffineTransformIsIdentity(v.transform)) v.transform = CGAffineTransformIdentity; return; }
+    CGFloat stretch = MIN((1.0 - 1.0 / (over * 0.5 / H + 1.0)) * H, H * 0.12);
+    CGFloat r = stretch / H;
+    v.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -dir * stretch / 2), 1.0 - r * 0.35, 1.0 + r);
+}
+
 @interface C26Bouncer : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 @end
 @implementation C26Bouncer
 + (instancetype)shared { static C26Bouncer *b; static dispatch_once_t o; dispatch_once(&o, ^{ b = [C26Bouncer new]; }); return b; }
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b {
+    // When we drive the slider, we own the drag; otherwise ride along with Apple's.
+    return objc_getAssociatedObject(a.view, kDirect) == nil;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)b {
+    // Control Center's own scrolling waits for our slider drag.
+    return objc_getAssociatedObject(a.view, kDirect) != nil && b.view != a.view && [a.view isDescendantOfView:b.view];
+}
 - (void)pan:(UIPanGestureRecognizer *)g {
     UIView *v = g.view;
-    if (!v || !v.superview) return;
-    if (!gEnabled || !gBounce) { if (!CGAffineTransformIsIdentity(v.transform)) v.transform = CGAffineTransformIdentity; return; }
-    if (g.state == UIGestureRecognizerStateChanged) {
-        CGFloat H = v.bounds.size.height;
-        if (H < 1) return;
-        CGFloat top = v.center.y - H / 2, bottom = v.center.y + H / 2;
-        CGFloat y = [g locationInView:v.superview].y;
-        CGFloat over = 0; int dir = 0;
-        if (y < top) { over = top - y; dir = 1; } else if (y > bottom) { over = y - bottom; dir = -1; }
-        // Rubber band: the further past the end, the harder it gets to stretch.
-        CGFloat stretch = over > 0 ? MIN((1.0 - 1.0 / (over * 0.5 / H + 1.0)) * H, H * 0.12) : 0;
-        CGFloat r = stretch / H;
-        CGAffineTransform t = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -dir * stretch / 2), 1.0 - r * 0.35, 1.0 + r);
-        // Ease into each new stretch instead of jumping touch-to-touch.
-        [UIView animateWithDuration:0.08 delay:0
-                            options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
-                         animations:^{ v.transform = t; } completion:nil];
+    if (!v || !v.superview || !gEnabled) return;
+    BOOL direct = objc_getAssociatedObject(v, kDirect) != nil;
+    CGFloat H = v.bounds.size.height;
+    if (H < 1) return;
 
-        // Icon pop when the value reaches the very top or bottom.
-        float val = SliderValue(v);
-        NSNumber *last = objc_getAssociatedObject(v, kBounce);
-        int edge = val >= 0.999 ? 1 : (val <= 0.001 && val >= 0 ? -1 : 0);
-        if (edge && (!last || last.intValue != edge)) {
-            UIView *glyph = [v viewWithTag:GLYPH_TAG] ?: AppleGlyph(v);
-            [UIView animateWithDuration:0.14 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
-                             animations:^{ glyph.transform = CGAffineTransformMakeScale(1.18, 1.18); }
-                             completion:^(BOOL done) {
-                [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction
-                                 animations:^{ glyph.transform = CGAffineTransformIdentity; } completion:nil];
-            }];
-            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    if (g.state == UIGestureRecognizerStateBegan) {
+        objc_setAssociatedObject(v, kStartValue, @(SliderValue(v)), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(v, kBounce, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
+        CGFloat over = 0; int dir = 0; float val;
+        if (direct) {
+            // 1:1: the fill moves exactly as far as the finger, every update.
+            float v0 = [objc_getAssociatedObject(v, kStartValue) floatValue];
+            float raw = v0 - [g translationInView:v].y / H;
+            val = MAX(0, MIN(1, raw));
+            if (fabsf(val - SliderValue(v)) > 0.0001) { SetSliderValue(v, val); StyleSlider(v); }
+            if (raw > 1) { over = (raw - 1) * H; dir = 1; } else if (raw < 0) { over = -raw * H; dir = -1; }
+        } else {
+            CGFloat top = v.center.y - H / 2, bottom = v.center.y + H / 2;
+            CGFloat y = [g locationInView:v.superview].y;
+            if (y < top) { over = top - y; dir = 1; } else if (y > bottom) { over = y - bottom; dir = -1; }
+            val = SliderValue(v);
         }
+        ApplyStretch(v, over, dir);
+
+        int edge = val >= 0.999 ? 1 : (val <= 0.001 && val >= 0 ? -1 : 0);
+        NSNumber *last = objc_getAssociatedObject(v, kBounce);
+        if (edge && last && last.intValue != edge) IconPop(v);
         objc_setAssociatedObject(v, kBounce, @(edge), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } else if (g.state >= UIGestureRecognizerStateEnded) {
         objc_setAssociatedObject(v, kBounce, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (direct) SetSliderValue(v, MAX(0, MIN(1, SliderValue(v))));
         if (!CGAffineTransformIsIdentity(v.transform))
             [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0
                                 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState
@@ -494,6 +573,7 @@ static void StyleSlider(UIView *slider) {
 
 static const void *kPanAdded = &kPanAdded;
 static void AddBounce(UIView *slider) {
+    if (gEnabled) SetupDirectTracking(slider); else TeardownDirectTracking(slider);
     if (objc_getAssociatedObject(slider, kPanAdded)) return;
     objc_setAssociatedObject(slider, kPanAdded, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[C26Bouncer shared] action:@selector(pan:)];
@@ -521,7 +601,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.1.1 debug\n music: %@\n sliders: %@", gMusicDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.1.2 debug\n music: %@\n sliders: %@", gMusicDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -543,9 +623,9 @@ static void Tick(void) {
     for (UIView *s in [gSliders allObjects]) {
         if (!s.window || !InControlCenter(s)) continue;
         anyVisible = YES; win = s.window;
-        @try { StyleSlider(s); if (gEnabled && gBounce) AddBounce(s); } @catch (__unused id e) {}
-        if (gDebug) [dbg addObject:[NSString stringWithFormat:@"%@ kind=%d v=%.2f glyph=%@", NSStringFromClass([s class]), SliderKind(s), SliderValue(s),
-                                    AppleGlyph(s) ? NSStringFromClass([AppleGlyph(s) class]) : @"none"]];
+        @try { StyleSlider(s); AddBounce(s); } @catch (__unused id e) {}
+        if (gDebug) [dbg addObject:[NSString stringWithFormat:@"%@ kind=%d v=%.2f glyphs=%lu track=%@", NSStringFromClass([s class]), SliderKind(s), SliderValue(s),
+                                    (unsigned long)AllAppleGlyphs(s).count, objc_getAssociatedObject(s, kDirect) ? @"direct" : @"apple"]];
     }
     if (gDebug) gSliderDebug = [dbg componentsJoinedByString:@"\n  "];
     if (win) UpdateDebug(win);
@@ -596,6 +676,13 @@ static void Tick(void) {
 
 // Keep the views we replaced hidden if Apple tries to show them again.
 %hook UILabel
+- (void)setAlpha:(CGFloat)a {
+    if (a > 0 && objc_getAssociatedObject(self, kHidByUs)) { %orig(0); return; }
+    %orig;
+}
+%end
+
+%hook UIImageView
 - (void)setAlpha:(CGFloat)a {
     if (a > 0 && objc_getAssociatedObject(self, kHidByUs)) { %orig(0); return; }
     %orig;
