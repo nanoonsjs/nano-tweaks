@@ -1,4 +1,8 @@
-// Control26 0.1.5 - made by nano
+// Control26 0.1.6 - made by nano
+// 0.1.6: spring physics (per screen refresh) for the jelly buttons and slider
+//        stretch, favorite star only for Apple Music + burst animation, smaller
+//        AirPlay capsule tucked under the volume slider, debug shows Music's
+//        supported commands so the favorite command can be confirmed.
 // 0.1.5: every view hidden in the music module is tracked and restored when it
 //        switches between small and expanded (fixes missing back button and the
 //        doubled AirPlay icons). Expanded player gets an "AirPlay" capsule under
@@ -176,6 +180,8 @@ static CFTimeInterval gLastFetch;
 typedef Boolean (*MRSendFn)(int, CFDictionaryRef);
 typedef void (*MRIsPlayingFn)(dispatch_queue_t, void (^)(Boolean));
 static BOOL gIsPlaying;
+static NSString *gNPApp;           // bundle id of the app that is playing
+static NSString *gCmdDebug = @"-";
 static NSNumber *gNPLiked;   // from now-playing info, when available
 static NSString *gLikedLocally;
 static void *MediaRemote(void) {
@@ -188,6 +194,32 @@ static void SendMR(int cmd) {
     MRSendFn send = MediaRemote() ? (MRSendFn)dlsym(MediaRemote(), "MRMediaRemoteSendCommand") : NULL;
     if (send) send(cmd, NULL);
 }
+typedef void (*MRAppIDFn)(dispatch_queue_t, void (^)(CFStringRef));
+typedef CFTypeRef (*MROriginFn)(void);
+typedef void (*MRCmdsFn)(CFTypeRef, dispatch_queue_t, void (^)(CFArrayRef));
+typedef int (*MRCmdIDFn)(CFTypeRef);
+typedef Boolean (*MRCmdEnabledFn)(CFTypeRef);
+
+static void FetchAppAndCommands(void) {
+    if (!MediaRemote()) return;
+    MRAppIDFn appID = (MRAppIDFn)dlsym(MediaRemote(), "MRMediaRemoteGetNowPlayingApplicationDisplayID");
+    if (appID) appID(dispatch_get_main_queue(), ^(CFStringRef bid) { gNPApp = bid ? [(__bridge NSString *)bid copy] : nil; });
+    if (!gDebug) return;
+    MROriginFn origin = (MROriginFn)dlsym(MediaRemote(), "MRMediaRemoteGetLocalOrigin");
+    MRCmdsFn cmds = (MRCmdsFn)dlsym(MediaRemote(), "MRMediaRemoteGetSupportedCommandsForOrigin");
+    MRCmdIDFn cmdID = (MRCmdIDFn)dlsym(MediaRemote(), "MRMediaRemoteCommandInfoGetCommand");
+    MRCmdEnabledFn cmdOn = (MRCmdEnabledFn)dlsym(MediaRemote(), "MRMediaRemoteCommandInfoGetEnabled");
+    if (!origin || !cmds || !cmdID) { gCmdDebug = @"(command list not available)"; return; }
+    cmds(origin(), dispatch_get_main_queue(), ^(CFArrayRef list) {
+        NSMutableArray *ids = [NSMutableArray array];
+        for (id info in (__bridge NSArray *)list) {
+            if (cmdOn && !cmdOn((__bridge CFTypeRef)info)) continue;
+            [ids addObject:@(cmdID((__bridge CFTypeRef)info))];
+        }
+        gCmdDebug = [NSString stringWithFormat:@"app=%@ [%@]", gNPApp ?: @"?", [ids componentsJoinedByString:@","]];
+    });
+}
+
 static void FetchIsPlaying(void) {
     MRIsPlayingFn f = MediaRemote() ? (MRIsPlayingFn)dlsym(MediaRemote(), "MRMediaRemoteGetNowPlayingApplicationIsPlaying") : NULL;
     if (f) f(dispatch_get_main_queue(), ^(Boolean p) { gIsPlaying = p; });
@@ -204,6 +236,7 @@ static void FetchNowPlaying(void) {
     if (!getInfo || now - gLastFetch < 0.9) return;
     gLastFetch = now;
     FetchIsPlaying();
+    FetchAppAndCommands();
     getInfo(dispatch_get_main_queue(), ^(CFDictionaryRef info) {
         NSDictionary *d = (__bridge NSDictionary *)info;
         NSString *title = d[@"kMRMediaRemoteNowPlayingInfoTitle"];
@@ -212,6 +245,16 @@ static void FetchNowPlaying(void) {
         gNPTitle = [title isKindOfClass:[NSString class]] && title.length ? title : nil;
         gNPArtist = [artist isKindOfClass:[NSString class]] ? artist : nil;
         id liked = d[@"kMRMediaRemoteNowPlayingInfoIsLiked"];
+        if (gDebug) {
+            NSMutableArray *k = [NSMutableArray array];
+            for (NSString *key in d) {
+                NSString *lk = key.lowercaseString;
+                if ([lk containsString:@"like"] || [lk containsString:@"love"] || [lk containsString:@"favor"] ||
+                    [lk containsString:@"rating"] || [lk containsString:@"wish"] || [lk containsString:@"library"])
+                    [k addObject:[NSString stringWithFormat:@"%@=%@", [key stringByReplacingOccurrencesOfString:@"kMRMediaRemoteNowPlayingInfo" withString:@""], d[key]]];
+            }
+            if (k.count) gCmdDebug = [gCmdDebug stringByAppendingFormat:@" keys:%@", [k componentsJoinedByString:@","]];
+        }
         gNPLiked = [liked respondsToSelector:@selector(boolValue)] ? @([liked boolValue]) : nil;
         if (!gNPTitle) { gArtwork = nil; gArtworkData = nil; }
         else if ([data isKindOfClass:[NSData class]] && data.length && ![data isEqualToData:gArtworkData]) {
@@ -436,16 +479,45 @@ static void SwitchMode(UIView *module, NSString *mode) {
     [(UIButton *)btns.firstObject sendActionsForControlEvents:UIControlEventTouchUpInside];
 }
 - (void)star:(UIButton *)b {
-    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     if (!gNPTitle) return;
     BOOL liked = gNPLiked ? gNPLiked.boolValue : [gLikedLocally isEqualToString:gNPTitle];
-    if (liked) return;  // favoriting only; un-favorite from the Music app
+    if (liked) {
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        return;  // favoriting only; un-favorite from the Music app
+    }
     SendMR(0x6A);       // "like track" (Favorite)
     gLikedLocally = gNPTitle;
-    [UIView animateWithDuration:0.12 animations:^{ b.transform = CGAffineTransformMakeScale(1.3, 1.3); } completion:^(BOOL d) {
-        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:0
-                         animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
-    }];
+    [b setImage:[UIImage systemImageNamed:@"star.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
+    objc_setAssociatedObject(b, kLastValue, @"star.fill", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [[UINotificationFeedbackGenerator new] notificationOccurred:UINotificationFeedbackTypeSuccess];
+
+    // Squish, then pop back with a spring.
+    b.transform = CGAffineTransformMakeScale(0.55, 0.55);
+    [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.42 initialSpringVelocity:10
+                        options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
+
+    // Burst of little stars and sparkles flying out.
+    UIView *host = b.superview;
+    CGPoint c = b.center;
+    for (int i = 0; i < 10; i++) {
+        UIImageView *p = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:(i % 2 ? @"star.fill" : @"sparkle")
+                                                             withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:(i % 3 ? 9 : 12) weight:UIImageSymbolWeightBold]]];
+        p.tintColor = i % 3 ? UIColor.whiteColor : [UIColor colorWithRed:1 green:0.86 blue:0.35 alpha:1];
+        p.center = c;
+        p.userInteractionEnabled = NO;
+        p.transform = CGAffineTransformMakeScale(0.2, 0.2);
+        [host addSubview:p];
+        CGFloat ang = i * (M_PI * 2 / 10) + (i % 2 ? 0.2 : -0.1);
+        CGFloat dist = 30 + (i % 3) * 9;
+        [UIView animateWithDuration:0.6 delay:0.03 * (i % 3) options:UIViewAnimationOptionCurveEaseOut animations:^{
+            p.center = CGPointMake(c.x + cos(ang) * dist, c.y + sin(ang) * dist);
+            p.transform = CGAffineTransformRotate(CGAffineTransformMakeScale(1.0, 1.0), ang);
+        } completion:nil];
+        [UIView animateWithDuration:0.35 delay:0.3 options:UIViewAnimationOptionCurveEaseIn animations:^{
+            p.alpha = 0;
+            p.transform = CGAffineTransformMakeScale(0.3, 0.3);
+        } completion:^(BOOL d) { [p removeFromSuperview]; }];
+    }
 }
 @end
 
@@ -471,7 +543,7 @@ static C26PassView *BuildExpandedOverlay(UIView *module) {
     l.tag = 23;
     l.text = @"AirPlay";
     l.textColor = UIColor.whiteColor;
-    l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium];
+    l.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
     [cap.contentView addSubview:l];
 
     UIButton *tap = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -522,11 +594,14 @@ static void StyleExpanded(UIView *module) {
     UIView *cap = [o viewWithTag:21];
     if (volume) {
         CGRect vr = [volume convertRect:volume.bounds toView:module];
-        CGFloat w = 118, h = 36;
-        SetFrame(cap, CGRectMake(round(S.width / 2 - w / 2), round(CGRectGetMaxY(vr) + 18), w, h));
+        // Small, and tucked right under the slider so it stays clear of
+        // anything another tweak draws further down.
+        CGFloat w = 96, h = 30;
+        CGFloat y = MIN(round(CGRectGetMaxY(vr) + 8), S.height - h - 6);
+        SetFrame(cap, CGRectMake(round(S.width / 2 - w / 2), y, w, h));
         cap.layer.cornerRadius = h / 2;
-        SetFrame([cap viewWithTag:22], CGRectMake(12, (h - 26) / 2, 26, 26));
-        SetFrame([cap viewWithTag:23], CGRectMake(42, 0, w - 50, h));
+        SetFrame([cap viewWithTag:22], CGRectMake(9, (h - 20) / 2, 20, 20));
+        SetFrame([cap viewWithTag:23], CGRectMake(33, 0, w - 39, h));
         SetFrame([cap viewWithTag:25], CGRectMake(0, 0, w, h));
         cap.hidden = NO;
     } else cap.hidden = YES;
@@ -539,7 +614,8 @@ static void StyleExpanded(UIView *module) {
         CGPoint pa = [a.superview convertPoint:a.center toView:module], pb = [b.superview convertPoint:b.center toView:module];
         CGFloat gap = MAX(pb.x - pa.x, 44), d = 44;
         SetFrame(star, CGRectMake(round(pa.x - gap - d / 2), round(pa.y - d / 2), d, d));
-        star.hidden = NO;
+        // Favorites are an Apple Music thing: no star for Spotify and others.
+        star.hidden = ![gNPApp isEqualToString:@"com.apple.Music"];
     } else star.hidden = YES;
     BOOL liked = gNPLiked ? gNPLiked.boolValue : (gNPTitle && [gLikedLocally isEqualToString:gNPTitle]);
     NSString *sym = liked ? @"star.fill" : @"star";
@@ -794,14 +870,104 @@ static UIView *SliderShell(UIView *slider) {
     return best;
 }
 
+#pragma mark - spring physics (runs every screen refresh while something moves)
+
+@interface C26Spring : NSObject
+@property (nonatomic, weak) UIView *view;
+@property (nonatomic) CGFloat x, y, sx, sy, vx, vy, vsx, vsy;  // current + velocity
+@property (nonatomic) CGFloat tx, ty, tsx, tsy;                // targets
+@property (nonatomic) CGFloat angle;                           // stretch axis
+@property (nonatomic) CGFloat k, c;                            // stiffness, damping
+@end
+@implementation C26Spring
+- (instancetype)init { if ((self = [super init])) { _sx = _sy = _tsx = _tsy = 1; _k = 320; _c = 24; } return self; }
+- (BOOL)settled {
+    return fabs(_x - _tx) < 0.02 && fabs(_y - _ty) < 0.02 && fabs(_sx - _tsx) < 0.0005 && fabs(_sy - _tsy) < 0.0005 &&
+           fabs(_vx) < 0.05 && fabs(_vy) < 0.05 && fabs(_vsx) < 0.002 && fabs(_vsy) < 0.002;
+}
+- (void)step:(CGFloat)dt {
+    int n = 4; CGFloat h = dt / n;
+    for (int i = 0; i < n; i++) {
+        _vx += (-_k * (_x - _tx) - _c * _vx) * h;   _x += _vx * h;
+        _vy += (-_k * (_y - _ty) - _c * _vy) * h;   _y += _vy * h;
+        _vsx += (-_k * (_sx - _tsx) - _c * _vsx) * h; _sx += _vsx * h;
+        _vsy += (-_k * (_sy - _tsy) - _c * _vsy) * h; _sy += _vsy * h;
+    }
+}
+- (CGAffineTransform)transform {
+    CGAffineTransform t = CGAffineTransformMakeTranslation(_x, _y);
+    t = CGAffineTransformRotate(t, _angle);
+    t = CGAffineTransformScale(t, _sx, _sy);
+    return CGAffineTransformRotate(t, -_angle);
+}
+@end
+
+static const void *kSpring = &kSpring;
+static NSHashTable *gActiveSprings;
+static CADisplayLink *gSpringLink;
+
+@interface C26SpringTicker : NSObject
++ (instancetype)shared;
+@end
+@implementation C26SpringTicker
++ (instancetype)shared { static C26SpringTicker *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26SpringTicker new]; }); return t; }
+- (void)step:(CADisplayLink *)link {
+    CGFloat dt = link.targetTimestamp - link.timestamp;
+    if (dt <= 0 || dt > 0.05) dt = 1.0 / 120.0;
+    for (C26Spring *s in [gActiveSprings allObjects]) {
+        UIView *v = s.view;
+        if (!v) { [gActiveSprings removeObject:s]; continue; }
+        [s step:dt];
+        if ([s settled]) {
+            s.x = s.tx; s.y = s.ty; s.sx = s.tsx; s.sy = s.tsy; s.vx = s.vy = s.vsx = s.vsy = 0;
+            [gActiveSprings removeObject:s];
+        }
+        v.transform = [s transform];
+    }
+    if (!gActiveSprings.count) { [gSpringLink invalidate]; gSpringLink = nil; }
+}
+@end
+
+static C26Spring *SpringFor(UIView *v) {
+    C26Spring *s = objc_getAssociatedObject(v, kSpring);
+    if (!s) { s = [C26Spring new]; s.view = v; objc_setAssociatedObject(v, kSpring, s, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    return s;
+}
+
+static void WakeSpring(C26Spring *s) {
+    if (!gActiveSprings) gActiveSprings = [NSHashTable hashTableWithOptions:NSPointerFunctionsStrongMemory];
+    [gActiveSprings addObject:s];
+    if (!gSpringLink) {
+        gSpringLink = [CADisplayLink displayLinkWithTarget:[C26SpringTicker shared] selector:@selector(step:)];
+        if (@available(iOS 15.0, *)) gSpringLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+        [gSpringLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    }
+}
+
 // Stretch for `over` points past an end (dir 1 = top, -1 = bottom), rubber-band style.
 static void ApplyStretch(UIView *slider, CGFloat over, int dir) {
     UIView *v = SliderShell(slider);
     CGFloat H = v.bounds.size.height;
-    if (!gBounce || H < 1 || over <= 0) { if (!CGAffineTransformIsIdentity(v.transform)) v.transform = CGAffineTransformIdentity; return; }
-    CGFloat stretch = MIN((1.0 - 1.0 / (over * 0.5 / H + 1.0)) * H, H * 0.12);
+    if (H < 1) return;
+    C26Spring *s = SpringFor(v);
+    CGFloat stretch = (!gBounce || over <= 0) ? 0 : MIN((1.0 - 1.0 / (over * 0.5 / H + 1.0)) * H, H * 0.12);
     CGFloat r = stretch / H;
-    v.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -dir * stretch / 2), 1.0 - r * 0.35, 1.0 + r);
+    // While the finger is down: a stiff, critically damped spring that follows it smoothly.
+    s.k = 900; s.c = 60; s.angle = 0;
+    s.tx = 0; s.ty = -dir * stretch / 2; s.tsx = 1.0 - r * 0.35; s.tsy = 1.0 + r;
+    WakeSpring(s);
+}
+
+// Let go: a looser spring so it snaps back and wobbles, carrying the finger's speed.
+static void ReleaseStretch(UIView *slider, CGFloat fingerVelocityY) {
+    UIView *v = SliderShell(slider);
+    C26Spring *s = objc_getAssociatedObject(v, kSpring);
+    if (!s) return;
+    s.k = 380; s.c = 15;
+    s.tx = 0; s.ty = 0; s.tsx = 1; s.tsy = 1;
+    CGFloat kick = MAX(-1.5, MIN(1.5, fingerVelocityY / 2500.0));
+    s.vsy += fabs(kick) * (s.sy > 1 ? -1 : 1);
+    WakeSpring(s);
 }
 
 @interface C26Bouncer : NSObject <UIGestureRecognizerDelegate>
@@ -852,17 +1018,7 @@ static void ApplyStretch(UIView *slider, CGFloat over, int dir) {
     } else if (g.state >= UIGestureRecognizerStateEnded) {
         objc_setAssociatedObject(v, kBounce, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if (direct) SetSliderValue(v, MAX(0, MIN(1, SliderValue(v))));
-        UIView *shell = SliderShell(v);
-        if (!CGAffineTransformIsIdentity(shell.transform)) {
-            // Spring back carrying the finger's speed, so it bounces off naturally.
-            CGFloat stretchNow = fabs(shell.transform.ty) * 2;
-            CGFloat speed = fabs([g velocityInView:v].y);
-            CGFloat initialV = stretchNow > 1 ? MIN(speed / stretchNow, 20) : 0;
-            UISpringTimingParameters *spring = [[UISpringTimingParameters alloc] initWithDampingRatio:0.58 initialVelocity:CGVectorMake(initialV, initialV)];
-            UIViewPropertyAnimator *anim = [[UIViewPropertyAnimator alloc] initWithDuration:0.6 timingParameters:spring];
-            [anim addAnimations:^{ shell.transform = CGAffineTransformIdentity; }];
-            [anim startAnimation];
-        }
+        ReleaseStretch(v, [g velocityInView:v].y);
     }
 }
 @end
@@ -884,6 +1040,7 @@ static void AddBounce(UIView *slider) {
 
 static const void *kJelly = &kJelly;
 static const void *kJellyStart = &kJellyStart;
+static const void *kJellyLast = &kJellyLast;
 
 @interface C26Jelly : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
@@ -894,36 +1051,41 @@ static const void *kJellyStart = &kJellyStart;
 - (void)press:(UILongPressGestureRecognizer *)g {
     UIView *v = g.view;
     if (!v || !v.superview) return;
-    if (!gEnabled || !gJelly) { if (!CGAffineTransformIsIdentity(v.transform)) v.transform = CGAffineTransformIdentity; return; }
+    C26Spring *s = SpringFor(v);
+    if (!gEnabled || !gJelly) { s.tx = s.ty = 0; s.tsx = s.tsy = 1; WakeSpring(s); return; }
     CGPoint p = [g locationInView:v.superview];
     if (g.state == UIGestureRecognizerStateBegan) {
         objc_setAssociatedObject(v, kJellyStart, [NSValue valueWithCGPoint:p], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        // Lift: a soft swell like glass being pressed.
-        UIViewPropertyAnimator *a = [[UIViewPropertyAnimator alloc] initWithDuration:0.35 dampingRatio:0.7 animations:^{
-            v.transform = CGAffineTransformMakeScale(1.07, 1.07);
-        }];
-        [a startAnimation];
+        // Press: swell like soft glass.
+        s.k = 420; s.c = 24;
+        s.tx = s.ty = 0; s.tsx = s.tsy = 1.08; s.angle = 0;
+        WakeSpring(s);
     } else if (g.state == UIGestureRecognizerStateChanged) {
-        CGPoint s = [objc_getAssociatedObject(v, kJellyStart) CGPointValue];
-        CGFloat dx = p.x - s.x, dy = p.y - s.y, dist = hypot(dx, dy);
-        // Lean toward the finger (with resistance) and stretch along the drag.
-        // Follows the finger a little, with more resistance the further it goes (max ~10pt).
-        CGFloat damp = 0.14 / (1.0 + dist / 120.0);
-        CGFloat ox = dx * damp, oy = dy * damp;
-        CGFloat stretch = MIN(dist / 400.0, 0.08);
-        CGFloat angle = atan2(dy, dx);
-        CGAffineTransform t = CGAffineTransformMakeTranslation(ox, oy);
-        t = CGAffineTransformRotate(t, angle);
-        t = CGAffineTransformScale(t, 1.07 + stretch, 1.07 - stretch * 0.6);
-        t = CGAffineTransformRotate(t, -angle);
-        UIViewPropertyAnimator *a = [[UIViewPropertyAnimator alloc] initWithDuration:0.12 curve:UIViewAnimationCurveEaseOut animations:^{ v.transform = t; }];
-        [a startAnimation];
+        CGPoint st = [objc_getAssociatedObject(v, kJellyStart) CGPointValue];
+        CGFloat dx = p.x - st.x, dy = p.y - st.y, dist = hypot(dx, dy);
+        // Follow the finger with growing resistance (max ~12pt) and stretch along the drag.
+        CGFloat damp = 0.16 / (1.0 + dist / 110.0);
+        CGFloat stretch = MIN(dist / 380.0, 0.09);
+        s.k = 650; s.c = 42;
+        s.tx = dx * damp; s.ty = dy * damp;
+        if (dist > 2) s.angle = atan2(dy, dx);
+        s.tsx = 1.08 + stretch; s.tsy = 1.08 - stretch * 0.6;
+        WakeSpring(s);
+        objc_setAssociatedObject(v, kJellyLast, @[[NSValue valueWithCGPoint:p], @(CACurrentMediaTime())], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } else if (g.state >= UIGestureRecognizerStateEnded) {
-        // Release: wobble back to rest.
-        UISpringTimingParameters *spring = [[UISpringTimingParameters alloc] initWithDampingRatio:0.45 initialVelocity:CGVectorMake(0, 0)];
-        UIViewPropertyAnimator *a = [[UIViewPropertyAnimator alloc] initWithDuration:0.6 timingParameters:spring];
-        [a addAnimations:^{ v.transform = CGAffineTransformIdentity; }];
-        [a startAnimation];
+        // Let go: snap home and wobble, carrying the finger's last speed.
+        NSArray *last = objc_getAssociatedObject(v, kJellyLast);
+        if (last) {
+            CGPoint lp = [last[0] CGPointValue];
+            CGFloat dt = MAX(CACurrentMediaTime() - [last[1] doubleValue], 1.0 / 120.0);
+            s.vx += MAX(-160, MIN(160, (p.x - lp.x) / dt * 0.12));
+            s.vy += MAX(-160, MIN(160, (p.y - lp.y) / dt * 0.12));
+        }
+        objc_setAssociatedObject(v, kJellyLast, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        s.k = 300; s.c = 10;
+        s.tx = s.ty = 0; s.tsx = s.tsy = 1;
+        s.vsx += 0.6; s.vsy -= 0.6;   // a little squish so it jiggles
+        WakeSpring(s);
     }
 }
 @end
@@ -958,7 +1120,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.1.5 debug\n music: %@\n sliders: %@", gMusicDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.1.6 debug\n music: %@\n cmds: %@\n sliders: %@", gMusicDebug, gCmdDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
