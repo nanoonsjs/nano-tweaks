@@ -1,4 +1,6 @@
-// Photos26 1.0.2 - made by nano
+// Photos26 1.0.3 - made by nano
+// 1.0.3: the top "..." is now whichever right button isn't Edit, so the top
+//        glass (back circle, date capsule, ... circle) shows and Edit hides.
 // 1.0.2: no gray bar backgrounds top or bottom, thumbnails always shown,
 //        slider moves relative to your drag (like Apple's), Edit found
 //        directly when the adjust button is tapped.
@@ -594,8 +596,10 @@ static void LayoutTop(UINavigationBar *nb) {
         if ([k isEqualToString:@"edit"]) edit = it;
         else if ([k isEqualToString:@"more"]) more = it;
     }
+    // "..." is whichever right button isn't Edit (its label/icon varies).
+    if (!more) for (UIBarButtonItem *it in top.rightBarButtonItems) if (it != edit) { more = it; break; }
     UIView *back = FindBackButton(nb);
-    BOOL viewer = edit && more && gToolbar && gToolbar.window == nb.window && ![gToolbar viewWithTag:BOTTOM_TAG].hidden;
+    BOOL viewer = edit && gToolbar && gToolbar.window == nb.window && ![gToolbar viewWithTag:BOTTOM_TAG].hidden;
     UIView *editView = KV(edit, @"view");
     if (!gEnabled || !gTopBar || !viewer) {
         if (gTopBar && gEnabled) gTopDebug = [NSString stringWithFormat:@"skip: edit=%d more=%d toolbar=%d rights=%lu", edit != nil, more != nil, gToolbar != nil, (unsigned long)top.rightBarButtonItems.count];
@@ -700,7 +704,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.0.2 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.0.3 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
