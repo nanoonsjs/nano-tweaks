@@ -1,6 +1,6 @@
 Package: com.user.musicpill
 Name: MusicPill
-Version: 0.5.2
+Version: 0.5.3
 Architecture: iphoneos-arm64
 Description: Apple Music: small round now-playing pill with swipe to skip, and a Home tab. Made by nano.
 Maintainer: nano

@@ -1,4 +1,8 @@
-// MusicPill 0.5.2 - made by nano
+// MusicPill 0.5.3 - made by nano
+// 0.5.3: shrink/round the bar's INNER content view instead of its container.
+//        Music keeps resetting the container's transform after the full player
+//        closes, so forcing it there made it flicker. Plus a back-off if
+//        anything still fights over the size.
 // 0.5.2: pill is always Small (size setting removed) and is forced back to Small
 //        after the full player closes, even when Music leaves its own transform on it.
 // 0.5.1: pill stays small after closing the full player; see-through background always on.
@@ -43,6 +47,7 @@ static const void *kStyled = &kStyled;
 static const void *kHiddenBG = &kHiddenBG;
 static const void *kApplied = &kApplied;
 static const void *kSwipeAdded = &kSwipeAdded;
+static const void *kFight = &kFight;
 
 #pragma mark - prefs
 
@@ -225,6 +230,17 @@ static UIView *FindPalette(UIView *view, int depth) {
 
 #pragma mark - styling
 
+// The bar container (PaletteContainerView...ContainerView) holds one full-size
+// content view (the "UIView h=68" in the debug box). Music animates the
+// container; it leaves the content view alone, so that's where we style.
+static UIView *InnerContent(UIView *c) {
+    for (UIView *s in c.subviews) {
+        if (s.tag == GLASS_TAG || s.tag == DEBUG_TAG || s.hidden) continue;
+        if (fabs(s.bounds.size.width - c.bounds.size.width) < 2 && fabs(s.bounds.size.height - c.bounds.size.height) < 2) return s;
+    }
+    return c;
+}
+
 static CGAffineTransform PillTransform(UIView *m) {
     CGFloat W = m.bounds.size.width, H = m.bounds.size.height;
     // Total horizontal inset for Normal / Compact / Small.
@@ -243,6 +259,21 @@ static CGAffineTransform PillTransform(UIView *m) {
 static void ApplyPillTransform(UIView *m, BOOL force) {
     CGAffineTransform t = PillTransform(m);
     NSValue *last = objc_getAssociatedObject(m, kApplied);
+    // Back-off: if we've had to force it more than 4 times in 2 seconds,
+    // something else is fighting us. Stop forcing for 5 seconds so it can't flicker.
+    if (force) {
+        CFTimeInterval now = CACurrentMediaTime();
+        NSArray *f = objc_getAssociatedObject(m, kFight); // @[windowStart, count, backoffUntil]
+        double start = f ? [f[0] doubleValue] : now, until = f ? [f[2] doubleValue] : 0;
+        int count = f ? [f[1] intValue] : 0;
+        if (now < until) force = NO;
+        else if (!CGAffineTransformEqualToTransform(m.transform, t)) {
+            if (now - start > 2.0) { start = now; count = 0; }
+            count++;
+            if (count > 4) { until = now + 5.0; count = 0; start = now; force = NO; }
+        }
+        objc_setAssociatedObject(m, kFight, @[@(start), @(count), @(until)], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     BOOL ours = force || CGAffineTransformIsIdentity(m.transform) ||
                 (last && CGAffineTransformEqualToTransform(m.transform, last.CGAffineTransformValue));
     if (ours && !CGAffineTransformEqualToTransform(m.transform, t)) {
@@ -422,7 +453,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.5.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.5.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found,
                       [c componentsJoinedByString:@"\n "]];
@@ -451,7 +482,8 @@ static void Update(UITabBar *tb) {
         // Re-picking is what caused two nested pills in 0.3.0.
         BOOL keep = mini && mini.window && [mini isDescendantOfView:root] && BarSized(mini, root);
         if (!keep) {
-            UIView *found = FindByName(root, root, tabRect, tb, 0) ?: FindByShape(root, root, tabRect, tb, 0);
+            UIView *byName = FindByName(root, root, tabRect, tb, 0);
+            UIView *found = byName ? InnerContent(byName) : FindByShape(root, root, tabRect, tb, 0);
             if (found != mini) UnstylePill(mini);
             mini = found;
             objc_setAssociatedObject(tb, kMini, mini, OBJC_ASSOCIATION_ASSIGN);
