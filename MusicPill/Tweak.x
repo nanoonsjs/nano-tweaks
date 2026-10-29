@@ -1,4 +1,7 @@
-// MusicPill 0.7.0 - made by nano
+// MusicPill 0.7.1 - made by nano
+// 0.7.1: iOS 26 queue: shuffle / repeat / autoplay as a pill row above
+//        "Continue Playing" (54pt band made with the list's top inset), round
+//        queue button (it's 28pt, too small for 0.7.0's check).
 // 0.7.0: full player queue: "Playing Next" -> "Continue Playing", round queue
 //        button, and a debug map of the player screen to build the iOS 26
 //        shuffle/repeat/autoplay row next.
@@ -59,6 +62,8 @@
 #define NAVGLASS_TAG 0x4D504E47
 #define PORTAL_TAG 0x4D50504F
 #define PLAYERDEBUG_TAG 0x4D505044
+#define QUEUEROW_TAG 0x4D505152
+#define QUEUE_EXTRA 54.0
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gMarquee = YES, gAlbum = YES, gNavGlass = YES, gQueueLook = YES;
@@ -85,6 +90,8 @@ static const void *kSwipeAdded = &kSwipeAdded;
 static const void *kFight = &kFight;
 static const void *kHidByUs = &kHidByUs;
 static const void *kClearedBG = &kClearedBG;
+static const void *kQueueTable = &kQueueTable;
+static NSString *gQueueDebug = @"-";
 
 #pragma mark - prefs
 
@@ -151,18 +158,24 @@ static BOOL PlayerIsUp(UIWindow *w, UIView **playerView) {
 static void RoundIfQueueButton(UIView *v) {
     if (!gQueueLook) return;
     CGFloat w = v.bounds.size.width, h = v.bounds.size.height;
-    if (w < 34 || w > 70 || fabs(w - h) > 6) return;
+    if (w < 24 || w > 70 || fabs(w - h) > 6) return;
     UIWindow *win = v.window;
     UIView *player = nil;
     if (!win || !PlayerIsUp(win, &player) || ![v isDescendantOfView:player]) return;
     CGRect r = [v convertRect:v.bounds toView:win];
     CGFloat H = win.bounds.size.height;
     if (CGRectGetMinY(r) < H * 0.78 || CGRectGetMidX(r) < win.bounds.size.width * 0.6) return;
-    if (!v.backgroundColor || CGColorGetAlpha(v.backgroundColor.CGColor) < 0.05) return;
+    // The queue button is a 28pt button whose selected image is a red rounded
+    // square; clipping the button to a circle turns that into a red circle.
+    BOOL imageButton = [v isKindOfClass:[UIButton class]] && w <= 40;
+    BOOL filled = v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) >= 0.05;
+    if (!imageButton && !filled) return;
     CGFloat radius = MIN(w, h) / 2;
     if (v.layer.cornerRadius != radius) { v.layer.cornerRadius = radius; v.layer.cornerCurve = kCACornerCurveContinuous; }
+    if (imageButton && !v.clipsToBounds) v.clipsToBounds = YES;
 }
 static void AlbumControlLaidOut(UIControl *c);
+static void PositionQueueRow(UIScrollView *table);
 
 static void ReloadAndApply(void) {
     LoadPrefs();
@@ -507,7 +520,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
     UIWindow *w = tb.window;
     if (!w) return;
     UILabel *l = (UILabel *)[w viewWithTag:DEBUG_TAG];
-    if (!gDebug) { [l removeFromSuperview]; return; }
+    if (!gDebug || PlayerIsUp(w, NULL)) { [l removeFromSuperview]; return; }
     if (![l isKindOfClass:[UILabel class]]) {
         l = [UILabel new];
         l.tag = DEBUG_TAG;
@@ -528,7 +541,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.7.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.7.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -597,9 +610,15 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
 }
 
 %hook UIScrollView
+- (void)setContentInset:(UIEdgeInsets)inset {
+    // Queue list: Music sets its inset; we add our pill band on top of it.
+    if (objc_getAssociatedObject(self, kQueueTable)) inset.top += QUEUE_EXTRA;
+    %orig(inset);
+}
 - (void)setContentOffset:(CGPoint)offset {
     CGPoint old = self.contentOffset;
     %orig;
+    if (objc_getAssociatedObject(self, kQueueTable)) { @try { PositionQueueRow(self); } @catch (__unused id e) {} }
     if (!gRound) return;
     // Only the user scrolling a full page: not side-scrolling rows, not small views.
     if (!(self.isTracking || self.isDecelerating)) return;
@@ -1249,6 +1268,170 @@ static UINavigationBar *TopNavBar(UIWindow *w) {
 // Opening and closing the full player resets the bar without laying out the
 // tab bar again, so nothing re-shrank it. Check a few times a second (cheap:
 // it only compares a transform) and re-apply once the bar is settled.
+#pragma mark - iOS 26 queue pill row
+
+static __weak UIControl *gQShuffle, *gQRepeat, *gQAuto;
+static __weak UIScrollView *gQueueTable;
+
+static UIView *FindQueueHeader(UIView *v, int depth) {
+    for (UIView *s in v.subviews) {
+        if (s.hidden) continue;
+        if ([NSStringFromClass([s class]) containsString:@"NowPlayingQueueHeaderView"]) return s;
+        if (depth < 22) { UIView *f = FindQueueHeader(s, depth + 1); if (f) return f; }
+    }
+    return nil;
+}
+
+static void CollectControls(UIView *v, int depth, NSMutableArray *out) {
+    for (UIView *s in v.subviews) {
+        if ([s isKindOfClass:[UIControl class]]) { [out addObject:s]; continue; }
+        if (depth < 8) CollectControls(s, depth + 1, out);
+    }
+}
+
+// A header button is "on" if it's selected or has a filled background (Music
+// draws active toggles with a red rounded square behind the icon).
+static BOOL ToggleOn(UIControl *c) {
+    if (!c) return NO;
+    if (c.isSelected) return YES;
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:c];
+    int n = 0;
+    while (stack.count && n++ < 40) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v != c && v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) > 0.3 &&
+            v.bounds.size.width >= c.bounds.size.width * 0.7) return YES;
+        [stack addObjectsFromArray:v.subviews];
+    }
+    return NO;
+}
+
+static void StyleQueuePill(UIButton *b, NSString *symbol, BOOL on) {
+    UIButtonConfiguration *cfg = b.configuration ?: [UIButtonConfiguration filledButtonConfiguration];
+    UIColor *bg = on ? [UIColor colorWithWhite:0.56 alpha:1] : [UIColor colorWithWhite:0.17 alpha:1];
+    UIColor *fg = on ? UIColor.blackColor : UIColor.whiteColor;
+    if ([cfg.baseBackgroundColor isEqual:bg] && [cfg.baseForegroundColor isEqual:fg] &&
+        [objc_getAssociatedObject(b, kQueueTable) isEqual:symbol]) return;
+    cfg.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    cfg.baseBackgroundColor = bg;
+    cfg.baseForegroundColor = fg;
+    cfg.image = [UIImage systemImageNamed:symbol withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]];
+    cfg.contentInsets = NSDirectionalEdgeInsetsZero;
+    b.configuration = cfg;
+    objc_setAssociatedObject(b, kQueueTable, symbol, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void RefreshQueueRow(void) {
+    UIScrollView *table = gQueueTable;
+    UIView *row = nil;
+    for (UIView *s in table.subviews) if (s.tag == QUEUEROW_TAG) row = s;
+    if (!row) return;
+    BOOL repeatOne = [MPMusicPlayerController systemMusicPlayer].repeatMode == MPMusicRepeatModeOne;
+    StyleQueuePill([row viewWithTag:11], @"shuffle", ToggleOn(gQShuffle));
+    StyleQueuePill([row viewWithTag:12], repeatOne ? @"repeat.1" : @"repeat", repeatOne || ToggleOn(gQRepeat));
+    StyleQueuePill([row viewWithTag:13], @"infinity", ToggleOn(gQAuto));
+    [row viewWithTag:13].hidden = gQAuto == nil;
+}
+
+@interface MPQueueTarget : NSObject
++ (instancetype)shared;
+@end
+@implementation MPQueueTarget
++ (instancetype)shared { static MPQueueTarget *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPQueueTarget new]; }); return t; }
+- (void)tap:(UIButton *)b {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    UIControl *c = b.tag == 11 ? gQShuffle : (b.tag == 12 ? gQRepeat : gQAuto);
+    Forward(c);
+    // Music updates its button a moment later; mirror it quickly.
+    dispatch_async(dispatch_get_main_queue(), ^{ RefreshQueueRow(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ RefreshQueueRow(); });
+}
+@end
+
+// Keeps the row pinned to the top of the visible list (called on every scroll).
+static void PositionQueueRow(UIScrollView *table) {
+    UIView *row = nil;
+    for (UIView *s in table.subviews) if (s.tag == QUEUEROW_TAG) row = s;
+    if (!row) return;
+    CGFloat top = table.contentOffset.y + table.adjustedContentInset.top - QUEUE_EXTRA;
+    CGRect f = CGRectMake(0, top, table.bounds.size.width, QUEUE_EXTRA);
+    if (!CGRectEqualToRect(row.frame, f)) row.frame = f;
+    if (table.subviews.lastObject != row) [table bringSubviewToFront:row];
+    CGFloat pad = 20, gap = 10, h = 40, n = 3;
+    CGFloat w = (f.size.width - pad * 2 - gap * (n - 1)) / n;
+    for (int i = 0; i < 3; i++) {
+        UIView *b = [row viewWithTag:11 + i];
+        CGRect bf = CGRectMake(pad + i * (w + gap), (QUEUE_EXTRA - h) / 2 - 2, w, h);
+        if (!CGRectEqualToRect(b.frame, bf)) b.frame = bf;
+    }
+}
+
+static void UnflagQueueTable(UIScrollView *table) {
+    if (!table || !objc_getAssociatedObject(table, kQueueTable)) return;
+    for (UIView *s in [table.subviews copy]) if (s.tag == QUEUEROW_TAG) [s removeFromSuperview];
+    objc_setAssociatedObject(table, kQueueTable, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIEdgeInsets i = table.contentInset; i.top -= QUEUE_EXTRA; table.contentInset = i;
+    ShowOriginal(gQShuffle); ShowOriginal(gQRepeat); ShowOriginal(gQAuto);
+}
+
+static void QueueTick(UIView *player) {
+    UIView *header = gQueueLook ? FindQueueHeader(player, 0) : nil;
+    UIScrollView *table = nil;
+    for (UIView *p = header.superview; p; p = p.superview) if ([p isKindOfClass:[UIScrollView class]]) { table = (UIScrollView *)p; break; }
+    UIScrollView *old = gQueueTable;
+    if (old && old != table) UnflagQueueTable(old);
+    if (!header || !table) { gQueueTable = nil; gQueueDebug = header ? @"no table" : @"no header"; return; }
+
+    NSMutableArray *ctls = [NSMutableArray array];
+    CollectControls(header, 0, ctls);
+    [ctls sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+        CGFloat x = [a convertRect:a.bounds toView:nil].origin.x, y = [b convertRect:b.bounds toView:nil].origin.x;
+        return x < y ? NSOrderedAscending : (x > y ? NSOrderedDescending : NSOrderedSame);
+    }];
+    UIControl *sh = nil, *rp = nil, *ap = nil;
+    for (UIControl *c in ctls) {
+        NSString *n = NSStringFromClass([c class]).lowercaseString;
+        if ([n containsString:@"shuffle"]) sh = c;
+        else if ([n containsString:@"repeat"]) rp = c;
+        else if ([n containsString:@"autoplay"] || [n containsString:@"infinit"]) ap = c;
+    }
+    // Fall back to left-to-right order: shuffle, repeat, autoplay.
+    if (!sh && ctls.count >= 1) sh = ctls[0];
+    if (!rp && ctls.count >= 2) rp = ctls[1];
+    if (!ap && ctls.count >= 3) ap = ctls[2];
+    if (!sh || !rp || !sh.allControlEvents || !rp.allControlEvents) {
+        UnflagQueueTable(table);
+        gQueueTable = nil;
+        gQueueDebug = [NSString stringWithFormat:@"header ok, %lu controls, can't forward", (unsigned long)ctls.count];
+        return;
+    }
+    gQShuffle = sh; gQRepeat = rp; gQAuto = ap;
+    gQueueTable = table;
+
+    if (!objc_getAssociatedObject(table, kQueueTable)) {
+        objc_setAssociatedObject(table, kQueueTable, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // Make a 54pt band at the top of the list for the pills; the
+        // setContentInset hook keeps it there if Music changes the inset.
+        CGPoint o = table.contentOffset;
+        table.contentInset = table.contentInset;   // goes through the hook (+54)
+        o.y -= QUEUE_EXTRA;
+        table.contentOffset = o;
+        UIView *row = [UIView new];
+        row.tag = QUEUEROW_TAG;
+        row.backgroundColor = UIColor.clearColor;
+        for (int i = 0; i < 3; i++) {
+            UIButton *b = [UIButton buttonWithConfiguration:[UIButtonConfiguration filledButtonConfiguration] primaryAction:nil];
+            b.tag = 11 + i;
+            [b addTarget:[MPQueueTarget shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+            [row addSubview:b];
+        }
+        [table addSubview:row];
+    }
+    HideOriginal(sh); HideOriginal(rp); if (ap) HideOriginal(ap);
+    PositionQueueRow(table);
+    RefreshQueueRow();
+    gQueueDebug = [NSString stringWithFormat:@"row ok %@ / %@ / %@", NSStringFromClass([sh class]), NSStringFromClass([rp class]), ap ? NSStringFromClass([ap class]) : @"-"];
+}
+
 #pragma mark - full player
 
 static void SweepQueueButtons(UIView *v, int depth) {
@@ -1303,7 +1486,7 @@ static void PlayerDebug(UIView *player, UIWindow *w) {
     }
     NSMutableArray *lines = [NSMutableArray array];
     MapPlayer(player, w, 0, lines);
-    NSString *text = [NSString stringWithFormat:@" MusicPill player map (open the queue, screenshot this)\n %@", [lines componentsJoinedByString:@"\n "]];
+    NSString *text = [NSString stringWithFormat:@" MusicPill player map (open the queue, screenshot this)\n queue: %@\n %@", gQueueDebug, [lines componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 16;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1343,6 +1526,7 @@ static void StartWatchdog(void) {
         UIView *player = nil;
         if (w && PlayerIsUp(w, &player)) {
             @try { SweepQueueButtons(player, 0); } @catch (__unused id e) {}
+            @try { QueueTick(player); } @catch (__unused id e) {}
             if (tick % 4 == 0) { @try { PlayerDebug(player, w); } @catch (__unused id e) {} }
         } else if (w) {
             [[w viewWithTag:PLAYERDEBUG_TAG] removeFromSuperview];
