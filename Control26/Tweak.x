@@ -1,4 +1,6 @@
-// Control26 0.2.0 - made by nano
+// Control26 0.2.1 - made by nano
+// 0.2.1: Wi-Fi/Bluetooth arrows expand Apple's nested module, rounder bars,
+//        sliders settle back slowly (~0.5s) with no bounce.
 // 0.2.0: live signal bars, no outer glass behind the cards, Wi-Fi/Bluetooth
 //        arrows open their lists, white icons when off, Airplane take-off.
 // 0.1.9: expanded connectivity (hold Wi-Fi) rebuilt as iOS 26 glass cards:
@@ -1088,10 +1090,12 @@ static void ReleaseStretch(UIView *slider, CGFloat fingerVelocityY) {
     UIView *v = SliderShell(slider);
     C26Spring *s = objc_getAssociatedObject(v, kSpring);
     if (!s) return;
-    s.k = 380; s.c = 15;
+    // Rest: ease back to normal over about half a second, no bounce
+    // (a critically damped spring, starting from a standstill).
+    (void)fingerVelocityY;
+    s.k = 95; s.c = 19.5;
+    s.vx = s.vy = s.vsx = s.vsy = 0;
     s.tx = 0; s.ty = 0; s.tsx = 1; s.tsy = 1;
-    CGFloat kick = MAX(-1.5, MIN(1.5, fingerVelocityY / 2500.0));
-    s.vsy += fabs(kick) * (s.sy > 1 ? -1 : 1);
     WakeSpring(s);
 }
 
@@ -1272,12 +1276,13 @@ static UIView *RoundButtonIn(UIView *b) {
     while ((int)self.layer.sublayers.count < n) [self.layer addSublayer:[CALayer layer]];
     while ((int)self.layer.sublayers.count > n) [self.layer.sublayers.lastObject removeFromSuperlayer];
     CGSize S = self.bounds.size;
-    CGFloat gap = S.width * 0.09, w = (S.width - gap * (n - 1)) / n;
+    CGFloat gap = S.width * 0.1, w = (S.width - gap * (n - 1)) / n;
     for (int i = 0; i < n; i++) {
         CALayer *l = self.layer.sublayers[i];
-        CGFloat h = S.height * (0.34 + 0.66 * (i + 1) / n);
+        CGFloat h = MAX(w, S.height * (0.25 + 0.75 * i / (CGFloat)(n - 1 > 0 ? n - 1 : 1)));
         l.frame = CGRectMake(i * (w + gap), S.height - h, w, h);
-        l.cornerRadius = w * 0.32;
+        l.cornerRadius = w / 2;
+        if (@available(iOS 13.0, *)) l.cornerCurve = kCACornerCurveCircular;
         l.backgroundColor = [_color colorWithAlphaComponent:(i < _active ? 1 : 0.32)].CGColor;
     }
 }
@@ -1465,6 +1470,20 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     if (labeled) [views addObject:labeled];
     for (UIView *v = round.superview; v && v != labeled; v = v.superview) [views addObject:v];
     UIViewController *vc = OwnerVC(labeled);
+    // iOS 16: the Wi-Fi / Bluetooth list is a nested module that expands.
+    NSMutableArray *chain = [NSMutableArray array];
+    for (UIViewController *p = vc; p; p = p.parentViewController) {
+        [chain addObject:NSStringFromClass([p class])];
+        for (NSString *sel in @[@"expandModule", @"_expandModule", @"expandModuleAnimated:"]) {
+            SEL s = NSSelectorFromString(sel);
+            if (p != vc && [p respondsToSelector:s] && [NSStringFromClass([p class]) containsString:@"Container"]) {
+                if ([sel hasSuffix:@":"]) ((void (*)(id, SEL, BOOL))objc_msgSend)(p, s, YES);
+                else ((void (*)(id, SEL))objc_msgSend)(p, s);
+                gMenuDebug = [NSString stringWithFormat:@"%@ on %@", sel, NSStringFromClass([p class])];
+                return;
+            }
+        }
+    }
     if (vc.view) [views addObject:vc.view];
     for (UIView *v in views)
         for (UIGestureRecognizer *gr in v.gestureRecognizers) {
@@ -1493,7 +1512,9 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
         }
         free(ms);
     }
-    gMenuDebug = [NSString stringWithFormat:@"no menu; vc=%@ %@", NSStringFromClass([vc class]), [m componentsJoinedByString:@" "]];
+    NSMutableArray *ints = [NSMutableArray array];
+    for (UIView *v in views) for (id it in v.interactions) [ints addObject:NSStringFromClass([it class])];
+    gMenuDebug = [NSString stringWithFormat:@"no menu; chain=%@ ints=%@", [chain componentsJoinedByString:@">"], [ints componentsJoinedByString:@","]];
 }
 @implementation C26ConnCard
 - (instancetype)initWithKey:(NSString *)key pill:(BOOL)pill {
@@ -1561,7 +1582,7 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     }
     _circle.layer.cornerRadius = d / 2;
     _icon.frame = _circle.bounds;
-    _bars.frame = CGRectMake((d - 19) / 2, (d - 15) / 2 - 0.5, 19, 15);
+    _bars.frame = CGRectMake((d - 20) / 2, (d - 16) / 2, 20, 16);
 }
 - (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
     _touchStart = [touch locationInView:self];
@@ -1824,7 +1845,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.2.0 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.2.1 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
