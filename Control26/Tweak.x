@@ -1,4 +1,9 @@
-// Control26 0.1.6 - made by nano
+// Control26 0.1.7 - made by nano
+// 0.1.7: star uses Music's Love command (21) and can un-love (IsNegative);
+//        loved state read from the command's active flag. Instant song changes
+//        via MediaRemote notifications, artwork slides in the skip direction,
+//        swoosh/morph animations on previous/play/next, no haptic on skips,
+//        smaller AirPlay icons.
 // 0.1.6: spring physics (per screen refresh) for the jelly buttons and slider
 //        stretch, favorite star only for Apple Music + burst animation, smaller
 //        AirPlay capsule tucked under the volume slider, debug shows Music's
@@ -182,7 +187,8 @@ typedef void (*MRIsPlayingFn)(dispatch_queue_t, void (^)(Boolean));
 static BOOL gIsPlaying;
 static NSString *gNPApp;           // bundle id of the app that is playing
 static NSString *gCmdDebug = @"-";
-static NSNumber *gNPLiked;   // from now-playing info, when available
+static NSNumber *gNPLiked;   // loved? (from Music's Love command state)
+static int gSkipDir;         // +1 next, -1 previous: which way the artwork slides
 static NSString *gLikedLocally;
 static void *MediaRemote(void) {
     static void *h; static dispatch_once_t o;
@@ -194,35 +200,75 @@ static void SendMR(int cmd) {
     MRSendFn send = MediaRemote() ? (MRSendFn)dlsym(MediaRemote(), "MRMediaRemoteSendCommand") : NULL;
     if (send) send(cmd, NULL);
 }
+static NSString *MRConst(const char *sym, NSString *fallback) {
+    CFStringRef *p = MediaRemote() ? (CFStringRef *)dlsym(MediaRemote(), sym) : NULL;
+    return (p && *p) ? (__bridge NSString *)*p : fallback;
+}
+// Love / un-love the current Apple Music song (command 21 = "like track").
+static void SendLove(BOOL love) {
+    MRSendFn send = MediaRemote() ? (MRSendFn)dlsym(MediaRemote(), "MRMediaRemoteSendCommand") : NULL;
+    if (!send) return;
+    NSDictionary *opts = love ? nil : @{ MRConst("kMRMediaRemoteOptionIsNegative", @"kMRMediaRemoteOptionIsNegative"): @YES };
+    send(21, (__bridge CFDictionaryRef)opts);
+}
 typedef void (*MRAppIDFn)(dispatch_queue_t, void (^)(CFStringRef));
 typedef CFTypeRef (*MROriginFn)(void);
 typedef void (*MRCmdsFn)(CFTypeRef, dispatch_queue_t, void (^)(CFArrayRef));
 typedef int (*MRCmdIDFn)(CFTypeRef);
 typedef Boolean (*MRCmdEnabledFn)(CFTypeRef);
+typedef CFTypeRef (*MRCmdValueFn)(CFTypeRef, CFStringRef);
 
 static void FetchAppAndCommands(void) {
     if (!MediaRemote()) return;
     MRAppIDFn appID = (MRAppIDFn)dlsym(MediaRemote(), "MRMediaRemoteGetNowPlayingApplicationDisplayID");
     if (appID) appID(dispatch_get_main_queue(), ^(CFStringRef bid) { gNPApp = bid ? [(__bridge NSString *)bid copy] : nil; });
-    if (!gDebug) return;
     MROriginFn origin = (MROriginFn)dlsym(MediaRemote(), "MRMediaRemoteGetLocalOrigin");
     MRCmdsFn cmds = (MRCmdsFn)dlsym(MediaRemote(), "MRMediaRemoteGetSupportedCommandsForOrigin");
     MRCmdIDFn cmdID = (MRCmdIDFn)dlsym(MediaRemote(), "MRMediaRemoteCommandInfoGetCommand");
     MRCmdEnabledFn cmdOn = (MRCmdEnabledFn)dlsym(MediaRemote(), "MRMediaRemoteCommandInfoGetEnabled");
+    MRCmdValueFn cmdValue = (MRCmdValueFn)dlsym(MediaRemote(), "MRMediaRemoteCommandInfoCopyValueForKey");
+    NSString *activeKey = MRConst("kMRMediaRemoteCommandInfoIsActiveKey", @"kMRMediaRemoteCommandInfoIsActiveKey");
     if (!origin || !cmds || !cmdID) { gCmdDebug = @"(command list not available)"; return; }
     cmds(origin(), dispatch_get_main_queue(), ^(CFArrayRef list) {
         NSMutableArray *ids = [NSMutableArray array];
+        NSNumber *loved = nil;
         for (id info in (__bridge NSArray *)list) {
             if (cmdOn && !cmdOn((__bridge CFTypeRef)info)) continue;
-            [ids addObject:@(cmdID((__bridge CFTypeRef)info))];
+            int cmd = cmdID((__bridge CFTypeRef)info);
+            [ids addObject:@(cmd)];
+            // Love command's "active" flag = this song is loved.
+            if (cmd == 21 && cmdValue) {
+                CFTypeRef v = cmdValue((__bridge CFTypeRef)info, (__bridge CFStringRef)activeKey);
+                if (v) { id obj = (__bridge_transfer id)v; if ([obj respondsToSelector:@selector(boolValue)]) loved = @([obj boolValue]); }
+            }
         }
-        gCmdDebug = [NSString stringWithFormat:@"app=%@ [%@]", gNPApp ?: @"?", [ids componentsJoinedByString:@","]];
+        if (loved) gNPLiked = loved;
+        if (gDebug) gCmdDebug = [NSString stringWithFormat:@"app=%@ loved=%@ [%@]", gNPApp ?: @"?", loved ?: @"?", [ids componentsJoinedByString:@","]];
     });
 }
 
 static void FetchIsPlaying(void) {
     MRIsPlayingFn f = MediaRemote() ? (MRIsPlayingFn)dlsym(MediaRemote(), "MRMediaRemoteGetNowPlayingApplicationIsPlaying") : NULL;
     if (f) f(dispatch_get_main_queue(), ^(Boolean p) { gIsPlaying = p; });
+}
+
+static void FetchNowPlaying(void);
+// MediaRemote tells us right away when the song or play state changes.
+static void RegisterNowPlayingNotifications(void) {
+    if (!MediaRemote()) return;
+    void (*reg)(dispatch_queue_t) = (void (*)(dispatch_queue_t))dlsym(MediaRemote(), "MRMediaRemoteRegisterForNowPlayingNotifications");
+    if (reg) reg(dispatch_get_main_queue());
+    NSArray *names = @[
+        MRConst("kMRMediaRemoteNowPlayingInfoDidChangeNotification", @"kMRMediaRemoteNowPlayingInfoDidChangeNotification"),
+        MRConst("kMRMediaRemoteNowPlayingApplicationIsPlayingDidChangeNotification", @"kMRMediaRemoteNowPlayingApplicationIsPlayingDidChangeNotification"),
+        MRConst("kMRMediaRemoteNowPlayingApplicationDidChangeNotification", @"kMRMediaRemoteNowPlayingApplicationDidChangeNotification"),
+    ];
+    for (NSString *n in names)
+        [[NSNotificationCenter defaultCenter] addObserverForName:n object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+            if (!gTimer) return;          // Control Center isn't open
+            gLastFetch = 0;               // skip the once-a-second throttle
+            FetchNowPlaying();
+        }];
 }
 
 static void FetchNowPlaying(void) {
@@ -245,6 +291,7 @@ static void FetchNowPlaying(void) {
         gNPTitle = [title isKindOfClass:[NSString class]] && title.length ? title : nil;
         gNPArtist = [artist isKindOfClass:[NSString class]] ? artist : nil;
         id liked = d[@"kMRMediaRemoteNowPlayingInfoIsLiked"];
+        if ([liked respondsToSelector:@selector(boolValue)]) gNPLiked = @([liked boolValue]);
         if (gDebug) {
             NSMutableArray *k = [NSMutableArray array];
             for (NSString *key in d) {
@@ -255,12 +302,12 @@ static void FetchNowPlaying(void) {
             }
             if (k.count) gCmdDebug = [gCmdDebug stringByAppendingFormat:@" keys:%@", [k componentsJoinedByString:@","]];
         }
-        gNPLiked = [liked respondsToSelector:@selector(boolValue)] ? @([liked boolValue]) : nil;
         if (!gNPTitle) { gArtwork = nil; gArtworkData = nil; }
         else if ([data isKindOfClass:[NSData class]] && data.length && ![data isEqualToData:gArtworkData]) {
             gArtworkData = data;
             gArtwork = [UIImage imageWithData:data];
         }
+        if (gTimer) { @try { Tick(); } @catch (__unused id e) {} }
     });
 }
 
@@ -368,13 +415,47 @@ static void ClearOurTransform(UIView *v) {
     [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction
                      animations:^{ b.transform = CGAffineTransformIdentity; b.alpha = 1; } completion:nil];
 }
+// The arrows "swoosh" through: out one side, back in from the other.
+- (void)swoosh:(UIButton *)b dir:(CGFloat)dir {
+    UIView *iv = b.imageView;
+    [UIView animateWithDuration:0.13 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionAllowUserInteraction animations:^{
+        iv.transform = CGAffineTransformMakeTranslation(14 * dir, 0);
+        iv.alpha = 0;
+    } completion:^(BOOL d) {
+        iv.transform = CGAffineTransformMakeTranslation(-14 * dir, 0);
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            iv.transform = CGAffineTransformIdentity;
+            iv.alpha = 1;
+        } completion:nil];
+    }];
+}
 - (void)tap:(UIButton *)b {
     [self up:b];
-    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-    if (b.tag == 6) SendMR(5);
-    else if (b.tag == 8) SendMR(4);
-    else { SendMR(2); gIsPlaying = !gIsPlaying; }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ FetchIsPlaying(); });
+    if (b.tag == 6) { gSkipDir = -1; [self swoosh:b dir:-1]; SendMR(5); }
+    else if (b.tag == 8) { gSkipDir = 1; [self swoosh:b dir:1]; SendMR(4); }
+    else {
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        SendMR(2);
+        gIsPlaying = !gIsPlaying;
+        // Play <-> pause morph: shrink, swap, spring back.
+        NSString *sym = gIsPlaying ? @"pause.fill" : @"play.fill";
+        objc_setAssociatedObject(b, kLastValue, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIImage *img = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightSemibold]];
+        [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+            b.imageView.transform = CGAffineTransformMakeScale(0.4, 0.4);
+            b.imageView.alpha = 0.2;
+        } completion:^(BOOL d) {
+            [b setImage:img forState:UIControlStateNormal];
+            [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.8 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+                b.imageView.transform = CGAffineTransformIdentity;
+                b.imageView.alpha = 1;
+            } completion:nil];
+        }];
+    }
+    // Pick up the new song / state right away.
+    for (NSNumber *delay in @[@0.12, @0.35, @0.8]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ gLastFetch = 0; FetchNowPlaying(); });
+    }
 }
 @end
 
@@ -480,15 +561,24 @@ static void SwitchMode(UIView *module, NSString *mode) {
 }
 - (void)star:(UIButton *)b {
     if (!gNPTitle) return;
-    BOOL liked = gNPLiked ? gNPLiked.boolValue : [gLikedLocally isEqualToString:gNPTitle];
-    if (liked) {
+    BOOL loved = gNPLiked ? gNPLiked.boolValue : [gLikedLocally isEqualToString:gNPTitle];
+    SendLove(!loved);
+    gNPLiked = @(!loved);
+    gLikedLocally = loved ? nil : gNPTitle;
+    NSString *sym = loved ? @"star" : @"star.fill";
+    objc_setAssociatedObject(b, kLastValue, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [b setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
+    // Confirm with Music shortly after.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.7 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ gLastFetch = 0; FetchNowPlaying(); });
+
+    if (loved) {
+        // Un-love: a small deflate.
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-        return;  // favoriting only; un-favorite from the Music app
+        b.transform = CGAffineTransformMakeScale(0.75, 0.75);
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:2 options:UIViewAnimationOptionAllowUserInteraction
+                         animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
+        return;
     }
-    SendMR(0x6A);       // "like track" (Favorite)
-    gLikedLocally = gNPTitle;
-    [b setImage:[UIImage systemImageNamed:@"star.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
-    objc_setAssociatedObject(b, kLastValue, @"star.fill", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [[UINotificationFeedbackGenerator new] notificationOccurred:UINotificationFeedbackTypeSuccess];
 
     // Squish, then pop back with a spring.
@@ -543,7 +633,7 @@ static C26PassView *BuildExpandedOverlay(UIView *module) {
     l.tag = 23;
     l.text = @"AirPlay";
     l.textColor = UIColor.whiteColor;
-    l.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    l.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
     [cap.contentView addSubview:l];
 
     UIButton *tap = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -596,12 +686,12 @@ static void StyleExpanded(UIView *module) {
         CGRect vr = [volume convertRect:volume.bounds toView:module];
         // Small, and tucked right under the slider so it stays clear of
         // anything another tweak draws further down.
-        CGFloat w = 96, h = 30;
+        CGFloat w = 84, h = 28;
         CGFloat y = MIN(round(CGRectGetMaxY(vr) + 8), S.height - h - 6);
         SetFrame(cap, CGRectMake(round(S.width / 2 - w / 2), y, w, h));
         cap.layer.cornerRadius = h / 2;
-        SetFrame([cap viewWithTag:22], CGRectMake(9, (h - 20) / 2, 20, 20));
-        SetFrame([cap viewWithTag:23], CGRectMake(33, 0, w - 39, h));
+        SetFrame([cap viewWithTag:22], CGRectMake(9, (h - 15) / 2, 15, 15));
+        SetFrame([cap viewWithTag:23], CGRectMake(28, 0, w - 33, h));
         SetFrame([cap viewWithTag:25], CGRectMake(0, 0, w, h));
         cap.hidden = NO;
     } else cap.hidden = YES;
@@ -651,7 +741,7 @@ static void StyleModule(UIView *module) {
     SetFrame(art, CGRectMake(m, m, a, a));
     art.layer.cornerRadius = 12 * s;
     SetFrame(glass, CGRectMake(S.width - m - d, m, d, d));
-    SetFrame(air, glass.frame);
+    SetFrame(air, CGRectInset(glass.frame, round(10 * s), round(10 * s)));
     glass.layer.cornerRadius = d / 2;
     air.hidden = glass.hidden = NO;
 
@@ -671,8 +761,19 @@ static void StyleModule(UIView *module) {
     // Artwork when playing; an empty gray square when not (like iOS 26).
     UIImage *img = playing ? gArtwork : nil;
     if (art.image != img) {
-        [UIView transitionWithView:art duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve
-                        animations:^{ art.image = img; } completion:nil];
+        if (gSkipDir && img) {
+            CATransition *tr2 = [CATransition animation];
+            tr2.type = kCATransitionPush;
+            tr2.subtype = gSkipDir > 0 ? kCATransitionFromRight : kCATransitionFromLeft;
+            tr2.duration = 0.32;
+            tr2.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.3 :1.0];
+            [art.layer addAnimation:tr2 forKey:@"c26.skip"];
+            art.image = img;
+            gSkipDir = 0;
+        } else {
+            [UIView transitionWithView:art duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve
+                            animations:^{ art.image = img; } completion:nil];
+        }
     }
 
     // Our previous / play / next: tight, centered, low (like iOS 26).
@@ -1120,7 +1221,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.1.6 debug\n music: %@\n cmds: %@\n sliders: %@", gMusicDebug, gCmdDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.1.7 debug\n music: %@\n cmds: %@\n sliders: %@", gMusicDebug, gCmdDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1271,4 +1372,5 @@ static void StartLateHooks(void) {
     // Control Center's frameworks can load after SpringBoard starts. Check once
     // a second (for up to 2 minutes) and hook each part as soon as it exists.
     StartLateHooks();
+    dispatch_async(dispatch_get_main_queue(), ^{ RegisterNowPlayingNotifications(); });
 }
