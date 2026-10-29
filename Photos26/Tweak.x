@@ -1,4 +1,7 @@
-// Photos26 1.0.3 - made by nano
+// Photos26 1.1.0 - made by nano
+// 1.1.0: rounded iOS 26 thumbnails, playhead line hidden, Recently Deleted
+//        (no gray bars, glass Delete / Recover, glass top), back-arrow circle,
+//        thumbnail strip map in debug to stop the video frame spread next.
 // 1.0.3: the top "..." is now whichever right button isn't Edit, so the top
 //        glass (back circle, date capsule, ... circle) shows and Edit hides.
 // 1.0.2: no gray bar backgrounds top or bottom, thumbnails always shown,
@@ -411,6 +414,39 @@ static UIView *FindFilmstrip(UIView *v, int d) {
     return nil;
 }
 
+static BOOL gTextMode;
+static UIView *TextGlyph(UIView *v, int d) {
+    for (UIView *s in v.subviews) {
+        if (s.hidden || s.alpha < 0.01) continue;
+        if ([s isKindOfClass:[UILabel class]] && ((UILabel *)s).text.length) return s;
+        if (d < 5) { UIView *g = TextGlyph(s, d + 1); if (g) return g; }
+    }
+    return nil;
+}
+
+static PGPass *EnsureContainer(UIToolbar *tb) {
+    PGPass *c = (PGPass *)[tb viewWithTag:BOTTOM_TAG];
+    if (c.superview != tb) c = nil;
+    if (!c) {
+        c = [PGPass new];
+        c.tag = BOTTOM_TAG;
+        [tb addSubview:c];
+    }
+    __weak UIToolbar *wt = tb;
+    if (!objc_getAssociatedObject(tb, kStyled)) dispatch_async(dispatch_get_main_queue(), ^{
+        UIToolbar *t = wt;
+        if (!t || objc_getAssociatedObject(t, kStyled)) return;
+        objc_setAssociatedObject(t, kStyled, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIToolbarAppearance *a = [UIToolbarAppearance new];
+        [a configureWithTransparentBackground];
+        t.standardAppearance = a; t.compactAppearance = a; t.scrollEdgeAppearance = a; t.compactScrollEdgeAppearance = a;
+        t.tintColor = UIColor.whiteColor;
+    });
+    c.hidden = NO;
+    if (tb.clipsToBounds) tb.clipsToBounds = NO;
+    return c;
+}
+
 static void LayoutBottom(UIToolbar *tb) {
     PGPass *c = (PGPass *)[tb viewWithTag:BOTTOM_TAG];
     if (c.superview != tb) c = nil;
@@ -426,6 +462,40 @@ static void LayoutBottom(UIToolbar *tb) {
         [kinds addObject:k];
         if (![k isEqualToString:@"?"]) { PGBox *b = [PGBox new]; b.obj = it; found[k] = b; }
     }
+    // Recently Deleted and similar: text buttons (Delete / Recover) in the viewer.
+    NSMutableArray *textViews = [NSMutableArray array];
+    for (UIBarButtonItem *it in tb.items) {
+        UIView *v = KV(it, @"view");
+        if (!v.window || v.hidden) continue;
+        UIView *g = TextGlyph(v, 0);
+        if (g) [textViews addObject:g];
+    }
+    if (gEnabled && !found[@"share"] && textViews.count && FindFilmstrip(tb.window, 0)) {
+        for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view"));
+        c = EnsureContainer(tb);
+        gToolbar = tb; gTextMode = YES;
+        for (UIView *v in c.subviews) v.hidden = !([v isKindOfClass:[PGGlass class]] && [v.accessibilityIdentifier hasPrefix:@"t"]);
+        int i = 0;
+        for (UIView *g in textViews) {
+            PGGlass *gl = GlassIn(c, [NSString stringWithFormat:@"t%d", i++]);
+            gl.hidden = NO;
+            CGRect r = [g convertRect:g.bounds toView:c];
+            CGFloat w = r.size.width + 40, h = 44;
+            SetFrame(gl, CGRectMake(round(CGRectGetMidX(r) - w / 2), round(CGRectGetMidY(r) - h / 2), round(w), h));
+        }
+        for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"t"] && [[v.accessibilityIdentifier substringFromIndex:1] intValue] >= i) v.hidden = YES;
+        // Under Apple's text buttons (they stay Apple's own, just on glass).
+        if (tb.subviews.firstObject != c) { [c removeFromSuperview]; [tb insertSubview:c atIndex:0]; }
+        UIView *bg = nil;
+        for (UIView *s in tb.subviews) if ([NSStringFromClass([s class]) containsString:@"Background"]) bg = s;
+        if (bg) [tb insertSubview:c aboveSubview:bg];
+        SetFrame(c, tb.bounds);
+        gBottomDebug = [NSString stringWithFormat:@"text mode: %lu buttons", (unsigned long)textViews.count];
+        StartLink();
+        return;
+    }
+    gTextMode = NO;
+    for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"t"]) v.hidden = YES;
     // Only the photo/video viewer toolbar: it has both share and trash.
     if (!found[@"share"] || !found[@"trash"]) { c.hidden = YES; for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view")); gBottomDebug = [NSString stringWithFormat:@"not viewer: %@", [kinds componentsJoinedByString:@","]]; return; }
     gItems = found;
@@ -448,6 +518,7 @@ static void LayoutBottom(UIToolbar *tb) {
         });
     }
     c.hidden = NO;
+    for (UIView *v in c.subviews) if (![v.accessibilityIdentifier hasPrefix:@"t"] || ![v isKindOfClass:[PGGlass class]]) { if ([v isKindOfClass:[PGButton class]] || [v isKindOfClass:[PGGlass class]]) v.hidden = NO; }
     if (tb.clipsToBounds) tb.clipsToBounds = NO;
     [tb bringSubviewToFront:c];
     SetFrame(c, tb.bounds);
@@ -562,18 +633,65 @@ static void HideBarBackgrounds(UIWindow *w, CGFloat topBand, CGFloat bottomBand)
     gBgDebug = dbg.count ? [dbg componentsJoinedByString:@", "] : @"none";
 }
 
+#pragma mark - thumbnail strip
+
+static NSString *gFilmDebug = @"-";
+// iOS 26 thumbnails: rounded corners; the white playhead line goes away.
+static void StyleFilmstrip(UIWindow *w) {
+    UIView *film = FindFilmstrip(w, 0);
+    if (!film) { gFilmDebug = @"no strip"; return; }
+    NSMutableDictionary *counts = [NSMutableDictionary dictionary];
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:film];
+    int guard = 0;
+    CGFloat H = film.bounds.size.height;
+    while (stack.count && guard++ < 1500) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        NSString *n = NSStringFromClass([v class]);
+        counts[n] = @([counts[n] intValue] + 1);
+        CGSize z = v.bounds.size;
+        if ([v isKindOfClass:[UICollectionViewCell class]]) {
+            UIView *cv = ((UICollectionViewCell *)v).contentView;
+            if (v.layer.cornerRadius != 7) { v.layer.cornerRadius = 7; if (@available(iOS 13.0, *)) v.layer.cornerCurve = kCACornerCurveContinuous; }
+            if (!v.layer.masksToBounds) v.layer.masksToBounds = YES;
+            (void)cv;
+        }
+        // The thin white playhead line (tall and only a few points wide).
+        if (z.width <= 5 && z.height >= H * 0.6 && v != film && ![v isKindOfClass:[UIScrollView class]]) Mask(v);
+        [stack addObjectsFromArray:v.subviews];
+    }
+    NSMutableArray *parts = [NSMutableArray array];
+    for (NSString *k in counts) if (parts.count < 10) [parts addObject:[NSString stringWithFormat:@"%@x%@", k, counts[k]]];
+    NSMutableArray *ms = [NSMutableArray array];
+    for (Class c = [film class]; c && c != [UIView class] && ms.count < 8; c = class_getSuperclass(c)) {
+        unsigned int cnt = 0; Method *m = class_copyMethodList(c, &cnt);
+        for (unsigned int i = 0; i < cnt && ms.count < 8; i++) {
+            NSString *s = NSStringFromSelector(method_getName(m[i]));
+            if ([s rangeOfString:@"xpand" options:0].location != NSNotFound || [s rangeOfString:@"video" options:NSCaseInsensitiveSearch].location != NSNotFound) [ms addObject:s];
+        }
+        free(m);
+    }
+    gFilmDebug = [NSString stringWithFormat:@"%@ | %@ | %@", NSStringFromClass([film class]), [parts componentsJoinedByString:@" "], [ms componentsJoinedByString:@" "]];
+}
+
 #pragma mark - top bar
 
 static UIView *FindBackButton(UINavigationBar *nb) {
+    // The back button: a "BackButton" view, or else the left-most bar button control.
     NSMutableArray *stack = [NSMutableArray arrayWithArray:nb.subviews];
-    int guard = 0;
-    while (stack.count && guard++ < 300) {
+    UIView *best = nil; int guard = 0;
+    while (stack.count && guard++ < 400) {
         UIView *v = stack.firstObject; [stack removeObjectAtIndex:0];
+        if (v.tag == TOP_TAG || v.hidden || v.alpha < 0.01) continue;
         NSString *n = NSStringFromClass([v class]);
-        if ([n containsString:@"BackButton"] && v.bounds.size.width > 4 && !v.hidden) return v;
+        if ([n containsString:@"BackButton"] && v.bounds.size.width > 4) return v;
+        CGRect f = [v convertRect:v.bounds toView:nb];
+        if (([n containsString:@"ButtonBarButton"] || [v isKindOfClass:[UIControl class]]) && CGRectGetMidX(f) < 90 && f.size.width > 10 && f.size.width < 140) {
+            if (!best || f.size.width > best.bounds.size.width) best = v;
+            continue;
+        }
         [stack addObjectsFromArray:v.subviews];
     }
-    return nil;
+    return best;
 }
 
 static UIView *GlyphIn(UIView *v, int d) {
@@ -599,7 +717,7 @@ static void LayoutTop(UINavigationBar *nb) {
     // "..." is whichever right button isn't Edit (its label/icon varies).
     if (!more) for (UIBarButtonItem *it in top.rightBarButtonItems) if (it != edit) { more = it; break; }
     UIView *back = FindBackButton(nb);
-    BOOL viewer = edit && gToolbar && gToolbar.window == nb.window && ![gToolbar viewWithTag:BOTTOM_TAG].hidden;
+    BOOL viewer = (edit || gTextMode) && gToolbar && gToolbar.window == nb.window && ![gToolbar viewWithTag:BOTTOM_TAG].hidden;
     UIView *editView = KV(edit, @"view");
     if (!gEnabled || !gTopBar || !viewer) {
         if (gTopBar && gEnabled) gTopDebug = [NSString stringWithFormat:@"skip: edit=%d more=%d toolbar=%d rights=%lu", edit != nil, more != nil, gToolbar != nil, (unsigned long)top.rightBarButtonItems.count];
@@ -704,7 +822,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.0.3 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.1.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -758,6 +876,7 @@ static void UpdateDebug(UIWindow *w) {
     static NSUInteger frame; frame++;
     @try {
         if (frame % 12 == 0) LayoutBottom(tb);
+        if (frame % 20 == 9) StyleFilmstrip(tb.window);
         if (frame % 30 == 2) {
             UINavigationBar *n = gNavBar;
             CGFloat topBand = n.window ? CGRectGetMaxY([n convertRect:n.bounds toView:nil]) : 100;
