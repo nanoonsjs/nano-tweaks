@@ -1,4 +1,7 @@
-// MusicPill 0.6.2 - made by nano
+// MusicPill 0.6.3 - made by nano
+// 0.6.3: no flash of the old Play/Shuffle when an album opens. They're hidden
+//        the moment they appear and the new row is built right away, instead
+//        of waiting for the next 1/4-second check.
 // 0.6.2: the row's right circle shows Music's real download control live
 //        (arrow, download progress, checkmark) via a portal view; back-button
 //        glass sits behind the chevron, 34pt like iOS 26, off the screen edge.
@@ -114,6 +117,7 @@ static void LoadPrefs(void) {
 }
 
 static void Update(UITabBar *tb);
+static void AlbumControlLaidOut(UIControl *c);
 
 static void ReloadAndApply(void) {
     LoadPrefs();
@@ -478,7 +482,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -526,6 +530,11 @@ static void Update(UITabBar *tb) {
 - (void)setAlpha:(CGFloat)alpha {
     if (alpha > 0 && objc_getAssociatedObject(self, kHidByUs)) { %orig(0); return; }
     %orig;
+}
+// When Music lays out its (hidden) Play/Shuffle, move our row with it right away.
+- (void)layoutSubviews {
+    %orig;
+    if (objc_getAssociatedObject(self, kHidByUs)) AlbumControlLaidOut(self);
 }
 %end
 
@@ -793,15 +802,24 @@ static UIButton *RowButton(NSInteger tag, NSString *symbol, NSString *title, BOO
     return b;
 }
 
+static NSHashTable *gPreHidden; // Play/Shuffle hidden early, before the row exists
+static CFTimeInterval gPreHideTime;
+
+static void ShowPreHidden(UIControl *keepA, UIControl *keepB) {
+    for (UIControl *c in [gPreHidden allObjects]) if (c != keepA && c != keepB) ShowOriginal(c);
+    [gPreHidden removeAllObjects];
+}
+
 static void TearDownRow(void) {
     UIView *parent = gRowParent;
     [[parent viewWithTag:ROW_TAG] removeFromSuperview];
     ShowOriginal(gPlayCtl); ShowOriginal(gShuffleCtl); ShowOriginal(gDownloadCtl);
+    ShowPreHidden(nil, nil);
+    gPortalLive = NO;
 }
 
 static void AlbumTick(UIWindow *w) {
     if (!w) return;
-    gPortalLive = NO;
     if (!gAlbum) { TearDownRow(); gAlbumDebug = @"off"; return; }
 
     UIControl *play = gPlayCtl, *shuffle = gShuffleCtl;
@@ -813,6 +831,9 @@ static void AlbumTick(UIWindow *w) {
         UIControl *p = nil, *s = nil, *d = nil;
         FindHeaderControls(w, 0, &p, &s, &d);
         if (!p || !s) {
+            // One of the pair may not have its label yet. Give it half a second
+            // before showing any early-hidden button again (no flash either way).
+            if (gPreHidden.count && CACurrentMediaTime() - gPreHideTime < 0.5) { gLastHeaderSearch = 0; return; }
             TearDownRow();
             gPlayCtl = nil; gShuffleCtl = nil; gDownloadCtl = nil;
             gAlbumDebug = [NSString stringWithFormat:@"play=%d shuffle=%d", p != nil, s != nil];
@@ -824,6 +845,7 @@ static void AlbumTick(UIWindow *w) {
     UIView *parent = CommonParent(play, shuffle);
     // Only take over if the originals can be triggered from our buttons.
     if (!parent || !play.allControlEvents || !shuffle.allControlEvents) {
+        TearDownRow();
         gAlbumDebug = [NSString stringWithFormat:@"%@ ev=%lu/%lu parent=%d (can't forward taps)",
                        NSStringFromClass([play class]), (unsigned long)play.allControlEvents, (unsigned long)shuffle.allControlEvents, parent != nil];
         return;
@@ -905,8 +927,65 @@ static void AlbumTick(UIWindow *w) {
 
     HideOriginal(play);
     HideOriginal(shuffle);
+    ShowPreHidden(play, shuffle);
     gAlbumDebug = [NSString stringWithFormat:@"row ok play=%@ slot=%@ portal=%d", NSStringFromClass([play class]), slot ? NSStringFromClass([slot class]) : @"none", gPortalLive];
 }
+
+#pragma mark - instant album triggers
+
+static __weak UIWindow *gAlbumWindow;
+static BOOL gAlbumPending;
+
+static void ScheduleAlbum(UIWindow *w) {
+    if (w) gAlbumWindow = w;
+    if (gAlbumPending) return;
+    gAlbumPending = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        gAlbumPending = NO;
+        UIWindow *win = gAlbumWindow;
+        if (win) { @try { AlbumTick(win); } @catch (__unused id e) {} }
+    });
+}
+
+static void AlbumControlLaidOut(UIControl *c) {
+    if (gAlbum && (c == gPlayCtl || c == gShuffleCtl)) ScheduleAlbum(c.window);
+}
+
+static BOOL InOurRow(UIView *v) {
+    for (UIView *p = v; p; p = p.superview) if (p.tag == ROW_TAG) return YES;
+    return NO;
+}
+
+// Called the moment a "Play"/"Shuffle" label shows up: hide its button now and
+// build the row on this same pass, so the old buttons are never drawn.
+static void PreHide(UILabel *label) {
+    if (!gAlbum || !label.window || InOurRow(label)) return;
+    UIControl *c = ControlAbove(label);
+    if (!c || InBottomBars(c)) return;
+    if (c != gPlayCtl && c != gShuffleCtl) {
+        if (!gPreHidden) gPreHidden = [NSHashTable weakObjectsHashTable];
+        HideOriginal(c);
+        [gPreHidden addObject:c];
+        gPreHideTime = CACurrentMediaTime();
+        gLastHeaderSearch = 0; // search immediately, no throttle
+    }
+    ScheduleAlbum(label.window);
+}
+
+static BOOL IsHeaderTitle(NSString *s) {
+    return [s isKindOfClass:[NSString class]] && ([s isEqualToString:@"Play"] || [s isEqualToString:@"Shuffle"]);
+}
+
+%hook UILabel
+- (void)setText:(NSString *)text {
+    %orig;
+    if (gAlbum && IsHeaderTitle(text) && self.window) { @try { PreHide(self); } @catch (__unused id e) {} }
+}
+- (void)didMoveToWindow {
+    %orig;
+    if (gAlbum && self.window && IsHeaderTitle(self.text)) { @try { PreHide(self); } @catch (__unused id e) {} }
+}
+%end
 
 #pragma mark - glass top buttons
 
