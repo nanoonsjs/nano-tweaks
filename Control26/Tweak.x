@@ -1,4 +1,7 @@
-// Control26 0.3.3 - made by nano
+// Control26 0.3.4 - made by nano
+// 0.3.4: iOS 26 slider feel: the fill glides toward the finger every frame
+//        (smoothed, ~0.1s) instead of snapping, and a flick carries on a bit
+//        before easing to a stop.
 // 0.3.3: volume tracks the finger 1:1 too, Control Center's scroll waits for
 //        any slider drag (no more stalls on fast / slow drags), Auto-Brightness
 //        check off the main thread (no open lag), cards appear 10% faster.
@@ -1179,6 +1182,63 @@ static void ReleaseStretch(UIView *slider, CGFloat fingerVelocityY) {
     WakeSpring(s);
 }
 
+#pragma mark - smooth slider (iOS 26 glide)
+
+static const void *kGlide = &kGlide;
+@interface C26Glide : NSObject
+@property (nonatomic, weak) UIView *slider;
+@property (nonatomic) float target, cur;
+@property (nonatomic) BOOL dragging;
+@end
+@implementation C26Glide
+@end
+static NSHashTable *gGlides;
+static CADisplayLink *gGlideLink;
+static void StyleSlider(UIView *slider);
+@interface C26GlideTicker : NSObject
++ (instancetype)shared;
+@end
+@implementation C26GlideTicker
++ (instancetype)shared { static C26GlideTicker *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26GlideTicker new]; }); return t; }
+- (void)step:(CADisplayLink *)l {
+    CGFloat dt = l.targetTimestamp - l.timestamp;
+    if (dt <= 0 || dt > 0.05) dt = 1.0 / 60;
+    float a = 1 - expf(-(float)dt * 22);   // ~0.1s to catch up
+    for (C26Glide *g in [gGlides allObjects]) {
+        UIView *s = g.slider;
+        if (!s) { [gGlides removeObject:g]; continue; }
+        float d = g.target - g.cur;
+        if (fabsf(d) < 0.0008 && !g.dragging) {
+            g.cur = g.target;
+            SetSliderValue(s, g.cur); StyleSlider(s);
+            [gGlides removeObject:g];
+            continue;
+        }
+        g.cur += d * a;
+        SetSliderValue(s, g.cur);
+        StyleSlider(s);
+    }
+    if (!gGlides.count) { [gGlideLink invalidate]; gGlideLink = nil; }
+}
+@end
+static C26Glide *GlideFor(UIView *slider) {
+    C26Glide *g = objc_getAssociatedObject(slider, kGlide);
+    if (!g) { g = [C26Glide new]; g.slider = slider; objc_setAssociatedObject(slider, kGlide, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    return g;
+}
+static void GlideTo(UIView *slider, float target) {
+    C26Glide *g = GlideFor(slider);
+    if (![gGlides containsObject:g]) g.cur = SliderValue(slider);
+    g.target = MAX(0, MIN(1, target));
+    if (!gGlides) gGlides = [NSHashTable hashTableWithOptions:NSPointerFunctionsStrongMemory];
+    [gGlides addObject:g];
+    if (!gGlideLink) {
+        gGlideLink = [CADisplayLink displayLinkWithTarget:[C26GlideTicker shared] selector:@selector(step:)];
+        if (@available(iOS 15.0, *)) gGlideLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+        [gGlideLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    }
+}
+
 @interface C26Bouncer : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 @end
@@ -1206,11 +1266,12 @@ static void ReleaseStretch(UIView *slider, CGFloat fingerVelocityY) {
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
         CGFloat over = 0; int dir = 0; float val;
         if (direct) {
-            // 1:1: the fill moves exactly as far as the finger, every update.
+            // iOS 26 glide: the fill follows the finger smoothly (never jumps).
             float v0 = [objc_getAssociatedObject(v, kStartValue) floatValue];
             float raw = v0 - [g translationInView:v].y / H;
             val = MAX(0, MIN(1, raw));
-            if (fabsf(val - SliderValue(v)) > 0.0001) { SetSliderValue(v, val); StyleSlider(v); }
+            GlideFor(v).dragging = YES;
+            GlideTo(v, val);
             if (raw > 1) { over = (raw - 1) * H; dir = 1; } else if (raw < 0) { over = -raw * H; dir = -1; }
         } else {
             CGFloat top = v.center.y - H / 2, bottom = v.center.y + H / 2;
@@ -1226,7 +1287,14 @@ static void ReleaseStretch(UIView *slider, CGFloat fingerVelocityY) {
         objc_setAssociatedObject(v, kBounce, @(edge), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } else if (g.state >= UIGestureRecognizerStateEnded) {
         objc_setAssociatedObject(v, kBounce, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        if (direct) SetSliderValue(v, MAX(0, MIN(1, SliderValue(v))));
+        if (direct) {
+            // A flick carries on a little in the direction you were going.
+            C26Glide *gl = GlideFor(v);
+            gl.dragging = NO;
+            float vy = [g velocityInView:v].y;
+            float carry = MAX(-0.18f, MIN(0.18f, -vy / H * 0.07f));
+            GlideTo(v, gl.target + carry);
+        }
         ReleaseStretch(v, [g velocityInView:v].y);
     }
 }
@@ -1975,7 +2043,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.3.3 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.3.4 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
