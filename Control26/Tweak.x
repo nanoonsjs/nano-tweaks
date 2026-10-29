@@ -1,4 +1,7 @@
-// Control26 0.3.2 - made by nano
+// Control26 0.3.3 - made by nano
+// 0.3.3: volume tracks the finger 1:1 too, Control Center's scroll waits for
+//        any slider drag (no more stalls on fast / slow drags), Auto-Brightness
+//        check off the main thread (no open lag), cards appear 10% faster.
 // 0.3.2: subtle fade-and-settle when expanded cards appear, music text a bit
 //        smaller, Auto-Brightness switched off (setting "Stop Auto-Brightness").
 // 0.3.1: tap anywhere on the brightness / volume capsule to open it, no icon
@@ -199,7 +202,12 @@ static void Tick(void);
 
 static void StartTimer(void) {
     if (gTimer) return;
-    @try { StopAutoBrightness(); } @catch (__unused id e) {}   // each time Control Center opens
+    // Each time Control Center opens (at most once a minute, off the main thread).
+    static CFTimeInterval lastAuto;
+    if (CACurrentMediaTime() - lastAuto > 60) {
+        lastAuto = CACurrentMediaTime();
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ @try { StopAutoBrightness(); } @catch (__unused id e) {} });
+    }
     gTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) { @try { Tick(); } @catch (__unused id e) {} }];
     dispatch_async(dispatch_get_main_queue(), ^{ @try { Tick(); } @catch (__unused id e) {} });
 }
@@ -1085,7 +1093,8 @@ static const void *kApplePan = &kApplePan;
 // touch update. Otherwise leave Apple's tracking alone.
 static void SetupDirectTracking(UIView *slider) {
     if (objc_getAssociatedObject(slider, kDirect)) return;
-    if (SliderKind(slider) != 1 || ![slider isKindOfClass:[UIControl class]]) return;
+    int kind = SliderKind(slider);
+    if ((kind != 1 && kind != 2) || ![slider isKindOfClass:[UIControl class]]) return;
     if (!(((UIControl *)slider).allControlEvents & UIControlEventValueChanged)) return;
     if (SliderValue(slider) < 0) return;
     id applePan = KV(slider, @"valueChangeGestureRecognizer");
@@ -1180,8 +1189,8 @@ static void ReleaseStretch(UIView *slider, CGFloat fingerVelocityY) {
     return objc_getAssociatedObject(a.view, kDirect) == nil;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)b {
-    // Control Center's own scrolling waits for our slider drag.
-    return objc_getAssociatedObject(a.view, kDirect) != nil && b.view != a.view && [a.view isDescendantOfView:b.view];
+    // Control Center's own scrolling waits for any slider drag.
+    return b.view != a.view && [a.view isDescendantOfView:b.view];
 }
 - (void)pan:(UIPanGestureRecognizer *)g {
     UIView *v = g.view;
@@ -1932,7 +1941,7 @@ static void StyleConnectivity(NSArray *buttons) {
                 // A small, quick settle: fade in from just slightly smaller.
                 card.alpha = 0;
                 card.transform = CGAffineTransformMakeScale(0.96, 0.96);
-                [UIView animateWithDuration:0.28 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0.3
+                [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0.3
                                     options:UIViewAnimationOptionAllowUserInteraction animations:^{
                     card.alpha = a; card.transform = CGAffineTransformIdentity;
                 } completion:nil];
@@ -1966,7 +1975,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.3.2 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.3.3 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];

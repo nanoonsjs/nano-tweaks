@@ -1,6 +1,6 @@
 Package: com.user.control26
 Name: Control26
-Version: 0.3.2
+Version: 0.3.3
 Architecture: iphoneos-arm64
 Description: iOS 26 style Control Center: music module with artwork and round AirPlay, colored slider icons, slider bounce. Made by nano.
 Maintainer: nano
