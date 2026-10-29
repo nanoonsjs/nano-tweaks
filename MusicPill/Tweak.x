@@ -1,4 +1,8 @@
-// MusicPill 0.7.3 - made by nano
+// MusicPill 0.7.4 - made by nano
+// 0.7.4: queue pills, new method. The queue list is slid down 54pt (transform)
+//        and the pills fill the space at its top. Music's own scroll math is
+//        untouched, so nothing can end up under the pills; the list's bottom
+//        54pt is trimmed (mask + touch area) so it never covers the controls.
 // 0.7.3: queue pills are trimmed at the list's top edge (slide under the song
 //        info instead of over it), Music's auto-scroll is corrected so the
 //        pills show when the queue opens, and Repeat One is read from Music's
@@ -98,7 +102,7 @@ static const void *kFight = &kFight;
 static const void *kHidByUs = &kHidByUs;
 static const void *kClearedBG = &kClearedBG;
 static const void *kQueueTable = &kQueueTable;
-static const void *kQueuePad = &kQueuePad;
+static const void *kQueuePad = &kQueuePad; // original clipsToBounds of the queue list
 static NSString *gQueueDebug = @"-";
 
 #pragma mark - prefs
@@ -184,7 +188,6 @@ static void RoundIfQueueButton(UIView *v) {
 }
 static void AlbumControlLaidOut(UIControl *c);
 static void PositionQueueRow(UIScrollView *table);
-static CGPoint QueueCorrectOffset(UIScrollView *sv, CGPoint o);
 
 static void ReloadAndApply(void) {
     LoadPrefs();
@@ -550,7 +553,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.7.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.7.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -618,29 +621,26 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
     else if (acc > 12) SetPillExpanded(NO);
 }
 
-%hook UITableView
-- (void)setSectionHeaderTopPadding:(CGFloat)padding {
-    if ([objc_getAssociatedObject(self, kQueueTable) isEqual:@"pad"]) { %orig(QUEUE_EXTRA); return; }
-    %orig;
-}
-%end
-
 %hook UIScrollView
-- (void)setContentOffset:(CGPoint)offset animated:(BOOL)animated {
-    if ([objc_getAssociatedObject(self, kQueueTable) isEqual:@"pad"] && !self.isTracking && !self.isDragging)
-        offset = QueueCorrectOffset(self, offset);
-    %orig(offset, animated);
-}
 - (void)setContentInset:(UIEdgeInsets)inset {
-    // Queue list: Music sets its inset; we add our pill band on top of it.
-    if ([objc_getAssociatedObject(self, kQueueTable) isEqual:@"inset"]) inset.top += QUEUE_EXTRA;
+    // Queue list is slid down 54pt; add 54pt at the bottom so the last song
+    // can still scroll fully into view above the trimmed edge.
+    if (objc_getAssociatedObject(self, kQueueTable)) inset.bottom += QUEUE_EXTRA;
     %orig(inset);
 }
+- (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)event {
+    // Touch area follows what's visible: the pill band on top, nothing in the
+    // trimmed 54pt at the bottom (so the play controls stay tappable).
+    if (objc_getAssociatedObject(self, kQueueTable)) {
+        CGRect b = self.bounds;
+        return p.x >= CGRectGetMinX(b) && p.x <= CGRectGetMaxX(b) &&
+               p.y >= b.origin.y - QUEUE_EXTRA && p.y < b.origin.y + b.size.height - QUEUE_EXTRA;
+    }
+    return %orig;
+}
 - (void)setContentOffset:(CGPoint)offset {
-    if ([objc_getAssociatedObject(self, kQueueTable) isEqual:@"pad"] && !self.isTracking && !self.isDragging && !self.isDecelerating)
-        offset = QueueCorrectOffset(self, offset);
     CGPoint old = self.contentOffset;
-    %orig(offset);
+    %orig;
     if (objc_getAssociatedObject(self, kQueueTable)) { @try { PositionQueueRow(self); } @catch (__unused id e) {} }
     if (!gRound) return;
     // Only the user scrolling a full page: not side-scrolling rows, not small views.
@@ -1391,16 +1391,6 @@ static void RefreshQueueRow(void) {
 
 static __weak UIView *gQueueHeader;
 
-static NSInteger QueueSection(UITableView *tv, UIView *header) {
-    if (!header) return NSNotFound;
-    NSInteger n = MIN(tv.numberOfSections, 60);
-    for (NSInteger i = 0; i < n; i++) {
-        UIView *h = [tv headerViewForSection:i];
-        if (h && (h == header || [header isDescendantOfView:h])) return i;
-    }
-    return NSNotFound;
-}
-
 static void LayoutPillButtons(UIView *row) {
     CGFloat pad = 20, gap = 10, h = 40, n = 3, W = row.bounds.size.width;
     CGFloat w = (W - pad * 2 - gap * (n - 1)) / n;
@@ -1411,83 +1401,45 @@ static void LayoutPillButtons(UIView *row) {
     }
 }
 
-// Places the pill row. Table mode: in the 54pt gap above "Continue Playing",
-// scrolling with the list. Fallback mode: pinned to the top of the list.
-static void PositionQueueRow(UIScrollView *table) {
+static CGAffineTransform QueueShift(void) { return CGAffineTransformMakeTranslation(0, QUEUE_EXTRA); }
+
+// The pill row lives inside the list, in the 54pt just above what's scrolled
+// into view. With the list slid down 54pt, that band lands exactly where the
+// top of the list used to be, and it moves/fades with the list.
+static void PositionQueueRow(UIScrollView *list) {
     UIView *row = nil;
-    for (UIView *s in table.subviews) if (s.tag == QUEUEROW_TAG) row = s;
+    for (UIView *s in list.subviews) if (s.tag == QUEUEROW_TAG) row = s;
     if (!row) return;
-    id mode = objc_getAssociatedObject(table, kQueueTable);
-    CGRect f;
-    if ([mode isEqual:@"pad"] && [table isKindOfClass:[UITableView class]]) {
-        UITableView *tv = (UITableView *)table;
-        NSInteger sec = QueueSection(tv, gQueueHeader);
-        if (sec == NSNotFound) { row.hidden = YES; return; }
-        UIView *host = [tv headerViewForSection:sec];
-        CGRect r = [tv rectForHeaderInSection:sec];
-        // Some iOS versions count the padding inside the header rect, some don't.
-        BOOL padIncluded = host && r.size.height >= host.bounds.size.height + QUEUE_EXTRA - 1;
-        CGFloat y = padIncluded ? r.origin.y : r.origin.y - QUEUE_EXTRA;
-        f = CGRectMake(0, y, tv.bounds.size.width, QUEUE_EXTRA);
-        // Under the (sticky) header, above the song rows.
-        if (host && host.superview == tv) {
-            NSUInteger ri = [tv.subviews indexOfObject:row], hi = [tv.subviews indexOfObject:host];
-            if (ri == NSNotFound || ri > hi || ri + 1 != hi) [tv insertSubview:row belowSubview:host];
-        } else if (tv.subviews.lastObject != row) [tv bringSubviewToFront:row];
-    } else {
-        CGFloat top = table.contentOffset.y + table.adjustedContentInset.top - QUEUE_EXTRA;
-        f = CGRectMake(0, top, table.bounds.size.width, QUEUE_EXTRA);
-        if (table.subviews.lastObject != row) [table bringSubviewToFront:row];
-    }
+    CGRect b = list.bounds;
+    CGRect f = CGRectMake(0, b.origin.y - QUEUE_EXTRA, b.size.width, QUEUE_EXTRA);
     if (!CGRectEqualToRect(row.frame, f)) row.frame = f;
+    if (list.subviews.lastObject != row) [list bringSubviewToFront:row];
     LayoutPillButtons(row);
-    // Trim whatever is above the list's visible top so the pills slide under
-    // the song info instead of drawing over it.
-    CGFloat cut = MAX(0, table.bounds.origin.y - f.origin.y);
-    if (cut >= QUEUE_EXTRA - 0.5) { row.hidden = YES; return; }
-    row.hidden = NO;
+
+    // Slide the list down (only if Music isn't using the transform itself).
+    CGAffineTransform shift = QueueShift();
+    if (CGAffineTransformIsIdentity(list.transform)) list.transform = shift;
+    if (list.clipsToBounds) list.clipsToBounds = NO;
+
+    // Show: the pill band + the list minus its bottom 54pt.
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    CALayer *mask = row.layer.mask;
-    if (!mask) { mask = [CALayer layer]; mask.backgroundColor = UIColor.blackColor.CGColor; row.layer.mask = mask; }
-    CGRect mf = CGRectMake(0, cut, f.size.width, QUEUE_EXTRA - cut);
+    CALayer *mask = list.layer.mask;
+    if (!mask) { mask = [CALayer layer]; mask.backgroundColor = UIColor.blackColor.CGColor; list.layer.mask = mask; }
+    CGRect mf = CGRectMake(0, b.origin.y - QUEUE_EXTRA, b.size.width, b.size.height);
     if (!CGRectEqualToRect(mask.frame, mf)) mask.frame = mf;
     [CATransaction commit];
 }
 
-// Music scrolls the queue so "Continue Playing" sits at the very top, which
-// hides our gap above it. When Music (not your finger) lines the header up
-// with the top, move it down by the gap so the pills are visible.
-static CGPoint QueueCorrectOffset(UIScrollView *sv, CGPoint o) {
-    if (![sv isKindOfClass:[UITableView class]]) return o;
-    UITableView *tv = (UITableView *)sv;
-    NSInteger sec = QueueSection(tv, gQueueHeader);
-    if (sec == NSNotFound) return o;
-    UIView *host = [tv headerViewForSection:sec];
-    CGRect r = [tv rectForHeaderInSection:sec];
-    BOOL padIncluded = host && r.size.height >= host.bounds.size.height + QUEUE_EXTRA - 1;
-    CGFloat headerTop = padIncluded ? r.origin.y + QUEUE_EXTRA : r.origin.y;
-    CGFloat tops[3] = { tv.adjustedContentInset.top, tv.contentInset.top, 0 };
-    for (int i = 0; i < 3; i++) {
-        if (fabs(o.y + tops[i] - headerTop) < 0.5) {
-            o.y = MAX(o.y - QUEUE_EXTRA, -tv.adjustedContentInset.top);
-            break;
-        }
-    }
-    return o;
-}
-
-static void UnflagQueueTable(UIScrollView *table) {
-    id mode = table ? objc_getAssociatedObject(table, kQueueTable) : nil;
-    if (!mode) return;
-    for (UIView *s in [table.subviews copy]) if (s.tag == QUEUEROW_TAG) [s removeFromSuperview];
-    objc_setAssociatedObject(table, kQueueTable, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if ([mode isEqual:@"pad"] && [table isKindOfClass:[UITableView class]]) {
-        NSNumber *orig = objc_getAssociatedObject(table, kQueuePad);
-        ((UITableView *)table).sectionHeaderTopPadding = orig ? orig.doubleValue : 0;
-    } else {
-        UIEdgeInsets i = table.contentInset; i.top -= QUEUE_EXTRA; table.contentInset = i;
-    }
+static void UnflagQueueTable(UIScrollView *list) {
+    if (!list || !objc_getAssociatedObject(list, kQueueTable)) return;
+    for (UIView *s in [list.subviews copy]) if (s.tag == QUEUEROW_TAG) [s removeFromSuperview];
+    objc_setAssociatedObject(list, kQueueTable, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIEdgeInsets i = list.contentInset; i.bottom -= QUEUE_EXTRA; list.contentInset = i;
+    if (CGAffineTransformEqualToTransform(list.transform, QueueShift())) list.transform = CGAffineTransformIdentity;
+    list.layer.mask = nil;
+    NSNumber *clip = objc_getAssociatedObject(list, kQueuePad);
+    if (clip) list.clipsToBounds = clip.boolValue;
     ShowOriginal(gQShuffle); ShowOriginal(gQRepeat); ShowOriginal(gQAuto);
 }
 
@@ -1527,25 +1479,12 @@ static void QueueTick(UIView *player) {
     gQueueHeader = header;
 
     if (!objc_getAssociatedObject(table, kQueueTable)) {
-        if ([table isKindOfClass:[UITableView class]]) {
-            // A 54pt gap above the "Continue Playing" header, part of the list itself.
-            UITableView *tv = (UITableView *)table;
-            objc_setAssociatedObject(table, kQueuePad, @(tv.sectionHeaderTopPadding), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(table, kQueueTable, @"pad", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            tv.sectionHeaderTopPadding = QUEUE_EXTRA;
-            [tv layoutIfNeeded];
-            gQueueHeader = header;
-            tv.contentOffset = tv.contentOffset; // through the hook: shows the gap if Music hid it
-        } else {
-            objc_setAssociatedObject(table, kQueueTable, @"inset", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            CGPoint o = table.contentOffset;
-            table.contentInset = table.contentInset;   // goes through the hook (+54)
-            o.y -= QUEUE_EXTRA;
-            table.contentOffset = o;
-        }
+        objc_setAssociatedObject(table, kQueuePad, @(table.clipsToBounds), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(table, kQueueTable, @"shift", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        table.contentInset = table.contentInset;   // through the hook: +54 at the bottom
         UIView *row = [UIView new];
         row.tag = QUEUEROW_TAG;
-        // Solid background so nothing shows through behind the pills.
+        // Solid background so the list never shows through behind the pills.
         UIColor *bg = table.backgroundColor;
         row.backgroundColor = (bg && CGColorGetAlpha(bg.CGColor) > 0.9) ? bg : UIColor.blackColor;
         for (int i = 0; i < 3; i++) {
@@ -1559,7 +1498,7 @@ static void QueueTick(UIView *player) {
     HideOriginal(sh); HideOriginal(rp); if (ap) HideOriginal(ap);
     PositionQueueRow(table);
     RefreshQueueRow();
-    gQueueDebug = [NSString stringWithFormat:@"row ok (%@) %@ / %@ / %@", objc_getAssociatedObject(table, kQueueTable),
+    gQueueDebug = [NSString stringWithFormat:@"row ok (%@, %@) %@ / %@ / %@", objc_getAssociatedObject(table, kQueueTable), NSStringFromClass([table class]),
                    NSStringFromClass([sh class]), NSStringFromClass([rp class]), ap ? NSStringFromClass([ap class]) : @"-"];
 }
 
