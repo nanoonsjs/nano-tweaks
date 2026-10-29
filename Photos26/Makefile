@@ -1,0 +1,14 @@
+TARGET := iphone:clang:latest:15.0
+# Photos is an Apple app (arm64e), so this must be arm64e to load there.
+ARCHS = arm64e
+THEOS_PACKAGE_SCHEME = rootless
+THEOS_PLATFORM_DEB_COMPRESSION_TYPE = xz
+
+include $(THEOS)/makefiles/common.mk
+
+TWEAK_NAME = Photos26
+Photos26_FILES = Tweak.x
+Photos26_FRAMEWORKS = UIKit QuartzCore AVFoundation CoreMedia
+Photos26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
+
+include $(THEOS_MAKE_PATH)/tweak.mk

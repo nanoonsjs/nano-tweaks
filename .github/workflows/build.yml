@@ -26,7 +26,7 @@ jobs:
       - name: Build debs
         run: |
           mkdir -p out
-          for p in MusicPill Control26 PhotosGlass; do  # Spotlight26 ditched
+          for p in MusicPill Control26 Photos26; do  # PhotosGlass replaced by Photos26, Spotlight26 ditched
             echo "::group::$p"
             (cd "$p" && gmake clean package FINALPACKAGE=1)
             cp "$p"/packages/*.deb out/
