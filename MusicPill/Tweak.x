@@ -1,4 +1,7 @@
-// MusicPill 0.6.1 - made by nano
+// MusicPill 0.6.2 - made by nano
+// 0.6.2: the row's right circle shows Music's real download control live
+//        (arrow, download progress, checkmark) via a portal view; back-button
+//        glass sits behind the chevron, 34pt like iOS 26, off the screen edge.
 // 0.6.1: no more flicker. Music's resets of the buttons we replace/clear are now
 //        blocked when they happen (hooks) instead of corrected 4x a second, and
 //        the top glass is attached to the buttons so it moves with them.
@@ -31,6 +34,12 @@
 #import <dlfcn.h>
 #import <MediaPlayer/MediaPlayer.h>
 
+// UIKit's private live-mirror view: draws another view's current contents
+// (including its animations) somewhere else.
+@interface UIView (MPPortal)
+- (instancetype)initWithSourceView:(UIView *)source;
+@end
+
 #define DOM CFSTR("com.user.musicpill")
 #define DOM_NS @"com.user.musicpill"
 #define NOTIFY CFSTR("com.user.musicpill/prefschanged")
@@ -39,6 +48,7 @@
 #define MARQUEE_TAG 0x4D504D51
 #define ROW_TAG 0x4D50524F
 #define NAVGLASS_TAG 0x4D504E47
+#define PORTAL_TAG 0x4D50504F
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gMarquee = YES, gAlbum = YES, gNavGlass = YES;
@@ -468,7 +478,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -676,6 +686,16 @@ static void MarqueeTick(UIView *mini) {
 #pragma mark - iOS 26 album / playlist buttons
 
 static __weak UIControl *gPlayCtl, *gShuffleCtl, *gDownloadCtl;
+// The download/checkmark slot in the top bar (leftmost right-hand button).
+static __weak UIView *gSlotView;
+static BOOL gPortalLive = NO;
+
+static UIControl *FirstControl(UIView *v, int depth) {
+    if ([v isKindOfClass:[UIControl class]]) return (UIControl *)v;
+    if (depth > 6) return nil;
+    for (UIView *s in v.subviews) { UIControl *c = FirstControl(s, depth + 1); if (c) return c; }
+    return nil;
+}
 static __weak UIView *gRowParent;
 static CFTimeInterval gLastHeaderSearch;
 
@@ -742,7 +762,7 @@ static void Forward(UIControl *c) {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     if (b.tag == 1) Forward(gPlayCtl);
     else if (b.tag == 2) Forward(gShuffleCtl);
-    else if (b.tag == 3) Forward(gDownloadCtl);
+    else if (b.tag == 3) { UIView *slot = gSlotView; if (slot) Forward(FirstControl(slot, 0)); }
 }
 @end
 
@@ -781,6 +801,7 @@ static void TearDownRow(void) {
 
 static void AlbumTick(UIWindow *w) {
     if (!w) return;
+    gPortalLive = NO;
     if (!gAlbum) { TearDownRow(); gAlbumDebug = @"off"; return; }
 
     UIControl *play = gPlayCtl, *shuffle = gShuffleCtl;
@@ -839,9 +860,11 @@ static void AlbumTick(UIWindow *w) {
     CGRect cf = CGRectOffset(u, -rf.origin.x, -rf.origin.y);
     if (!CGRectEqualToRect(cover.frame, cf)) cover.frame = cf;
 
-    UIControl *dl = gDownloadCtl;
-    // Music hides its download button once the album is downloaded; mirror that.
-    BOOL showDL = dl && dl.window && !dl.hidden && dl.superview && !dl.superview.hidden;
+    // Right circle: Music's own download control from the top bar, mirrored
+    // live, so the arrow, the download progress and the checkmark all show
+    // here in the same spot.
+    UIView *slot = gSlotView;
+    BOOL showDL = slot && slot.window;
     UIButton *bShuffle = [row viewWithTag:2], *bPlay = [row viewWithTag:1], *bDL = [row viewWithTag:3];
     CGFloat W = rf.size.width, gap = 11, playW = MIN(W * 0.45, 220);
     CGFloat x0 = (W - playW) / 2;
@@ -851,12 +874,38 @@ static void AlbumTick(UIWindow *w) {
     if (!CGRectEqualToRect(bDL.frame, fd)) bDL.frame = fd;
     bShuffle.layer.cornerRadius = h / 2;
     bDL.layer.cornerRadius = h / 2;
-    bDL.hidden = !showDL;
+    UIView *portal = nil;
+    for (UIView *s in bDL.subviews) if (s.tag == PORTAL_TAG) portal = s;
+    if (portal) {
+        id src = nil;
+        @try { src = [portal valueForKey:@"sourceView"]; } @catch (__unused id e) {}
+        if (src != slot || !showDL) { [portal removeFromSuperview]; portal = nil; }
+    }
+    if (showDL && !portal) {
+        Class P = NSClassFromString(@"_UIPortalView");
+        if (P && [P instancesRespondToSelector:@selector(initWithSourceView:)]) {
+            @try {
+                portal = [(UIView *)[P alloc] initWithSourceView:slot];
+                [portal setValue:@YES forKey:@"hidesSourceView"];
+                @try { [portal setValue:@NO forKey:@"matchesPosition"]; } @catch (__unused id e) {}
+                @try { [portal setValue:@NO forKey:@"matchesTransform"]; } @catch (__unused id e) {}
+                portal.tag = PORTAL_TAG;
+                portal.userInteractionEnabled = NO;
+                [bDL addSubview:portal];
+            } @catch (__unused id e) { portal = nil; }
+        }
+    }
+    if (portal) {
+        CGSize ss = slot.bounds.size;
+        CGRect pf2 = CGRectMake(round((h - ss.width) / 2), round((h - ss.height) / 2), ss.width, ss.height);
+        if (!CGRectEqualToRect(portal.frame, pf2)) portal.frame = pf2;
+    }
+    gPortalLive = portal != nil;
+    bDL.hidden = !gPortalLive;
 
     HideOriginal(play);
     HideOriginal(shuffle);
-    if (showDL) HideOriginal(dl);
-    gAlbumDebug = [NSString stringWithFormat:@"row ok play=%@ dl=%d", NSStringFromClass([play class]), showDL];
+    gAlbumDebug = [NSString stringWithFormat:@"row ok play=%@ slot=%@ portal=%d", NSStringFromClass([play class]), slot ? NSStringFromClass([slot class]) : @"none", gPortalLive];
 }
 
 #pragma mark - glass top buttons
@@ -923,9 +972,28 @@ static void SetFrameIfNew(UIView *v, CGRect f, CGFloat radius) {
     if (v.layer.cornerRadius != radius) v.layer.cornerRadius = radius;
 }
 
-// The glass lives INSIDE the button (or the right-hand buttons' shared
-// container), so it slides and fades with them during page transitions
-// instead of being repositioned after the fact.
+// Glass goes right behind the icon, in the icon's own container, so it moves
+// and fades with the button during transitions and never covers the icon.
+static UIView *GlassBelow(UIView *glyph) {
+    UIView *host = glyph.superview;
+    UIView *g = nil;
+    for (UIView *s in host.subviews) if (s.tag == NAVGLASS_TAG) { g = s; break; }
+    if (!g) {
+        UIVisualEffectView *e = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+        e.tag = NAVGLASS_TAG;
+        e.userInteractionEnabled = NO;
+        e.clipsToBounds = YES;
+        e.layer.cornerCurve = kCACornerCurveContinuous;
+        e.layer.borderWidth = 0.75;
+        e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.15].CGColor;
+        g = e;
+        [host insertSubview:g belowSubview:glyph];
+    } else if ([host.subviews indexOfObject:g] > [host.subviews indexOfObject:glyph]) {
+        [host insertSubview:g belowSubview:glyph];
+    }
+    return g;
+}
+
 static void NavTick(UINavigationBar *nb) {
     if (!nb || !nb.window) return;
     if (!gNavGlass) { RemoveGlass(nb, 0); gNavDebug = @"off"; return; }
@@ -934,23 +1002,35 @@ static void NavTick(UINavigationBar *nb) {
     NSMutableArray *buttons = [NSMutableArray array];
     CollectBarButtons(nb, 0, buttons);
     CGFloat mid = nb.bounds.size.width / 2;
-    const CGFloat H = 44;
+    const CGFloat H = 34;          // iOS 26 top buttons are ~34pt
+    const CGFloat edge = 12;       // keep circles off the screen edge
     NSMutableArray *right = [NSMutableArray array];
     for (UIView *b in buttons) {
         ClearCircles(b, 0);
-        UIView *g = GlyphIn(b, 0) ?: b;
-        CGRect inNav = [g convertRect:g.bounds toView:nb];
+        UIView *g = GlyphIn(b, 0);
+        CGRect inNav = [(g ?: b) convertRect:(g ?: b).bounds toView:nb];
         if (CGRectGetMidX(inNav) < mid) {
-            CGRect r = [g convertRect:g.bounds toView:b];
-            SetFrameIfNew(GlassIn(b), CGRectMake(round(CGRectGetMidX(r) - H / 2), round(CGRectGetMidY(r) - H / 2), H, H), H / 2);
+            if (!g) continue;
+            // Nudge the back button right so its circle doesn't hit the edge.
+            CGFloat untransformedMid = CGRectGetMidX(inNav) - b.transform.tx;
+            CGFloat tx = MAX(0, round(edge + H / 2 - untransformedMid));
+            if (b.transform.tx != tx) b.transform = CGAffineTransformMakeTranslation(tx, 0);
+            CGRect r = g.frame;
+            SetFrameIfNew(GlassBelow(g), CGRectMake(round(CGRectGetMidX(r) - H / 2), round(CGRectGetMidY(r) - H / 2), H, H), H / 2);
         } else {
             [right addObject:b];
         }
     }
+    [right sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+        CGFloat x = CGRectGetMinX([a convertRect:a.bounds toView:nb]), y = CGRectGetMinX([b convertRect:b.bounds toView:nb]);
+        return x < y ? NSOrderedAscending : (x > y ? NSOrderedDescending : NSOrderedSame);
+    }];
+    // Leftmost of 2+ right-hand buttons is the add/download/checkmark slot.
+    gSlotView = right.count >= 2 ? right.firstObject : nil;
+    if (gPortalLive && right.count >= 2) [right removeObjectAtIndex:0]; // shown in the album row instead
 
-    // Right side: one capsule around all of them, inside their shared container.
-    UIView *host = nil;
-    if (right.count == 1) host = right.firstObject;
+    UIView *host = nil, *single = nil;
+    if (right.count == 1) { single = GlyphIn(right.firstObject, 0); host = single.superview; }
     else if (right.count > 1) {
         host = [right.firstObject superview];
         for (UIView *b in right) while (host && ![b isDescendantOfView:host]) host = host.superview;
@@ -958,16 +1038,20 @@ static void NavTick(UINavigationBar *nb) {
     UIView *old = gRightHost;
     if (old && old != host) for (UIView *s in [old.subviews copy]) if (s.tag == NAVGLASS_TAG) [s removeFromSuperview];
     gRightHost = host;
-    if (host) {
+    if (single) {
+        CGRect r = single.frame;
+        CGFloat w = MAX(H, r.size.width + 16);
+        SetFrameIfNew(GlassBelow(single), CGRectMake(round(CGRectGetMidX(r) - w / 2), round(CGRectGetMidY(r) - H / 2), round(w), H), H / 2);
+    } else if (host) {
         CGRect u = CGRectNull;
         for (UIView *b in right) {
             UIView *g = GlyphIn(b, 0) ?: b;
             u = CGRectUnion(u, [g convertRect:g.bounds toView:host]);
         }
-        CGFloat w = MAX(H, u.size.width + 30);
+        CGFloat w = MAX(H, u.size.width + 28);
         SetFrameIfNew(GlassIn(host), CGRectMake(round(CGRectGetMidX(u) - w / 2), round(CGRectGetMidY(u) - H / 2), round(w), H), H / 2);
     }
-    gNavDebug = [NSString stringWithFormat:@"%lu buttons, %lu right", (unsigned long)buttons.count, (unsigned long)right.count];
+    gNavDebug = [NSString stringWithFormat:@"%lu buttons, %lu right, slot=%d", (unsigned long)buttons.count, (unsigned long)right.count, gSlotView != nil];
 }
 
 static UINavigationBar *TopNavBar(UIWindow *w) {
