@@ -1,4 +1,8 @@
-// Photos26 1.4.0 - made by nano
+// Photos26 1.5.0 - made by nano
+// 1.5.0: select mode in the grid gets the iOS 26 bar (glass share / trash
+//        circles, "Show Selected (N)" capsule) and no video player; jelly only
+//        on share, trash and back; favorite burst animation; the timer shows
+//        the length to the hundredth (00:05.83).
 // 1.4.0: hold the video slider: the player turns into a big iOS 26 timer
 //        (elapsed 00:01.30 on the left, length on the right, thick bar);
 //        jelly runs on real spring physics every frame (no more janky
@@ -318,7 +322,12 @@ static void JellyRelease(UIView *g) { JellyTo(g, 0, 0, 1, 1, 210, 8.5); }
     self.bubble.center = self.center;
     return self.bubble;
 }
+- (BOOL)jellyOK { return [self.kind isEqualToString:@"share"] || [self.kind isEqualToString:@"trash"]; }
 - (BOOL)beginTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
+    if (![self jellyOK]) {
+        [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ self.alpha = 0.5; } completion:nil];
+        return [super beginTrackingWithTouch:t withEvent:e];
+    }
     UIView *g = [self jellyTarget];
     if (g == self.bubble) [UIView animateWithDuration:0.15 animations:^{ self.bubble.alpha = 1; }];
     JellyPress(g);
@@ -327,6 +336,7 @@ static void JellyRelease(UIView *g) { JellyTo(g, 0, 0, 1, 1, 210, 8.5); }
     return [super beginTrackingWithTouch:t withEvent:e];
 }
 - (BOOL)continueTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
+    if (![self jellyOK]) return [super continueTrackingWithTouch:t withEvent:e];
     CGPoint p = [t locationInView:self];
     CGPoint off = CGPointMake(p.x - self.bounds.size.width / 2, p.y - self.bounds.size.height / 2);
     JellyFollow([self jellyTarget], off);
@@ -334,6 +344,10 @@ static void JellyRelease(UIView *g) { JellyTo(g, 0, 0, 1, 1, 210, 8.5); }
     return [super continueTrackingWithTouch:t withEvent:e];
 }
 - (void)letGo {
+    if (![self jellyOK]) {
+        [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ self.alpha = 1; } completion:nil];
+        return;
+    }
     UIView *g = [self jellyTarget];
     JellyRelease(g);
     JellyRelease(self);
@@ -573,7 +587,7 @@ static void SeekTo(double s) { gPendingSeek = s; if (!gSeeking) ChaseSeek(); }
     for (UIView *v in self.superview.subviews) if ([v isKindOfClass:[UILabel class]]) {
         UILabel *l = (UILabel *)v;
         if ([l.accessibilityIdentifier isEqualToString:@"elapsed"]) l.text = Clock(dur * self.progress, YES);
-        else if ([l.accessibilityIdentifier isEqualToString:@"total"]) l.text = Clock(dur, NO);
+        else if ([l.accessibilityIdentifier isEqualToString:@"total"]) l.text = Clock(dur, YES);
     }
     if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled || g.state == UIGestureRecognizerStateFailed) {
         gScrubbing = NO;
@@ -680,6 +694,60 @@ static void LayoutBottom(UIToolbar *tb) {
     }
     gTextMode = NO;
     for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"txt"]) v.hidden = YES;
+    // Selecting in the grid: share, "N Photos Selected", trash.
+    UILabel *countLabel = nil;
+    for (UIView *g in textViews) if ([g isKindOfClass:[UILabel class]] && [((UILabel *)g).text rangeOfString:@"elect"].location != NSNotFound) countLabel = (UILabel *)g;
+    if (gEnabled && countLabel && found[@"share"] && found[@"trash"]) {
+        c = EnsureContainer(tb);
+        gToolbar = tb;
+        for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view"));
+        Mask(countLabel);
+        for (UIView *v in c.subviews) v.hidden = ![v.accessibilityIdentifier hasPrefix:@"sel"];
+        // Under Apple's buttons (they stay Apple's own, on glass circles).
+        UIView *bg = nil;
+        for (UIView *s in tb.subviews) if ([NSStringFromClass([s class]) containsString:@"Background"]) bg = s;
+        if (bg) [tb insertSubview:c aboveSubview:bg]; else [tb insertSubview:c atIndex:0];
+        SetFrame(c, tb.bounds);
+        CGFloat D = 50;
+        for (NSString *k in @[@"share", @"trash"]) {
+            UIView *v = KV(((PGBox *)found[k]).obj, @"view");
+            UIView *g = v;
+            for (UIView *s in v.subviews) if (!s.hidden && s.bounds.size.width > 2) { g = s; break; }
+            CGRect r = [g convertRect:g.bounds toView:c];
+            PGGlass *gl = GlassIn(c, [@"sel_" stringByAppendingString:k]);
+            gl.hidden = NO;
+            SetFrame(gl, CGRectMake(round(CGRectGetMidX(r) - D / 2), round(CGRectGetMidY(r) - D / 2), D, D));
+        }
+        // "Show Selected (13)" capsule in the middle.
+        NSScanner *sc = [NSScanner scannerWithString:countLabel.text ?: @""];
+        [sc scanUpToCharactersFromSet:NSCharacterSet.decimalDigitCharacterSet intoString:nil];
+        NSInteger n = 0; BOOL hasN = [sc scanInteger:&n];
+        NSString *text = hasN ? [NSString stringWithFormat:@"Show Selected (%ld)", (long)n] : countLabel.text;
+        UILabel *sl = nil;
+        for (UIView *v in c.subviews) if ([v isKindOfClass:[UILabel class]] && [v.accessibilityIdentifier isEqualToString:@"sel_text"]) sl = (UILabel *)v;
+        if (!sl) {
+            sl = [UILabel new];
+            sl.accessibilityIdentifier = @"sel_text";
+            sl.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+            sl.textColor = UIColor.whiteColor;
+            sl.textAlignment = NSTextAlignmentCenter;
+            sl.userInteractionEnabled = NO;
+            [c addSubview:sl];
+        }
+        sl.hidden = NO;
+        if (![sl.text isEqualToString:text]) sl.text = text;
+        CGRect lr = [countLabel convertRect:countLabel.bounds toView:c];
+        CGFloat w = MIN(c.bounds.size.width - 150, [sl sizeThatFits:CGSizeMake(400, 30)].width + 48);
+        CGRect cap = CGRectMake(round(c.bounds.size.width / 2 - w / 2), round(CGRectGetMidY(lr) - D / 2), round(w), D);
+        PGGlass *gc = GlassIn(c, @"sel_mid");
+        gc.hidden = !text.length;
+        SetFrame(gc, cap);
+        SetFrame(sl, cap);
+        gBottomDebug = [NSString stringWithFormat:@"select mode: %@", countLabel.text];
+        return;
+    }
+    for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"sel"]) v.hidden = YES;
+    if (countLabel) Unmask(countLabel);
     // Only the photo/video viewer toolbar: it has both share and trash.
     if (!found[@"share"] || !found[@"trash"]) { c.hidden = YES; for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view")); gBottomDebug = [NSString stringWithFormat:@"not viewer: %@", [kinds componentsJoinedByString:@","]]; return; }
     gItems = found;
@@ -702,7 +770,7 @@ static void LayoutBottom(UIToolbar *tb) {
         });
     }
     c.hidden = NO;
-    for (UIView *v in c.subviews) if (![v.accessibilityIdentifier hasPrefix:@"txt"]) { if ([v isKindOfClass:[PGButton class]] || [v isKindOfClass:[PGGlass class]]) v.hidden = NO; }
+    for (UIView *v in c.subviews) if (![v.accessibilityIdentifier hasPrefix:@"txt"] && ![v.accessibilityIdentifier hasPrefix:@"sel"]) { if ([v isKindOfClass:[PGButton class]] || [v isKindOfClass:[PGGlass class]]) v.hidden = NO; }
     if (tb.clipsToBounds) tb.clipsToBounds = NO;
     [tb bringSubviewToFront:c];
     SetFrame(c, tb.bounds);
@@ -1003,7 +1071,7 @@ static void LayoutTop(UINavigationBar *nb) {
         UIView *g = GlyphIn(moreView, 0) ?: moreView;
         CGRect r = [g convertRect:g.bounds toView:nb];
         SetFrame(gm, CGRectMake(round(CGRectGetMidX(r) - D / 2), round(CGRectGetMidY(r) - D / 2), D, D));
-        AddTopJelly(moreView, gm);
+
     }
     // Date capsule behind the title.
     UIView *title = top.titleView;
@@ -1073,7 +1141,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.4.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.5.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1145,12 +1213,47 @@ static void LoopTick(AVPlayer *p) {
         }
         Forward(ed);
     }
-    else Forward(AppleItem(k));
+    BOOL wasFav = [ItemSymbolText(AppleItem(@"heart")) containsString:@"heart.fill"];
+    if (![k isEqualToString:@"edit"]) Forward(AppleItem(k));
     if ([k isEqualToString:@"heart"]) {
-        // little heart pop
-        [UIView animateWithDuration:0.1 animations:^{ b.imageView.transform = CGAffineTransformMakeScale(1.35, 1.35); } completion:^(BOOL d) {
-            [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.4 initialSpringVelocity:0.8 options:0 animations:^{ b.imageView.transform = CGAffineTransformIdentity; } completion:nil];
-        }];
+        UIImageView *iv = b.imageView;
+        CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+        if (!wasFav) {
+            // Favorited: the heart fills, pops, and little hearts burst out.
+            b.accessibilityValue = @"heart.fill";
+            [b setImage:Sym(@"heart.fill", 17) forState:UIControlStateNormal];
+            pop.values = @[@1, @0.55, @1.45, @0.88, @1.08, @1];
+            pop.keyTimes = @[@0, @0.12, @0.38, @0.6, @0.8, @1];
+            pop.duration = 0.6;
+            UIView *host = b.superview;
+            CGPoint c = b.center;
+            for (int i = 0; i < 8; i++) {
+                UIImageView *h = [[UIImageView alloc] initWithImage:Sym(@"heart.fill", 7 + (i % 3) * 2)];
+                h.tintColor = i % 2 ? UIColor.whiteColor : [UIColor colorWithRed:1 green:0.42 blue:0.55 alpha:1];
+                h.center = c;
+                h.alpha = 0;
+                h.userInteractionEnabled = NO;
+                [host addSubview:h];
+                CGFloat a = (M_PI * 2 / 8) * i - M_PI_2 + ((i % 2) ? 0.2 : -0.1);
+                CGFloat r = 30 + (i % 3) * 7;
+                [UIView animateWithDuration:0.12 delay:0.08 options:0 animations:^{ h.alpha = 1; } completion:nil];
+                [UIView animateWithDuration:0.6 delay:0.08 usingSpringWithDamping:0.7 initialSpringVelocity:0.9 options:0 animations:^{
+                    h.center = CGPointMake(c.x + cos(a) * r, c.y + sin(a) * r);
+                    h.transform = CGAffineTransformMakeRotation((i % 2 ? 0.4 : -0.4));
+                } completion:nil];
+                [UIView animateWithDuration:0.3 delay:0.42 options:0 animations:^{
+                    h.alpha = 0; h.transform = CGAffineTransformScale(h.transform, 0.4, 0.4);
+                } completion:^(BOOL d) { [h removeFromSuperview]; }];
+            }
+        } else {
+            b.accessibilityValue = @"heart";
+            [b setImage:Sym(@"heart", 17) forState:UIControlStateNormal];
+            pop.values = @[@1, @0.7, @1.12, @1];
+            pop.keyTimes = @[@0, @0.3, @0.65, @1];
+            pop.duration = 0.4;
+        }
+        pop.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+        [iv.layer addAnimation:pop forKey:@"pop"];
     }
     // Apple's buttons change (heart fills, play becomes pause): refresh soon.
     for (NSNumber *d in @[@0.05, @0.25, @0.6])
