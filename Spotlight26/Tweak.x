@@ -1,4 +1,7 @@
-// Spotlight26 0.1.2 - made by nano
+// Spotlight26 0.1.3 - made by nano
+// 0.1.3: grows out of the notch every time Spotlight opens, big iOS 26 top
+//        pill, status bar hidden, black glass on the suggestion cards,
+//        results pushed below the pill with contentInset.
 // 0.1.2: loads into any process using Spotlight's UI frameworks, scans for the
 //        search field itself, and the debug box shows even with no field.
 // 0.1.1: iOS 16 runs Spotlight as its own app (com.apple.Spotlight), so the
@@ -23,7 +26,9 @@
 #define PILL_TAG   0x53323630
 #define DEBUG_TAG  0x53323631
 #define CARD_TAG   0x53323632
+#define PILL_RADIUS 40
 
+static BOOL gHideSB = YES;
 static BOOL gEnabled = YES, gTop = YES, gNotch = YES, gCards = YES, gBounce = YES, gDebug = NO;
 
 static const void *kMasked = &kMasked;
@@ -60,6 +65,7 @@ static void LoadPrefs(void) {
     gCards   = PrefBool(f, @"cards", YES);
     gBounce  = PrefBool(f, @"bounce", YES);
     gDebug   = PrefBool(f, @"debug", NO);
+    gHideSB  = PrefBool(f, @"statusbar", YES);
     // Can't read the settings here at all? Show the debug box so we can tell.
     if (gPrefsUnreadable && !CFPreferencesCopyAppValue(CFSTR("debug"), DOM)) gDebug = YES;
 }
@@ -145,7 +151,7 @@ static void Unmask(UIView *v) {
 
 static __weak UITextField *gField;
 static __weak UIView *gHeader, *gScroll;
-static __weak UIViewController *gInsetVC;
+static __weak id gInsetVC;   // the results scroll view we added inset to
 static CADisplayLink *gLink;
 static BOOL gAppeared;          // notch animation already played for this opening
 static NSUInteger gFrame;
@@ -203,7 +209,10 @@ static UIView *FindResults(UIView *header) {
     return best;
 }
 
+static void SetOurInset(UIScrollView *s, CGFloat ours);
+static void ShowStatusBar(void);
 static void ResetAll(void) {
+    ShowStatusBar();
     UIView *h = gHeader;
     if (h && !CGAffineTransformIsIdentity(h.transform)) h.transform = CGAffineTransformIdentity;
     [[h viewWithTag:PILL_TAG] removeFromSuperview];
@@ -211,11 +220,8 @@ static void ResetAll(void) {
     [gMaskedViews removeAllObjects];
     for (UIView *v in [gCardViews allObjects]) [[v viewWithTag:CARD_TAG] removeFromSuperview];
     [gCardViews removeAllObjects];
-    UIViewController *vc = gInsetVC;
-    if (vc && objc_getAssociatedObject(vc, kInsetOurs)) {
-        vc.additionalSafeAreaInsets = UIEdgeInsetsZero;
-        objc_setAssociatedObject(vc, kInsetOurs, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
+    UIScrollView *s = gInsetVC;
+    if ([s isKindOfClass:[UIScrollView class]]) SetOurInset(s, 0);
 }
 
 #pragma mark - search pill
@@ -234,9 +240,14 @@ static void HideHeaderBackgrounds(UIView *v, UITextField *f, int d) {
 }
 
 static CGRect PillFrameIn(UIView *header, UITextField *f) {
+    // iOS 26: one big black glass shape from just under the top edge to below
+    // the field, nearly the full width.
     CGRect fr = [f convertRect:f.bounds toView:header];
-    CGFloat h = 56, inset = 12;
-    return CGRectMake(inset, CGRectGetMidY(fr) - h / 2, header.bounds.size.width - inset * 2, h);
+    CGFloat inset = 9;
+    CGFloat top = [header convertPoint:CGPointMake(0, 7) fromView:nil].y;
+    CGFloat bottom = CGRectGetMidY(fr) + 31;
+    if (!gTop || bottom - top > 140 || bottom - top < 56) { top = CGRectGetMidY(fr) - 28; bottom = CGRectGetMidY(fr) + 28; }
+    return CGRectMake(inset, top, header.bounds.size.width - inset * 2, bottom - top);
 }
 
 static void PlayNotchGrow(S26Glass *pill, UIView *header, UITextField *f) {
@@ -258,7 +269,7 @@ static void PlayNotchGrow(S26Glass *pill, UIView *header, UITextField *f) {
     [f.layer addAnimation:fade forKey:@"s26fade"];
     [UIView animateWithDuration:0.62 delay:0.02 usingSpringWithDamping:0.74 initialSpringVelocity:0.4
                         options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        pill.radius = 0;
+        pill.radius = PILL_RADIUS;
         pill.frame = final;
         [pill layoutIfNeeded];
         pill.backgroundColor = [UIColor colorWithWhite:0 alpha:0.82];
@@ -279,7 +290,8 @@ static void StylePill(UIView *header, UITextField *f) {
         if (fabs(header.transform.ty - ty) > 0.5 || header.transform.a != 1) header.transform = CGAffineTransformMakeTranslation(0, ty);
     } else if (!CGAffineTransformIsIdentity(header.transform)) header.transform = CGAffineTransformIdentity;
 
-    // 2. Our black glass pill behind the field.
+    // 2. Our black glass pill behind the field (it reaches above the header).
+    if (header.clipsToBounds) header.clipsToBounds = NO;
     HideHeaderBackgrounds(header, f, 0);
     S26Glass *pill = (S26Glass *)[header viewWithTag:PILL_TAG];
     if (pill.superview != header) pill = nil;
@@ -287,6 +299,7 @@ static void StylePill(UIView *header, UITextField *f) {
     if (!pill) {
         pill = [[S26Glass alloc] initWithFrame:pf];
         pill.tag = PILL_TAG;
+        pill.radius = PILL_RADIUS;
         pill.backgroundColor = [UIColor colorWithWhite:0 alpha:0.82];
         pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
         [header insertSubview:pill atIndex:0];
@@ -300,32 +313,49 @@ static void StylePill(UIView *header, UITextField *f) {
 
 #pragma mark - results
 
-static void PushResults(UIView *header, UIView *scroll) {
-    UIViewController *vc = OwnerVC(scroll);
-    if (!vc) return;
-    if (gInsetVC && gInsetVC != vc) {
-        UIViewController *old = gInsetVC;
-        if (objc_getAssociatedObject(old, kInsetOurs)) { old.additionalSafeAreaInsets = UIEdgeInsetsZero; objc_setAssociatedObject(old, kInsetOurs, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
-    }
-    gInsetVC = vc;
-    CGFloat top = 0;
-    if (gTop) {
-        UIView *pill = [header viewWithTag:PILL_TAG];
-        CGRect pw = [header convertRect:PillFrameIn(header, gField) toView:nil];  // where the pill ends up
-        (void)pill;
-        top = MAX(0, ceil(CGRectGetMaxY(pw) + 6 - header.window.safeAreaInsets.top));
-    }
-    if (fabs(vc.additionalSafeAreaInsets.top - top) > 0.5) {
-        vc.additionalSafeAreaInsets = UIEdgeInsetsMake(top, 0, 0, 0);
-        objc_setAssociatedObject(vc, kInsetOurs, top > 0 ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
+static void SetOurInset(UIScrollView *s, CGFloat ours) {
+    CGFloat prev = [objc_getAssociatedObject(s, kInsetOurs) doubleValue];
+    if (fabs(prev - ours) < 0.5) return;
+    UIEdgeInsets in = s.contentInset;
+    in.top += ours - prev;
+    BOOL atTop = s.contentOffset.y <= -s.adjustedContentInset.top + 1;
+    s.contentInset = in;
+    if (atTop) s.contentOffset = CGPointMake(s.contentOffset.x, -s.adjustedContentInset.top);
+    objc_setAssociatedObject(s, kInsetOurs, ours > 0 ? @(ours) : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+static void PushResults(UIView *header, UIView *scroll) {
+    if (![scroll isKindOfClass:[UIScrollView class]]) return;
+    UIScrollView *s = (UIScrollView *)scroll;
+    if (gInsetVC != (id)s) {
+        UIScrollView *old = (UIScrollView *)gInsetVC;
+        if ([old isKindOfClass:[UIScrollView class]]) SetOurInset(old, 0);
+        gInsetVC = (id)s;
+    }
+    CGFloat ours = 0;
+    if (gTop) {
+        CGRect pw = [header convertRect:PillFrameIn(header, gField) toView:nil];   // where the pill ends up
+        CGFloat contentTop = [s convertPoint:CGPointMake(0, -s.adjustedContentInset.top + [objc_getAssociatedObject(s, kInsetOurs) doubleValue]) toView:nil].y;
+        // contentTop: where results start without us (window coords, at scroll top)
+        CGFloat startY = [s.superview convertPoint:s.frame.origin toView:nil].y + (s.adjustedContentInset.top - [objc_getAssociatedObject(s, kInsetOurs) doubleValue]);
+        (void)contentTop;
+        ours = MAX(0, ceil(CGRectGetMaxY(pw) + 10 - startY));
+    }
+    SetOurInset(s, ours);
+}
+
+// A card: a wide, short-ish view with rounded corners (or a background-type view).
+static BOOL IsCard(UIView *s, CGFloat minW) {
+    if (s.tag == CARD_TAG || s.hidden || s.alpha < 0.01) return NO;
+    CGSize z = s.bounds.size;
+    if (z.width < minW || z.height < 36 || z.height > 600) return NO;
+    return s.layer.cornerRadius >= 8 || IsBackgroundish(s);
+}
 static void FindCards(UIView *v, int d, CGFloat minW, NSMutableArray *out) {
     if (d > 9) return;
     for (UIView *s in v.subviews) {
         if (s.tag == CARD_TAG) continue;
-        if (IsBackgroundish(s) && s.bounds.size.width >= minW && s.bounds.size.height >= 36 && s.alpha > 0.01 && !s.hidden) { [out addObject:s]; continue; }
+        if (IsCard(s, minW)) { [out addObject:s]; continue; }
         FindCards(s, d + 1, minW, out);
     }
 }
@@ -333,24 +363,80 @@ static void FindCards(UIView *v, int d, CGFloat minW, NSMutableArray *out) {
 static void StyleCards(UIView *scroll) {
     NSMutableArray *cards = [NSMutableArray array];
     FindCards(scroll, 0, scroll.bounds.size.width * 0.6, cards);
-    NSMutableSet *classes = [NSMutableSet set];
+    NSMutableArray *info = [NSMutableArray array];
     for (UIView *c in cards) {
-        [classes addObject:NSStringFromClass([c class])];
+        if (info.count < 4) {
+            CGFloat a = 0; [c.backgroundColor getWhite:NULL alpha:&a];
+            NSMutableArray *subs = [NSMutableArray array];
+            for (UIView *x in c.subviews) if (subs.count < 3) [subs addObject:NSStringFromClass([x class])];
+            [info addObject:[NSString stringWithFormat:@"%@ r=%.0f bg=%.2f [%@]", NSStringFromClass([c class]), c.layer.cornerRadius, a, [subs componentsJoinedByString:@","]]];
+        }
         S26Glass *g = (S26Glass *)[c viewWithTag:CARD_TAG];
         if (g.superview != c) g = nil;
         if (!g) {
             g = [S26Glass new];
             g.tag = CARD_TAG;
-            [c addSubview:g];
+            g.backgroundColor = [UIColor colorWithWhite:0 alpha:0.7];
             [gCardViews addObject:c];
+        }
+        // Sit just above Apple's own background pieces, below the icons and text.
+        if (g.superview != c) {
+            NSInteger at = 0;
+            for (NSUInteger i = 0; i < c.subviews.count; i++) if (IsBackgroundish(c.subviews[i])) at = i + 1;
+            [c insertSubview:g atIndex:at];
         }
         CGFloat r = c.layer.cornerRadius;
         if (r < 1) r = c.superview.layer.cornerRadius;
-        g.radius = r > 1 ? r : 20;
+        g.radius = r > 1 ? r : 22;
         SetFrame(g, c.bounds);
-        [g setNeedsLayout];
     }
-    if (gDebug) gCardsDebug = [NSString stringWithFormat:@"%lu %@", (unsigned long)cards.count, [[classes allObjects] componentsJoinedByString:@","]];
+    if (gDebug) gCardsDebug = [NSString stringWithFormat:@"%lu\n   %@", (unsigned long)cards.count, [info componentsJoinedByString:@"\n   "]];
+}
+
+#pragma mark - status bar
+
+static const void *kSBOrig = &kSBOrig;
+static __weak UIViewController *gSBVC;
+static BOOL gSBHidden;
+static void HookStatusBarFor(UIViewController *vc) {
+    if (!vc) return;
+    Class c = [vc class];
+    if (objc_getAssociatedObject(c, kSBOrig)) return;
+    SEL sel = @selector(prefersStatusBarHidden);
+    IMP orig = class_getMethodImplementation(c, sel);
+    IMP mine = imp_implementationWithBlock(^BOOL(id me) {
+        if (gSBHidden) return YES;
+        return ((BOOL (*)(id, SEL))orig)(me, sel);
+    });
+    Method m = class_getInstanceMethod(c, sel);
+    class_replaceMethod(c, sel, mine, method_getTypeEncoding(m));
+    SEL child = @selector(childViewControllerForStatusBarHidden);
+    IMP origChild = class_getMethodImplementation(c, child);
+    IMP mineChild = imp_implementationWithBlock(^UIViewController *(id me) {
+        if (gSBHidden) return nil;
+        return ((UIViewController *(*)(id, SEL))origChild)(me, child);
+    });
+    class_replaceMethod(c, child, mineChild, method_getTypeEncoding(class_getInstanceMethod(c, child)));
+    objc_setAssociatedObject(c, kSBOrig, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+static void HideStatusBar(UIWindow *w) {
+    UIViewController *vc = w.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    if (!vc) return;
+    HookStatusBarFor(w.rootViewController);
+    HookStatusBarFor(vc);
+    gSBVC = vc;
+    if (!gSBHidden) {
+        gSBHidden = YES;
+        [UIView animateWithDuration:0.2 animations:^{ [vc setNeedsStatusBarAppearanceUpdate]; [w.rootViewController setNeedsStatusBarAppearanceUpdate]; }];
+    }
+}
+static void ShowStatusBar(void) {
+    if (!gSBHidden) return;
+    gSBHidden = NO;
+    UIViewController *vc = gSBVC;
+    [vc setNeedsStatusBarAppearanceUpdate];
+    [vc.view.window.rootViewController setNeedsStatusBarAppearanceUpdate];
 }
 
 #pragma mark - debug
@@ -378,11 +464,12 @@ static void UpdateDebug(UIWindow *w) {
     for (UIView *p = f.superview; p && d < 6; p = p.superview, d++) [chain addObject:[NSString stringWithFormat:@"%@(%.0f)", NSStringFromClass([p class]), p.bounds.size.height]];
     NSMutableArray *vcs = [NSMutableArray array];
     for (UIViewController *p = OwnerVC(f); p; p = p.parentViewController) [vcs addObject:NSStringFromClass([p class])];
-    NSString *text = [NSString stringWithFormat:@" Spotlight26 0.1.2 debug (%@) prefs=%@\n field: %@ %@\n chain: %@\n vcs: %@\n header: %@ ty=%.0f\n results: %@ inset=%.0f vc=%@\n cards: %@",
-                      [[NSBundle mainBundle] bundleIdentifier], gPrefsSource, NSStringFromClass([f class]), NSStringFromCGRect([f convertRect:f.bounds toView:nil]),
+    NSString *sbInfo = [NSString stringWithFormat:@"sb: hidden=%d vc=%@ root=%@", gSBHidden, NSStringFromClass([gSBVC class]), NSStringFromClass([w.rootViewController class])];
+    NSString *text = [NSString stringWithFormat:@" %@\n Spotlight26 0.1.3 debug (%@) prefs=%@\n field: %@ %@\n chain: %@\n vcs: %@\n header: %@ ty=%.0f\n results: %@ inset=%.0f ours=%@\n cards: %@",
+                      sbInfo, [[NSBundle mainBundle] bundleIdentifier], gPrefsSource, NSStringFromClass([f class]), NSStringFromCGRect([f convertRect:f.bounds toView:nil]),
                       [chain componentsJoinedByString:@" > "], [vcs componentsJoinedByString:@" > "],
                       NSStringFromClass([h class]), h.transform.ty,
-                      s ? NSStringFromClass([s class]) : @"none", s.adjustedContentInset.top, NSStringFromClass([gInsetVC class]), gCardsDebug];
+                      s ? NSStringFromClass([s class]) : @"none", s.adjustedContentInset.top, objc_getAssociatedObject(s, kInsetOurs), gCardsDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -413,12 +500,21 @@ static void UpdateDebug(UIWindow *w) {
         return;
     }
     if (@available(iOS 15.0, *)) if (gLink.preferredFrameRateRange.preferred != 60) gLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
+    // Spotlight's app is frozen while closed, so a gap between frames means it
+    // was just opened again: grow out of the notch again.
+    static CFTimeInterval lastStamp;
+    if (lastStamp > 0 && link.timestamp - lastStamp > 0.35) {
+        @try { ResetAll(); } @catch (__unused id e) {}
+        gAppeared = NO;
+    }
+    lastStamp = link.timestamp;
     gFrame++;
     @try {
         UIView *h = gHeader;
         if (!h || ![f isDescendantOfView:h]) { h = FindHeader(f); gHeader = h; }
         if (!gEnabled) { ResetAll(); UpdateDebug(f.window); return; }
         StylePill(h, f);
+        if (gHideSB && gInSpotlightApp) HideStatusBar(f.window); else ShowStatusBar();
         UIView *s = gScroll;
         if (!s || !s.window || gFrame % 30 == 0) { s = FindResults(h); gScroll = s; }
         if (s) {
