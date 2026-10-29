@@ -1,4 +1,7 @@
-// Photos26 2.0.1 - made by nano
+// Photos26 2.0.2 - made by nano
+// 2.0.2: grid top buttons drawn entirely by us inside Apple's button (Apple's
+//        pieces only hidden, never moved or resized): no flicker while
+//        scrolling, full "Select" text, gap to ... in Library and Albums.
 // 2.0.1: X shows on Cancel, Select bigger and spaced from ..., select bar
 //        never flashes when opening a photo (needs Apple's selection label).
 // 2.0.0: grid top buttons (PXCuratedLibraryOverlayButton) styled from inside
@@ -1258,87 +1261,74 @@ static void LayoutTop(UINavigationBar *nb) {
 #pragma mark - grid top buttons (Select / Cancel / ...)
 
 static const void *kOvlKind = &kOvlKind;
-// Restyle one of Photos' grid buttons from the inside: its own dark pill is
-// hidden and our glass sits under its contents. Cancel becomes a glass X.
+#define OVL_SHIFT 16
+// Restyle one of Photos' grid buttons (Select / Cancel / ...) from the inside.
+// Apple's own pieces stay where they are, only hidden (empty mask); the glass,
+// text, X and dots are ours. Nothing of Apple's is moved, scaled or replaced.
 static void StyleOverlayButton(UIView *b) {
-    PGGlass *g = nil; UIImageView *x = nil; UILabel *label = nil; UIImageView *dots = nil;
+    PGGlass *g = nil; UIImageView *x = nil, *d = nil; UILabel *t = nil;
+    NSMutableArray *apple = [NSMutableArray array];
     for (UIView *s in b.subviews) {
-        if ([s isKindOfClass:[PGGlass class]]) { g = (PGGlass *)s; continue; }
-        if ([s.accessibilityIdentifier isEqualToString:@"ovl_x"]) { x = (UIImageView *)s; continue; }
+        if ([s isKindOfClass:[PGGlass class]]) g = (PGGlass *)s;
+        else if ([s.accessibilityIdentifier isEqualToString:@"ovl_x"]) x = (UIImageView *)s;
+        else if ([s.accessibilityIdentifier isEqualToString:@"ovl_d"]) d = (UIImageView *)s;
+        else if ([s.accessibilityIdentifier isEqualToString:@"ovl_t"]) t = (UILabel *)s;
+        else [apple addObject:s];
     }
-    NSMutableArray *stack = [NSMutableArray arrayWithArray:b.subviews];
+    // What is this button? Read it from Apple's (hidden) pieces.
+    UILabel *label = nil; BOOL dots = NO;
+    NSMutableArray *stack = [apple mutableCopy];
     while (stack.count) {
         UIView *v = stack.lastObject; [stack removeLastObject];
-        if (v == g || v == x) continue;
         if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) label = (UILabel *)v;
-        else if ([v isKindOfClass:[UIImageView class]] && [((UIImageView *)v).image.description containsString:@"ellipsis"]) dots = (UIImageView *)v;
+        else if ([v isKindOfClass:[UIImageView class]] && [((UIImageView *)v).image.description containsString:@"ellipsis"]) dots = YES;
         [stack addObjectsFromArray:v.subviews];
     }
-    if (!gEnabled || !gTopBar || (!label && !dots)) {
-        g.hidden = YES; x.hidden = YES; Unmask(label);
-        for (UIView *s in b.subviews) Unmask(s);
+    BOOL on = gEnabled && gTopBar && (label || dots);
+    if (!on) {
+        for (UIView *s in apple) Unmask(s);
+        g.hidden = x.hidden = d.hidden = t.hidden = YES;
         return;
     }
-    // Apple's own dark pill / blur behind the content.
-    for (UIView *s in b.subviews) {
-        if (s == g || s == x || (label && [label isDescendantOfView:s]) || (dots && [dots isDescendantOfView:s])) continue;
-        BOOL bg = [s isKindOfClass:[UIVisualEffectView class]] || [NSStringFromClass([s class]) containsString:@"Background"] || [NSStringFromClass([s class]) containsString:@"Blur"] || (s.layer.cornerRadius > 4 && !s.subviews.count);
-        if (bg) Mask(s);
-    }
-    // If Apple's blur wraps the text, keep the text and drop just the blur.
-    static const void *kOrigEffect = &kOrigEffect;
-    NSMutableArray *st2 = [NSMutableArray arrayWithArray:b.subviews];
-    while (st2.count) {
-        UIView *v = st2.lastObject; [st2 removeLastObject];
-        if (v == g || [v isDescendantOfView:g ?: [UIView new]]) continue;
-        if ([v isKindOfClass:[UIVisualEffectView class]] && ((UIVisualEffectView *)v).effect) {
-            objc_setAssociatedObject(v, kOrigEffect, ((UIVisualEffectView *)v).effect, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            ((UIVisualEffectView *)v).effect = nil;
-        }
-        [st2 addObjectsFromArray:v.subviews];
-    }
-    if (b.layer.cornerRadius > 0 && b.backgroundColor) b.backgroundColor = UIColor.clearColor;
+    for (UIView *s in apple) Mask(s);
+    if (b.backgroundColor && CGColorGetAlpha(b.backgroundColor.CGColor) > 0) b.backgroundColor = UIColor.clearColor;
+    if (b.clipsToBounds) b.clipsToBounds = NO;
     if (!g) { g = [PGGlass new]; [b insertSubview:g atIndex:0]; }
+    if (!t) {
+        t = [UILabel new]; t.accessibilityIdentifier = @"ovl_t";
+        t.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
+        t.textColor = UIColor.whiteColor; t.textAlignment = NSTextAlignmentCenter; t.userInteractionEnabled = NO;
+        [b addSubview:t];
+    }
     if (!x) {
-        x = [[UIImageView alloc] initWithImage:Sym(@"xmark", 17)];
-        x.accessibilityIdentifier = @"ovl_x";
-        x.tintColor = UIColor.whiteColor;
-        x.contentMode = UIViewContentModeCenter;
-        x.userInteractionEnabled = NO;
+        x = [[UIImageView alloc] initWithImage:Sym(@"xmark", 18)]; x.accessibilityIdentifier = @"ovl_x";
+        x.tintColor = UIColor.whiteColor; x.contentMode = UIViewContentModeCenter; x.userInteractionEnabled = NO;
         [b addSubview:x];
     }
-    g.hidden = NO; x.hidden = NO;
-    if (b.clipsToBounds) b.clipsToBounds = NO;
-    [b sendSubviewToBack:g];
-    [b bringSubviewToFront:x];
-    NSString *kind = dots ? @"more" : ([label.text isEqualToString:@"Cancel"] ? @"cancel" : @"text");
-    CGSize S = b.bounds.size;
-    CGPoint c = CGPointMake(S.width / 2, S.height / 2);
-    CGFloat H = 44;
-    CGRect nf;
-    if ([kind isEqualToString:@"text"]) {
-        CGFloat tw = label ? [label.text sizeWithAttributes:@{NSFontAttributeName: label.font}].width * 1.15 : S.width;
-        CGFloat w = MAX(tw + 34, 84);
-        nf = CGRectMake(c.x - w / 2, c.y - H / 2, w, H);
+    if (!d) {
+        d = [[UIImageView alloc] initWithImage:Sym(@"ellipsis", 21)]; d.accessibilityIdentifier = @"ovl_d";
+        d.tintColor = UIColor.whiteColor; d.contentMode = UIViewContentModeCenter; d.userInteractionEnabled = NO;
+        [b addSubview:d];
     }
-    else nf = CGRectMake(c.x - H / 2, c.y - H / 2, H, H);
-    BOOL cancel = [kind isEqualToString:@"cancel"];
-    // Select: bigger, crisp text; the whole button slides left, away from the ... circle.
-    BOOL text = [kind isEqualToString:@"text"];
-    CGAffineTransform lt = text ? CGAffineTransformMakeScale(1.15, 1.15) : CGAffineTransformIdentity;
-    if (label && !CGAffineTransformEqualToTransform(label.transform, lt)) { label.transform = lt; label.contentScaleFactor = UIScreen.mainScreen.scale * (text ? 1.15 : 1); }
-    CGAffineTransform bt = dots ? CGAffineTransformIdentity : CGAffineTransformMakeTranslation(-14, 0);
-    if (!CGAffineTransformEqualToTransform(b.transform, bt)) b.transform = bt;
-    if (cancel) Mask(label); else Unmask(label);
-    if (dots && !CGAffineTransformEqualToTransform(dots.transform, CGAffineTransformMakeScale(1.25, 1.25))) dots.transform = CGAffineTransformMakeScale(1.25, 1.25);
+    g.hidden = x.hidden = d.hidden = t.hidden = NO;
+    NSString *kind = dots ? @"more" : ([label.text isEqualToString:@"Cancel"] ? @"cancel" : @"text");
+    BOOL cancel = [kind isEqualToString:@"cancel"], text = [kind isEqualToString:@"text"];
+    if (text && ![t.text isEqualToString:label.text]) t.text = label.text;
+    CGSize S = b.bounds.size;
+    CGFloat H = 44, cx = S.width / 2 - (dots ? 0 : OVL_SHIFT), cy = S.height / 2;   // Select / X sit a bit left, away from ...
+    CGRect nf;
+    if (text) {
+        CGFloat w = MAX(ceil([t.text sizeWithAttributes:@{NSFontAttributeName: t.font}].width) + 36, 88);
+        nf = CGRectMake(round(cx - w / 2), round(cy - H / 2), w, H);
+    } else nf = CGRectMake(round(cx - H / 2), round(cy - H / 2), H, H);
     NSString *old = objc_getAssociatedObject(b, kOvlKind);
     objc_setAssociatedObject(b, kOvlKind, kind, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     void (^apply)(void) = ^{
         g.frame = nf; [g layoutIfNeeded];
-        x.frame = nf;
-        x.alpha = cancel ? 1 : 0;
+        t.frame = nf; x.frame = nf; d.frame = nf;
+        t.alpha = text ? 1 : 0; x.alpha = cancel ? 1 : 0; d.alpha = dots ? 1 : 0;
     };
-    if (old && ![old isEqualToString:kind] && ([old isEqualToString:@"cancel"] || cancel)) {
+    if (old && ![old isEqualToString:kind] && !dots) {
         // Select <-> X: the capsule melts into a circle (and back).
         x.transform = CGAffineTransformMakeScale(cancel ? 0.4 : 1, cancel ? 0.4 : 1);
         [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.58 initialSpringVelocity:0.8
@@ -1346,7 +1336,9 @@ static void StyleOverlayButton(UIView *b) {
             apply();
             x.transform = CGAffineTransformIdentity;
         } completion:nil];
-    } else if (!g.layer.animationKeys.count) apply();
+    } else if (!g.layer.animationKeys.count) {
+        if (!CGRectEqualToRect(g.frame, nf) || t.alpha != (text ? 1 : 0)) apply();
+    }
 }
 
 static NSString *gGridDebug = @"-";
@@ -1396,7 +1388,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 2.0.1 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 2.0.2 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -1604,7 +1596,11 @@ static void StartLink(void) {
 }
 // Easier to hit: a little extra touch area around each button.
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
-    if (gEnabled && gTopBar && CGRectContainsPoint(CGRectInset(self.bounds, -10, -8), p)) return YES;
+    if (gEnabled && gTopBar) {
+        CGRect r = CGRectInset(self.bounds, -10, -8);
+        r.origin.x -= OVL_SHIFT; r.size.width += OVL_SHIFT;   // the glass reaches further left
+        if (CGRectContainsPoint(r, p)) return YES;
+    }
     return %orig;
 }
 %end
