@@ -1,4 +1,8 @@
-// MusicPill 0.8.5 - made by nano
+// MusicPill 0.8.6 - made by nano
+// 0.8.6: no old-bar flash when the player opens (Music's bar stays hidden,
+//        our pill fades out as a snapshot), real blur glass matching the tab
+//        bar again (blur views are never faded now), and the pill keeps the
+//        last song instead of flashing "Not Playing".
 // 0.8.5: tapping the pill opens the player: Music's own bar stays under our
 //        pill (invisible via an empty mask, so it still gets touches) and our
 //        pill only keeps its play / next buttons; when collapsed, Music's bar
@@ -593,7 +597,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -678,8 +682,7 @@ static UIView *GlassCircle(NSString *ident, UIView *host) {
     UIView *c = [UIView new];
     c.accessibilityIdentifier = ident;
     c.clipsToBounds = NO;
-    UIView *g = [UIView new];
-    g.backgroundColor = [UIColor colorWithWhite:0.13 alpha:0.9];
+    UIView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
     g.tag = 1; g.userInteractionEnabled = NO; g.clipsToBounds = YES;
     g.layer.cornerCurve = kCACornerCurveContinuous;
     g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
@@ -803,8 +806,7 @@ static BOOL OpenPlayer(UIView *mini) {
 @implementation MPMiniPill
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
-    _glass = [UIView new];
-    _glass.backgroundColor = [UIColor colorWithWhite:0.13 alpha:0.9];
+    _glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
     _glass.userInteractionEnabled = NO; _glass.clipsToBounds = YES;
     _glass.layer.cornerCurve = kCACornerCurveContinuous;
     _glass.layer.borderWidth = 0.75; _glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
@@ -921,12 +923,15 @@ static BOOL OpenPlayer(UIView *mini) {
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             MPMiniPill *me = weak; if (!me) return;
-            NSString *t2 = [title isKindOfClass:[NSString class]] ? title : @"Not Playing";
+            BOOL have = [title isKindOfClass:[NSString class]] && [title length];
+            if (!have && me.title.text.length && ![me.title.text isEqualToString:@"Not Playing"]) return;   // keep the last song
+            NSString *t2 = have ? title : @"Not Playing";
             NSString *a2 = [artist isKindOfClass:[NSString class]] ? artist : @"";
             if (![me.title.text isEqualToString:t2]) me.title.text = t2;
             if (![me.artist.text isEqualToString:a2]) me.artist.text = a2;
             me.badge.hidden = !explicitTrack;
-            if (me.art.image != img) me.art.image = img;
+            if (img && me.art.image != img) me.art.image = img;
+            else if (!img && !have) me.art.image = nil;
             [me setNeedsLayout];
         });
     });
@@ -1022,13 +1027,14 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
         tab.hidden = search.hidden = pill.hidden = NO;
         pill.alpha = 1;
         tab.transform = search.transform = CGAffineTransformIdentity;
-        LayoutCircle(tab, wide); tab.alpha = 0;
-        LayoutCircle(search, rightStart); search.alpha = 0;
+        LayoutCircle(tab, wide); tab.alpha = 1;
+        LayoutCircle(search, rightStart); search.alpha = 1;
+        search.transform = CGAffineTransformMakeScale(0.2, 0.2);
         ti.alpha = 0;
         [pill refresh];
         if (pill.hidden || CGRectIsEmpty(pill.frame)) { pill.frame = miniRect; [pill layoutIfNeeded]; }
         // 1. The bar's glass takes over from Music's tab bar, and Music's mini bar hands over to our pill.
-        [UIView animateWithDuration:0.12 delay:0 options:o animations:^{ tab.alpha = 1; tb.alpha = 0; } completion:nil];
+        [UIView animateWithDuration:0.12 delay:0 options:o animations:^{ tb.alpha = 0; } completion:nil];
         SetUnclipped(mini, root, YES);
         CGAffineTransform under = PillTransform(mini);
         objc_setAssociatedObject(mini, kApplied, [NSValue valueWithCGAffineTransform:under], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1040,9 +1046,9 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
         wobble(tab, 0.9, 1.12, 0.08);
         [UIView animateWithDuration:0.22 delay:0.2 options:o animations:^{ ti.alpha = 1; } completion:nil];
         // 3. Search buds off the right end and rolls into its own circle.
-        [UIView animateWithDuration:0.18 delay:0.04 options:o animations:^{ search.alpha = 1; } completion:nil];
         [UIView animateWithDuration:0.66 delay:0.04 usingSpringWithDamping:0.62 initialSpringVelocity:0.7 options:o animations:^{
             LayoutCircle(search, right);
+            search.transform = CGAffineTransformIdentity;
         } completion:nil];
         wobble(search, 1.18, 0.88, 0.04);
         // 4. The pill drops into the row and narrows.
@@ -1054,17 +1060,17 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
 
     } else {
         CGRect miniHome = miniRect;
-        [UIView animateWithDuration:0.2 delay:0.16 options:o animations:^{ tb.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.16 delay:0.18 options:o animations:^{ tb.alpha = 1; } completion:nil];
         [UIView animateWithDuration:0.1 delay:0 options:o animations:^{ ti.alpha = 0; } completion:nil];
         [UIView animateWithDuration:0.56 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.4 options:o animations:^{
             LayoutCircle(tab, wide);
         } completion:nil];
         wobble(tab, 1.06, 0.9, 0.0);
-        [UIView animateWithDuration:0.2 delay:0.24 options:o animations:^{ tab.alpha = 0; } completion:^(BOOL d) { if (!gCollapsed) tab.hidden = YES; }];
-        [UIView animateWithDuration:0.44 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:o animations:^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.36 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (!gCollapsed) tab.hidden = YES; });
+        [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0.3 options:o animations:^{
             LayoutCircle(search, rightStart);
-        } completion:nil];
-        [UIView animateWithDuration:0.18 delay:0.18 options:o animations:^{ search.alpha = 0; } completion:^(BOOL d) { if (!gCollapsed) search.hidden = YES; }];
+            search.transform = CGAffineTransformMakeScale(0.15, 0.15);
+        } completion:^(BOOL d) { if (!gCollapsed) { search.hidden = YES; search.transform = CGAffineTransformIdentity; } }];
         // Our pill rises back up to Music's bar and hands over.
         CGAffineTransform home = PillTransform(mini);
         objc_setAssociatedObject(mini, kApplied, [NSValue valueWithCGAffineTransform:home], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1108,6 +1114,7 @@ static void SetUnclipped(UIView *mini, UIView *root, BOOL on) {
 // Our pill stands in for Music's bar in both states. Expanded, it sits exactly
 // where Music's (hidden) bar is; while the full player is up, Music's bar is back.
 static __weak UIView *gHiddenMini;
+static CFTimeInterval gFastRefreshUntil;
 static void SyncPill(void) {
     UITabBar *tb = gLastTabBar;
     UIView *root = tb.superview;
@@ -1119,6 +1126,21 @@ static void SyncPill(void) {
     UIViewController *rv = tb.window.rootViewController;
     BOOL playerUp = rv.presentedViewController != nil;
     BOOL on = gCollapse && gRound && mini.window && objc_getAssociatedObject(mini, kStyled) && !playerUp && !mini.hidden;
+    if (!on && playerUp && pill && !pill.hidden && gCollapse && gRound) {
+        // Full player opening: Music's bar stays hidden (no old-bar flash);
+        // our pill fades away as a snapshot (fading the blur itself breaks it).
+        if (gCollapsed) SetCollapsed(NO, NO);
+        UIView *snap = [pill snapshotViewAfterScreenUpdates:NO];
+        if (snap) {
+            snap.frame = pill.frame; snap.userInteractionEnabled = NO;
+            [host addSubview:snap];
+            [UIView animateWithDuration:0.22 animations:^{ snap.alpha = 0; snap.transform = CGAffineTransformMakeScale(0.96, 0.96); }
+                             completion:^(BOOL d) { [snap removeFromSuperview]; }];
+        }
+        pill.hidden = YES;
+        return;
+    }
+    if (!on && playerUp) { pill.hidden = YES; return; }
     if (!on) {
         if (gCollapsed && playerUp) SetCollapsed(NO, NO);
         pill.hidden = YES;
@@ -1133,7 +1155,7 @@ static void SyncPill(void) {
         [host addSubview:pill];
         [pill refresh];
     }
-    if (pill.hidden) { pill.hidden = NO; pill.alpha = 1; [pill refresh]; }
+    if (pill.hidden) { pill.hidden = NO; pill.alpha = 1; [pill refresh]; gFastRefreshUntil = CACurrentMediaTime() + 3; }
     gHiddenMini = mini;
     gPillObj = pill;
     if (mini.alpha < 0.01) mini.alpha = 1;
@@ -1143,7 +1165,8 @@ static void SyncPill(void) {
         if (!CGRectEqualToRect(pill.frame, r)) { pill.compact = NO; pill.frame = r; [pill setNeedsLayout]; }
     }
     static CFTimeInterval lastRefresh;
-    if (CACurrentMediaTime() - lastRefresh > 1.0) { lastRefresh = CACurrentMediaTime(); [pill refresh]; }
+    CGFloat every = CACurrentMediaTime() < gFastRefreshUntil ? 0.3 : 1.0;
+    if (CACurrentMediaTime() - lastRefresh > every) { lastRefresh = CACurrentMediaTime(); [pill refresh]; }
 }
 
 @interface MPPillTicker : NSObject
