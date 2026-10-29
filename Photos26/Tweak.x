@@ -1,4 +1,7 @@
-// Photos26 1.5.0 - made by nano
+// Photos26 1.6.0 - made by nano
+// 1.6.0: select mode found by "no thumbnail strip on screen" (the viewer
+//        always has one), so no video player / edit there; select bar sized
+//        like the tab pill; liquid split animation when Select opens.
 // 1.5.0: select mode in the grid gets the iOS 26 bar (glass share / trash
 //        circles, "Show Selected (N)" capsule) and no video player; jelly only
 //        on share, trash and back; favorite burst animation; the timer shows
@@ -613,6 +616,26 @@ static UIView *FindFilmstrip(UIView *v, int d) {
 }
 
 static BOOL gTextMode;
+// Is the photo viewer's thumbnail strip anywhere in this window (shown or not)?
+static BOOL HasScrubber(UIWindow *w) {
+    static __weak UIView *cached;
+    static CFTimeInterval last; static BOOL lastAnswer;
+    UIView *c = cached;
+    if (c && c.window == w) return YES;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - last < 0.4) return lastAnswer;
+    last = now;
+    Class sc = NSClassFromString(@"PUScrubberView");
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:w ?: [UIView new]];
+    int guard = 0;
+    while (stack.count && guard++ < 8000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if ((sc && [v isKindOfClass:sc]) || [NSStringFromClass([v class]) containsString:@"Filmstrip"]) { cached = v; lastAnswer = YES; return YES; }
+        [stack addObjectsFromArray:v.subviews];
+    }
+    lastAnswer = NO;
+    return NO;
+}
 static UIView *TextGlyph(UIView *v, int d) {
     for (UIView *s in v.subviews) {
         if (s.hidden || s.alpha < 0.01) continue;
@@ -694,60 +717,121 @@ static void LayoutBottom(UIToolbar *tb) {
     }
     gTextMode = NO;
     for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"txt"]) v.hidden = YES;
-    // Selecting in the grid: share, "N Photos Selected", trash.
+    // Selecting in the grid: share, "N Photos Selected", trash. The photo
+    // viewer always has the thumbnail strip somewhere in its window; the grid never does.
+    static BOOL wasSelect;
+    BOOL viewerHere = HasScrubber(tb.window);
     UILabel *countLabel = nil;
-    for (UIView *g in textViews) if ([g isKindOfClass:[UILabel class]] && [((UILabel *)g).text rangeOfString:@"elect"].location != NSNotFound) countLabel = (UILabel *)g;
-    if (gEnabled && countLabel && found[@"share"] && found[@"trash"]) {
+    {
+        NSMutableArray *stack = [NSMutableArray arrayWithArray:tb.subviews];
+        int guard = 0;
+        while (stack.count && guard++ < 400) {
+            UIView *v = stack.lastObject; [stack removeLastObject];
+            if (v.tag == BOTTOM_TAG) continue;
+            if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) {
+                NSString *s = ((UILabel *)v).text;
+                if ([s rangeOfString:@"elect"].location != NSNotFound || [s rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet].location != NSNotFound) { countLabel = (UILabel *)v; break; }
+            }
+            [stack addObjectsFromArray:v.subviews];
+        }
+    }
+    if (gEnabled && !viewerHere && found[@"share"] && found[@"trash"]) {
         c = EnsureContainer(tb);
         gToolbar = tb;
         for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view"));
-        Mask(countLabel);
+        if (countLabel) Mask(countLabel);
         for (UIView *v in c.subviews) v.hidden = ![v.accessibilityIdentifier hasPrefix:@"sel"];
-        // Under Apple's buttons (they stay Apple's own, on glass circles).
+        // Under Apple's buttons (they stay Apple's own, sitting in glass circles).
         UIView *bg = nil;
         for (UIView *s in tb.subviews) if ([NSStringFromClass([s class]) containsString:@"Background"]) bg = s;
-        if (bg) [tb insertSubview:c aboveSubview:bg]; else [tb insertSubview:c atIndex:0];
+        if (bg) { if ([tb.subviews indexOfObject:c] != [tb.subviews indexOfObject:bg] + 1) [tb insertSubview:c aboveSubview:bg]; }
+        else if (tb.subviews.firstObject != c) [tb insertSubview:c atIndex:0];
         SetFrame(c, tb.bounds);
-        CGFloat D = 50;
-        for (NSString *k in @[@"share", @"trash"]) {
+        // Same size as the Library / Albums / Search pill.
+        CGFloat W = c.bounds.size.width, D = 60, margin = 14, gap = 10;
+        CGFloat cy = 0; int cnt = 0;
+        for (UIBarButtonItem *it in tb.items) { UIView *v = KV(it, @"view"); if (v.window) { cy += CGRectGetMidY([v convertRect:v.bounds toView:c]) - v.transform.ty; cnt++; } }
+        cy = cnt ? round(cy / cnt) : 25;
+        CGRect rs = CGRectMake(margin, cy - D / 2, D, D), rt = CGRectMake(W - margin - D, cy - D / 2, D, D);
+        CGFloat mw = MIN(264, W - 2 * (margin + D + gap));
+        CGRect rm = CGRectMake(round((W - mw) / 2), cy - D / 2, round(mw), D);
+        PGGlass *gs = GlassIn(c, @"sel_share"), *gt = GlassIn(c, @"sel_trash"), *gc = GlassIn(c, @"sel_mid");
+        gs.hidden = gt.hidden = gc.hidden = NO;
+        // Center Apple's share and trash on their circles.
+        NSDictionary *targets = @{ @"share": [NSValue valueWithCGRect:rs], @"trash": [NSValue valueWithCGRect:rt] };
+        for (NSString *k in targets) {
             UIView *v = KV(((PGBox *)found[k]).obj, @"view");
-            UIView *g = v;
-            for (UIView *s in v.subviews) if (!s.hidden && s.bounds.size.width > 2) { g = s; break; }
-            CGRect r = [g convertRect:g.bounds toView:c];
-            PGGlass *gl = GlassIn(c, [@"sel_" stringByAppendingString:k]);
-            gl.hidden = NO;
-            SetFrame(gl, CGRectMake(round(CGRectGetMidX(r) - D / 2), round(CGRectGetMidY(r) - D / 2), D, D));
+            if (!v) continue;
+            CGRect r = [v convertRect:v.bounds toView:c];
+            CGFloat curX = CGRectGetMidX(r) - v.transform.tx;
+            CGFloat dx = round(CGRectGetMidX([targets[k] CGRectValue]) - curX);
+            if (fabs(v.transform.tx - dx) > 0.5 && !wasSelect) v.transform = CGAffineTransformMakeTranslation(dx, 0);
+            else if (fabs(v.transform.tx - dx) > 0.5 && ![v.layer animationKeys].count) v.transform = CGAffineTransformMakeTranslation(dx, 0);
+            objc_setAssociatedObject(v, kShift, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
-        // "Show Selected (13)" capsule in the middle.
-        NSScanner *sc = [NSScanner scannerWithString:countLabel.text ?: @""];
-        [sc scanUpToCharactersFromSet:NSCharacterSet.decimalDigitCharacterSet intoString:nil];
-        NSInteger n = 0; BOOL hasN = [sc scanInteger:&n];
-        NSString *text = hasN ? [NSString stringWithFormat:@"Show Selected (%ld)", (long)n] : countLabel.text;
+        // "Show Selected (13)" in the middle.
+        NSString *text = @"Show Selected";
+        if (countLabel) {
+            NSScanner *sc = [NSScanner scannerWithString:countLabel.text];
+            [sc scanUpToCharactersFromSet:NSCharacterSet.decimalDigitCharacterSet intoString:nil];
+            NSInteger n = 0;
+            if ([sc scanInteger:&n]) text = [NSString stringWithFormat:@"Show Selected (%ld)", (long)n];
+            else text = countLabel.text;
+        }
         UILabel *sl = nil;
         for (UIView *v in c.subviews) if ([v isKindOfClass:[UILabel class]] && [v.accessibilityIdentifier isEqualToString:@"sel_text"]) sl = (UILabel *)v;
         if (!sl) {
             sl = [UILabel new];
             sl.accessibilityIdentifier = @"sel_text";
-            sl.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+            sl.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
             sl.textColor = UIColor.whiteColor;
             sl.textAlignment = NSTextAlignmentCenter;
+            sl.adjustsFontSizeToFitWidth = YES;
+            sl.minimumScaleFactor = 0.7;
             sl.userInteractionEnabled = NO;
             [c addSubview:sl];
         }
         sl.hidden = NO;
         if (![sl.text isEqualToString:text]) sl.text = text;
-        CGRect lr = [countLabel convertRect:countLabel.bounds toView:c];
-        CGFloat w = MIN(c.bounds.size.width - 150, [sl sizeThatFits:CGSizeMake(400, 30)].width + 48);
-        CGRect cap = CGRectMake(round(c.bounds.size.width / 2 - w / 2), round(CGRectGetMidY(lr) - D / 2), round(w), D);
-        PGGlass *gc = GlassIn(c, @"sel_mid");
-        gc.hidden = !text.length;
-        SetFrame(gc, cap);
-        SetFrame(sl, cap);
-        gBottomDebug = [NSString stringWithFormat:@"select mode: %@", countLabel.text];
+        if (!wasSelect) {
+            // Liquid split: the circles start inside the pill and bulge out to their places.
+            gc.frame = rm; sl.frame = CGRectInset(rm, 16, 0);
+            gs.frame = CGRectMake(CGRectGetMinX(rm) + 6, rm.origin.y, D, D);
+            gt.frame = CGRectMake(CGRectGetMaxX(rm) - 6 - D, rm.origin.y, D, D);
+            gs.transform = gt.transform = CGAffineTransformMakeScale(0.7, 0.7);
+            gs.alpha = gt.alpha = 0.4; sl.alpha = 0;
+            NSMutableArray *apple = [NSMutableArray array];
+            for (NSString *k in @[@"share", @"trash"]) { UIView *v = KV(((PGBox *)found[k]).obj, @"view"); if (v) [apple addObject:v]; }
+            for (UIView *v in apple) { v.alpha = 0; }
+            [UIView animateWithDuration:0.75 delay:0.02 usingSpringWithDamping:0.58 initialSpringVelocity:0.9
+                                options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+                gs.transform = gt.transform = CGAffineTransformIdentity;
+                gs.frame = rs; gt.frame = rt;
+                gs.alpha = gt.alpha = 1;
+            } completion:nil];
+            [UIView animateWithDuration:0.3 delay:0.18 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+                sl.alpha = 1; for (UIView *v in apple) v.alpha = 1;
+            } completion:nil];
+            CAKeyframeAnimation *sq = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"];
+            sq.values = @[@1.12, @0.9, @1.04, @0.99, @1]; sq.keyTimes = @[@0, @0.25, @0.55, @0.8, @1]; sq.duration = 0.7;
+            CAKeyframeAnimation *sqy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
+            sqy.values = @[@0.9, @1.08, @0.97, @1.01, @1]; sqy.keyTimes = sq.keyTimes; sqy.duration = 0.7;
+            [gc.layer addAnimation:sq forKey:@"sx"]; [gc.layer addAnimation:sqy forKey:@"sy"];
+        } else {
+            SetFrame(gs, rs); SetFrame(gt, rt); SetFrame(gc, rm);
+            SetFrame(sl, CGRectInset(rm, 16, 0));
+        }
+        wasSelect = YES;
+        gBottomDebug = [NSString stringWithFormat:@"select mode: %@", countLabel.text ?: @"(no label)"];
         return;
     }
+    wasSelect = NO;
     for (UIView *v in c.subviews) if ([v.accessibilityIdentifier hasPrefix:@"sel"]) v.hidden = YES;
     if (countLabel) Unmask(countLabel);
+    for (UIBarButtonItem *it in tb.items) {
+        UIView *v = KV(it, @"view");
+        if (objc_getAssociatedObject(v, kShift)) { v.transform = CGAffineTransformIdentity; objc_setAssociatedObject(v, kShift, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    }
     // Only the photo/video viewer toolbar: it has both share and trash.
     if (!found[@"share"] || !found[@"trash"]) { c.hidden = YES; for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view")); gBottomDebug = [NSString stringWithFormat:@"not viewer: %@", [kinds componentsJoinedByString:@","]]; return; }
     gItems = found;
@@ -1141,7 +1225,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 1.5.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 1.6.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
