@@ -1,4 +1,8 @@
-// Control26 0.1.4 - made by nano
+// Control26 0.1.5 - made by nano
+// 0.1.5: every view hidden in the music module is tracked and restored when it
+//        switches between small and expanded (fixes missing back button and the
+//        doubled AirPlay icons). Expanded player gets an "AirPlay" capsule under
+//        the volume slider and a favorite star left of the play controls.
 // 0.1.4: own previous/play/next (Apple's group scales itself, so it couldn't
 //        be moved), slider icons turn white when the fill is below them,
 //        spring-back carries finger speed, "jelly" round buttons.
@@ -44,6 +48,7 @@
 #define OVERLAY_TAG 0x43323630
 #define GLYPH_TAG   0x43323631
 #define DEBUG_TAG   0x43323632
+#define EXP_TAG     0x43323633
 
 static BOOL gEnabled = YES, gMusic = YES, gColors = YES, gBounce = YES, gDebug = NO, gJelly = YES;
 
@@ -113,6 +118,19 @@ static void HideOriginal(UIView *v) {
     objc_setAssociatedObject(v, kHidByUs, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (v.alpha != 0) v.alpha = 0;
 }
+static void ShowOriginal(UIView *v);
+static NSHashTable *gHiddenMusic;  // everything the music module code hid
+static void HideMusic(UIView *v) {
+    if (!v) return;
+    if (!gHiddenMusic) gHiddenMusic = [NSHashTable weakObjectsHashTable];
+    [gHiddenMusic addObject:v];
+    HideOriginal(v);
+}
+static void RestoreMusic(void) {
+    for (UIView *v in [gHiddenMusic allObjects]) ShowOriginal(v);
+    [gHiddenMusic removeAllObjects];
+}
+
 static void ShowOriginal(UIView *v) {
     if (!v || !objc_getAssociatedObject(v, kHidByUs)) return;
     objc_setAssociatedObject(v, kHidByUs, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -158,6 +176,8 @@ static CFTimeInterval gLastFetch;
 typedef Boolean (*MRSendFn)(int, CFDictionaryRef);
 typedef void (*MRIsPlayingFn)(dispatch_queue_t, void (^)(Boolean));
 static BOOL gIsPlaying;
+static NSNumber *gNPLiked;   // from now-playing info, when available
+static NSString *gLikedLocally;
 static void *MediaRemote(void) {
     static void *h; static dispatch_once_t o;
     dispatch_once(&o, ^{ h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY); });
@@ -191,6 +211,8 @@ static void FetchNowPlaying(void) {
         NSData *data = d[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
         gNPTitle = [title isKindOfClass:[NSString class]] && title.length ? title : nil;
         gNPArtist = [artist isKindOfClass:[NSString class]] ? artist : nil;
+        id liked = d[@"kMRMediaRemoteNowPlayingInfoIsLiked"];
+        gNPLiked = [liked respondsToSelector:@selector(boolValue)] ? @([liked boolValue]) : nil;
         if (!gNPTitle) { gArtwork = nil; gArtworkData = nil; }
         else if ([data isKindOfClass:[NSData class]] && data.length && ![data isEqualToData:gArtworkData]) {
             gArtworkData = data;
@@ -249,6 +271,8 @@ static NSArray *FindTransport(UIView *module) {
     for (UIControl *c in ctls) {
         if (c.hidden || (c.alpha < 0.01 && !objc_getAssociatedObject(c, kHidByUs)) || c.bounds.size.width < 16) continue; // ours stay findable
         if ([c isKindOfClass:[UISlider class]]) continue;
+        NSString *cn = NSStringFromClass([c class]);
+        if ([cn containsString:@"Route"] || [cn containsString:@"Routing"] || [c.accessibilityLabel.lowercaseString containsString:@"airplay"]) continue;
         CGPoint p = [c.superview convertPoint:c.center toView:module];
         if (p.y < S.height * 0.45 || CGRectGetMidX([c convertRect:c.bounds toView:module]) > S.width) continue;
         // Skip containers that hold other controls.
@@ -375,21 +399,163 @@ static void CrossfadeText(UILabel *l, NSString *text) {
                     animations:^{ l.text = text ?: @""; } completion:nil];
 }
 
+static void RemoveOverlays(UIView *module) {
+    for (NSNumber *tag in @[@(OVERLAY_TAG), @(EXP_TAG)]) {
+        UIView *o = [module viewWithTag:tag.integerValue];
+        if (o.superview == module) [o removeFromSuperview];
+    }
+}
+
 static void UnstyleModule(UIView *module) {
-    UIView *o = [module viewWithTag:OVERLAY_TAG];
-    if (o.superview == module) [o removeFromSuperview];
-    NSMutableArray *labels = [NSMutableArray array];
-    CollectViews(module, 0, [UILabel class], labels);
-    for (UILabel *l in labels) ShowOriginal(l);
-    for (UIView *v in TopRightViews(module)) ShowOriginal(v);
+    RemoveOverlays(module);
+    RestoreMusic();
+    for (UIView *b in FindTransport(module)) { ClearOurTransform(b); ClearOurTransform(b.superview); ClearOurTransform(b.superview.superview); }
+}
+
+static const void *kMode = &kMode;
+// Small <-> expanded: put back everything the other mode changed first.
+static void SwitchMode(UIView *module, NSString *mode) {
+    if ([objc_getAssociatedObject(module, kMode) isEqualToString:mode]) return;
+    UnstyleModule(module);
+    objc_setAssociatedObject(module, kMode, mode, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+#pragma mark - expanded player (iOS 26 style)
+
+@interface C26Expanded : NSObject
++ (instancetype)shared;
+@end
+@implementation C26Expanded
++ (instancetype)shared { static C26Expanded *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [C26Expanded new]; }); return t; }
+- (void)airplay:(UIButton *)b {
+    // Press the AirPlay picker's own button (the whole capsule is tappable).
+    UIView *picker = [b.superview viewWithTag:22];
+    NSMutableArray *btns = [NSMutableArray array];
+    CollectViews(picker, 0, [UIButton class], btns);
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    [(UIButton *)btns.firstObject sendActionsForControlEvents:UIControlEventTouchUpInside];
+}
+- (void)star:(UIButton *)b {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    if (!gNPTitle) return;
+    BOOL liked = gNPLiked ? gNPLiked.boolValue : [gLikedLocally isEqualToString:gNPTitle];
+    if (liked) return;  // favoriting only; un-favorite from the Music app
+    SendMR(0x6A);       // "like track" (Favorite)
+    gLikedLocally = gNPTitle;
+    [UIView animateWithDuration:0.12 animations:^{ b.transform = CGAffineTransformMakeScale(1.3, 1.3); } completion:^(BOOL d) {
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:0
+                         animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
+    }];
+}
+@end
+
+static C26PassView *BuildExpandedOverlay(UIView *module) {
+    C26PassView *o = [C26PassView new];
+    o.tag = EXP_TAG;
+
+    UIVisualEffectView *cap = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight]];
+    cap.tag = 21;
+    cap.clipsToBounds = YES;
+    cap.layer.cornerCurve = kCACornerCurveContinuous;
+    [o addSubview:cap];
+
+    AVRoutePickerView *picker = [AVRoutePickerView new];
+    picker.tag = 22;
+    picker.tintColor = UIColor.whiteColor;
+    picker.activeTintColor = [UIColor colorWithRed:0.25 green:0.55 blue:1 alpha:1];
+    picker.prioritizesVideoDevices = NO;
+    picker.userInteractionEnabled = NO;   // the capsule button below handles taps
+    [cap.contentView addSubview:picker];
+
+    UILabel *l = [UILabel new];
+    l.tag = 23;
+    l.text = @"AirPlay";
+    l.textColor = UIColor.whiteColor;
+    l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium];
+    [cap.contentView addSubview:l];
+
+    UIButton *tap = [UIButton buttonWithType:UIButtonTypeCustom];
+    tap.tag = 25;
+    [tap addTarget:[C26Expanded shared] action:@selector(airplay:) forControlEvents:UIControlEventTouchUpInside];
+    [cap.contentView addSubview:tap];
+
+    UIButton *star = [UIButton buttonWithType:UIButtonTypeCustom];
+    star.tag = 24;
+    star.tintColor = [UIColor colorWithWhite:1 alpha:0.85];
+    [star addTarget:[C26Expanded shared] action:@selector(star:) forControlEvents:UIControlEventTouchUpInside];
+    [o addSubview:star];
+
+    [module addSubview:o];
+    return o;
+}
+
+static void StyleExpanded(UIView *module) {
+    SwitchMode(module, @"expanded");
+    if (!gEnabled || !gMusic) { UnstyleModule(module); return; }
+    FetchNowPlaying();
+    CGSize S = module.bounds.size;
+
+    C26PassView *o = (C26PassView *)[module viewWithTag:EXP_TAG];
+    if (o.superview != module) o = BuildExpandedOverlay(module);
+    [module bringSubviewToFront:o];
+    SetFrame(o, module.bounds);
+
+    // Hide Apple's AirPlay icons (header and row) and the route name ("iPhone").
+    NSMutableArray *all = [NSMutableArray array];
+    CollectViews(module, 0, [UIView class], all);
+    UIView *volume = nil;
+    for (UIView *v in all) {
+        if ([v isDescendantOfView:o]) continue;
+        NSString *n = NSStringFromClass([v class]);
+        if ([n containsString:@"Route"] || [n containsString:@"Routing"] || [v.accessibilityLabel.lowercaseString containsString:@"airplay"]) {
+            if (v.bounds.size.width < S.width * 0.6) HideMusic(v);
+            continue;
+        }
+        // Lowest wide slider = volume.
+        if ([n containsString:@"Slider"] && v.bounds.size.width > S.width * 0.5 && !v.hidden) {
+            CGRect r = [v convertRect:v.bounds toView:module];
+            if (!volume || CGRectGetMidY(r) > CGRectGetMidY([volume convertRect:volume.bounds toView:module])) volume = v;
+        }
+    }
+
+    // "AirPlay" capsule centered under the volume slider.
+    UIView *cap = [o viewWithTag:21];
+    if (volume) {
+        CGRect vr = [volume convertRect:volume.bounds toView:module];
+        CGFloat w = 118, h = 36;
+        SetFrame(cap, CGRectMake(round(S.width / 2 - w / 2), round(CGRectGetMaxY(vr) + 18), w, h));
+        cap.layer.cornerRadius = h / 2;
+        SetFrame([cap viewWithTag:22], CGRectMake(12, (h - 26) / 2, 26, 26));
+        SetFrame([cap viewWithTag:23], CGRectMake(42, 0, w - 50, h));
+        SetFrame([cap viewWithTag:25], CGRectMake(0, 0, w, h));
+        cap.hidden = NO;
+    } else cap.hidden = YES;
+
+    // Star left of the previous button, same spacing as the row.
+    UIButton *star = (UIButton *)[o viewWithTag:24];
     NSArray *tr = FindTransport(module);
-    for (UIView *b in tr) { ShowOriginal(b); ClearOurTransform(b); ClearOurTransform(b.superview); ClearOurTransform(b.superview.superview); }
+    if (tr.count >= 2) {
+        UIView *a = tr[0], *b = tr[1];
+        CGPoint pa = [a.superview convertPoint:a.center toView:module], pb = [b.superview convertPoint:b.center toView:module];
+        CGFloat gap = MAX(pb.x - pa.x, 44), d = 44;
+        SetFrame(star, CGRectMake(round(pa.x - gap - d / 2), round(pa.y - d / 2), d, d));
+        star.hidden = NO;
+    } else star.hidden = YES;
+    BOOL liked = gNPLiked ? gNPLiked.boolValue : (gNPTitle && [gLikedLocally isEqualToString:gNPTitle]);
+    NSString *sym = liked ? @"star.fill" : @"star";
+    if (![objc_getAssociatedObject(star, kLastValue) isEqual:sym]) {
+        objc_setAssociatedObject(star, kLastValue, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [star setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
+    }
+    gMusicDebug = [NSString stringWithFormat:@"expanded %.0fx%.0f volume=%@ transport=%lu liked=%@",
+                   S.width, S.height, volume ? NSStringFromClass([volume class]) : @"none", (unsigned long)tr.count, gNPLiked ?: @"?"];
 }
 
 static void StyleModule(UIView *module) {
     CGSize S = module.bounds.size;
     // Compact (square) module only; the expanded one is left alone.
-    if (S.width < 120 || S.width > 240 || fabs(S.width - S.height) > 40) { UnstyleModule(module); return; }
+    if (S.width < 120 || S.width > 240 || fabs(S.width - S.height) > 40) { StyleExpanded(module); return; }
+    SwitchMode(module, @"compact");
     if (!gEnabled || !gMusic) { UnstyleModule(module); return; }
 
     FetchNowPlaying();
@@ -450,17 +616,17 @@ static void StyleModule(UIView *module) {
     }
     // Apple's own row is hidden (it scales/positions itself, so it can't be moved).
     NSArray *tr = FindTransport(module);
-    for (UIView *b in tr) HideOriginal(b);
+    for (UIView *b in tr) HideMusic(b);
 
     // Hide Apple's labels and small AirPlay icon (ours replace them).
     NSMutableArray *labels = [NSMutableArray array];
     CollectViews(module, 0, [UILabel class], labels);
     for (UILabel *l in labels) {
         CGRect r = [l convertRect:l.bounds toView:module];
-        if (CGRectGetMidY(r) < S.height * 0.75) HideOriginal(l);
+        if (CGRectGetMidY(r) < S.height * 0.75) HideMusic(l);
     }
     NSArray *corner = TopRightViews(module);
-    for (UIView *v in corner) HideOriginal(v);
+    for (UIView *v in corner) HideMusic(v);
     NSMutableArray *cornerNames = [NSMutableArray array];
     for (UIView *v in corner) [cornerNames addObject:NSStringFromClass([v class])];
     gMusicDebug = [NSString stringWithFormat:@"%@ %.0fx%.0f corner=%lu hidden-transport=%lu playing=%d np=%@ art=%d",
@@ -792,7 +958,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.1.4 debug\n music: %@\n sliders: %@", gMusicDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.1.5 debug\n music: %@\n sliders: %@", gMusicDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
