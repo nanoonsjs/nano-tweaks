@@ -1,4 +1,7 @@
-// MusicPill 0.8.3 - made by nano
+// MusicPill 0.8.4 - made by nano
+// 0.8.4: iOS 26 scrolling title in the pill (pause, glide left with a copy
+//        following, faded edges), tapping the pill opens the player again
+//        (more ways to reach Music's own tap, result in debug).
 // 0.8.3: our pill is used in both states (artwork, title + E, artist, play,
 //        next), so the bar looks like iOS 26 expanded too; glass no longer
 //        disappears (no fading of blur views); swipe left / right on the pill
@@ -575,7 +578,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -728,6 +731,7 @@ static void SendMR(int cmd) {
 - (void)forwardInvocation:(NSInvocation *)i { [i invokeWithTarget:_gr]; }
 @end
 
+static NSString *gOpenDebug = @"-";
 // Open the full player the way a tap on Music's bar does.
 static BOOL OpenPlayer(UIView *mini) {
     for (UIView *v = mini; v; v = v.superview) {
@@ -740,21 +744,43 @@ static BOOL OpenPlayer(UIView *mini) {
                 @try { target = [tg valueForKey:@"_target"]; } @catch (__unused id e) {}
                 Ivar iv = class_getInstanceVariable([tg class], "_action");
                 if (iv) action = *(SEL *)((uint8_t *)(__bridge void *)tg + ivar_getOffset(iv));
-                if (!target || !action || ![target respondsToSelector:action] || [NSStringFromClass([target class]) hasPrefix:@"MP"]) continue;
+                if (!target || !action || ![target respondsToSelector:action]) continue;
+                NSString *tc = NSStringFromClass([target class]);
+                if ([tc isEqualToString:@"MPMiniPill"] || [tc isEqualToString:@"MPCollapse"] || [tc isEqualToString:@"MPSwipeTarget"]) continue;
                 MPGRProxy *p = [MPGRProxy alloc]; p.gr = g;
                 ((void (*)(id, SEL, id))objc_msgSend)(target, action, p);
+                gOpenDebug = [NSString stringWithFormat:@"tap -[%@ %@]", tc, NSStringFromSelector(action)];
                 return YES;
             }
         }
         if ([NSStringFromClass([v class]) isEqualToString:@"PaletteContainerView"] || [NSStringFromClass([v class]) hasSuffix:@".PaletteContainerView"]) break;
     }
+    // A control covering the bar (Music may use a button).
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:mini ?: [UIView new]];
+    for (UIView *v = mini.superview; v && stack.count < 4; v = v.superview) [stack addObject:v];
+    for (UIView *top in [stack copy]) {
+        if ([top isKindOfClass:[UIControl class]] && top.bounds.size.width > mini.bounds.size.width * 0.6) {
+            [(UIControl *)top sendActionsForControlEvents:UIControlEventTouchUpInside];
+            gOpenDebug = [NSString stringWithFormat:@"control %@", NSStringFromClass([top class])];
+            return YES;
+        }
+    }
+    // Accessibility: the bar's own "activate".
+    for (UIView *v = mini; v; v = v.superview) {
+        if (v.isAccessibilityElement && [v accessibilityActivate]) { gOpenDebug = [NSString stringWithFormat:@"a11y %@", NSStringFromClass([v class])]; return YES; }
+        if ([NSStringFromClass([v class]) hasSuffix:@"PaletteContainerView"]) break;
+    }
+    gOpenDebug = @"nothing found to open the player";
     return NO;
 }
 
 @interface MPMiniPill : UIView
 @property (nonatomic, strong) UIView *glass;
 @property (nonatomic, strong) UIImageView *art, *badge;
-@property (nonatomic, strong) UILabel *title, *artist;
+@property (nonatomic, strong) UILabel *title, *artist, *title2;
+@property (nonatomic, strong) UIView *titleBox, *titleStrip;
+@property (nonatomic, strong) CAGradientLayer *fade;
+@property (nonatomic, copy) NSString *scrollKey;
 @property (nonatomic, strong) UIButton *play, *next;
 @property (nonatomic) BOOL compact;
 - (void)refresh;
@@ -772,8 +798,16 @@ static BOOL OpenPlayer(UIView *mini) {
     _art.layer.cornerRadius = 8; _art.layer.cornerCurve = kCACornerCurveContinuous;
     _art.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
     [self addSubview:_art];
+    // Title lives in a clipped box with faded edges so it can scroll.
+    _titleBox = [UIView new]; _titleBox.clipsToBounds = YES; _titleBox.userInteractionEnabled = NO;
+    [self addSubview:_titleBox];
+    _titleStrip = [UIView new]; [_titleBox addSubview:_titleStrip];
     _title = [UILabel new]; _title.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; _title.textColor = UIColor.whiteColor;
-    [self addSubview:_title];
+    [_titleStrip addSubview:_title];
+    _title2 = [UILabel new]; _title2.font = _title.font; _title2.textColor = _title.textColor; _title2.hidden = YES;
+    [_titleStrip addSubview:_title2];
+    _fade = [CAGradientLayer layer];
+    _fade.startPoint = CGPointMake(0, 0.5); _fade.endPoint = CGPointMake(1, 0.5);
     _artist = [UILabel new]; _artist.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular]; _artist.textColor = [UIColor colorWithWhite:1 alpha:0.62];
     [self addSubview:_artist];
     _badge = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"e.square.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightMedium]]];
@@ -805,9 +839,40 @@ static BOOL OpenPlayer(UIView *mini) {
     CGFloat pw = 44, btns = _compact ? pw : pw * 2;
     CGFloat x = 8 + a + 11, maxW = S.width - x - btns - 8;
     CGFloat bw = _badge.hidden ? 0 : 18;
-    CGFloat tw = MIN(ceil([_title sizeThatFits:CGSizeMake(400, 30)].width), maxW - bw);
-    _title.frame = CGRectMake(x, S.height / 2 - 20, tw, 21);
-    _badge.frame = CGRectMake(x + tw + 3, S.height / 2 - 19, 15, 19);
+    CGFloat full = ceil([_title sizeThatFits:CGSizeMake(2000, 30)].width);
+    CGFloat boxW = MIN(full, maxW - bw);
+    BOOL scrolls = full > maxW - bw + 0.5;
+    _titleBox.frame = CGRectMake(x, S.height / 2 - 21, boxW, 22);
+    _title.frame = CGRectMake(0, 0, full, 22);
+    CGFloat gap = 34;
+    _title2.text = _title.text; _title2.hidden = !scrolls;
+    _title2.frame = CGRectMake(full + gap, 0, full, 22);
+    _titleStrip.frame = CGRectMake(0, 0, full * 2 + gap, 22);
+    _badge.frame = CGRectMake(x + boxW + 3, S.height / 2 - 20, 15, 19);
+    // Faded edges only while it scrolls.
+    if (scrolls) {
+        _fade.frame = _titleBox.bounds;
+        CGFloat e = MIN(0.12, 14 / MAX(boxW, 1));
+        _fade.colors = @[(id)UIColor.clearColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.clearColor.CGColor];
+        _fade.locations = @[@0, @(e), @(1 - e), @1];
+        _titleBox.layer.mask = _fade;
+    } else _titleBox.layer.mask = nil;
+    NSString *key = [NSString stringWithFormat:@"%@|%.0f|%d", _title.text, boxW, scrolls];
+    if (![key isEqualToString:_scrollKey]) {
+        _scrollKey = key;
+        [_titleStrip.layer removeAnimationForKey:@"marquee"];
+        if (scrolls) {
+            // iOS 26: rest, then glide left until the copy takes its place; repeat.
+            CGFloat dist = full + gap, speed = 32, pause = 2.0;
+            CFTimeInterval move = dist / speed, total = move + pause;
+            CAKeyframeAnimation *m = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+            m.values = @[@0, @0, @(-dist)];
+            m.keyTimes = @[@0, @(pause / total), @1];
+            m.timingFunctions = @[[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear]];
+            m.duration = total; m.repeatCount = HUGE_VALF;
+            [_titleStrip.layer addAnimation:m forKey:@"marquee"];
+        }
+    }
     _artist.frame = CGRectMake(x, S.height / 2 + 1, maxW, 18);
     _next.frame = CGRectMake(S.width - pw - 8, (S.height - pw) / 2, pw, pw);
     _play.frame = CGRectMake(S.width - btns - 8, (S.height - pw) / 2, pw, pw);
@@ -984,7 +1049,7 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
             pill.frame = miniHome; [pill layoutIfNeeded];
         } completion:nil];
     }
-    gCollapseDebug = [NSString stringWithFormat:@"%@ row=%.0f pill=%@ mini=%@", collapse ? @"collapsed" : @"expanded", rowY, NSStringFromCGRect(gCollapsedPill), NSStringFromCGRect(miniRect)];
+    gCollapseDebug = [NSString stringWithFormat:@"%@ row=%.0f open=%@", collapse ? @"collapsed" : @"expanded", rowY, gOpenDebug];
 }
 static void SetCollapsedFwd(BOOL c) { SetCollapsed(c, YES); }
 
