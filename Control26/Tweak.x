@@ -1,4 +1,7 @@
-// Control26 0.3.0 - made by nano
+// Control26 0.3.1 - made by nano
+// 0.3.1: tap anywhere on the brightness / volume capsule to open it, no icon
+//        inside the expanded slider, Dark Mode / Night Shift / True Tone left
+//        as Apple's own round buttons (cards are only for connectivity).
 // 0.3.0: expanded cards show instantly (no rise-in, styled on layout),
 //        Dark Mode / Night Shift / True Tone get real icons and taps that
 //        reach Apple (gesture fallback), artwork shrinks when paused and
@@ -995,7 +998,8 @@ static NSString *GlyphSymbol(int kind, float v) {
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)touch {
     UIView *v = g.view;
     CGPoint p = [touch locationInView:v];
-    return gEnabled && p.y > v.bounds.size.height * 0.62;   // the icon area
+    (void)p;
+    return gEnabled;   // anywhere on the capsule (a slide is still a slide)
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
 - (void)tap:(UITapGestureRecognizer *)g {
@@ -1018,6 +1022,12 @@ static void AddIconTap(UIView *slider) {
 
 static void StyleSlider(UIView *slider) {
     if (slider.bounds.size.height < 300) AddIconTap(slider);   // compact sliders only
+    else {
+        // Expanded slider: clean, no icon inside (the big icon sits above it).
+        [[slider viewWithTag:GLYPH_TAG] removeFromSuperview];
+        if (gEnabled) for (UIView *g in AllAppleGlyphs(slider)) HideOriginal(g);
+        return;
+    }
     int kind = SliderKind(slider);
     UIView *apple = AppleGlyph(slider);
     UIImageView *mine = (UIImageView *)[slider viewWithTag:GLYPH_TAG];
@@ -1794,6 +1804,11 @@ static void RemoveConnOverlay(void) {
 // buttons: Apple's expanded CCUILabeledRoundButtons, all visible.
 static void StyleConnectivity(NSArray *buttons) {
     if (!gEnabled || !gConn || buttons.count < 3) { RemoveConnOverlay(); return; }
+    // Only the connectivity module (Wi-Fi, Bluetooth...). Others, like the
+    // brightness module's Dark Mode / Night Shift / True Tone, stay Apple's.
+    BOOL connectivity = NO;
+    for (UIView *b in buttons) if ([@[@"air", @"wifi", @"airdrop", @"cell", @"bt", @"hotspot"] containsObject:ConnKey(ConnTitle(b))]) connectivity = YES;
+    if (!connectivity) { RemoveConnOverlay(); return; }
     UIView *sv = ((UIView *)buttons[0]).superview;
     CGRect U = CGRectNull;
     NSMutableDictionary *byKey = [NSMutableDictionary dictionary];
@@ -1937,7 +1952,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.3.0 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.3.1 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
