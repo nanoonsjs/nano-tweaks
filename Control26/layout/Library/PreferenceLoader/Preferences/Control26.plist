@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>entry</key>
+	<dict>
+		<key>cell</key><string>PSLinkCell</string>
+		<key>label</key><string>Control26</string>
+		<key>icon</key><string>Control26.png</string>
+	</dict>
+	<key>title</key><string>Control26</string>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Close and reopen Control Center after changing these.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Enabled</string>
+			<key>key</key><string>enabled</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>label</key><string>iOS 26 Look</string>
+			<key>footerText</key><string>Music module with album artwork and a round AirPlay button. Orange sun and blue speaker on the sliders. Sliders stretch and bounce at the ends.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Music Module</string>
+			<key>key</key><string>music</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Slider Icon Colors</string>
+			<key>key</key><string>colors</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Slider Bounce</string>
+			<key>key</key><string>bounce</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>label</key><string>Debug</string>
+			<key>footerText</key><string>Shows a purple box with what Control26 found. Send a screenshot if something looks off, then turn it off.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Show Debug Info</string>
+			<key>key</key><string>debug</string>
+			<key>default</key><false/>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Made by nano</string>
+		</dict>
+	</array>
+</dict>
+</plist>
