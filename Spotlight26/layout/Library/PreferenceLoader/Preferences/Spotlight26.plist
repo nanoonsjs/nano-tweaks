@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>entry</key>
+	<dict>
+		<key>cell</key><string>PSLinkCell</string>
+		<key>label</key><string>Spotlight26</string>
+		<key>icon</key><string>Spotlight26.png</string>
+	</dict>
+	<key>title</key><string>Spotlight26</string>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Pull down on the home screen or lock screen to search. Changes apply the next time you open Spotlight.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Enabled</string>
+			<key>key</key><string>enabled</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.spotlight26</string>
+			<key>PostNotification</key><string>com.user.spotlight26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>label</key><string>iOS 26 Look</string>
+			<key>footerText</key><string>The search bar sits at the top and grows out of the notch. Results sit on black glass cards.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Search Bar at the Top</string>
+			<key>key</key><string>top</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.spotlight26</string>
+			<key>PostNotification</key><string>com.user.spotlight26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Grow Out of the Notch</string>
+			<key>key</key><string>notch</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.spotlight26</string>
+			<key>PostNotification</key><string>com.user.spotlight26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Black Glass Cards</string>
+			<key>key</key><string>cards</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.spotlight26</string>
+			<key>PostNotification</key><string>com.user.spotlight26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Bounce While Typing</string>
+			<key>key</key><string>bounce</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.spotlight26</string>
+			<key>PostNotification</key><string>com.user.spotlight26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>label</key><string>Debug</string>
+			<key>footerText</key><string>Shows a purple box with what Spotlight26 found. Send a screenshot if something looks off, then turn it off.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Show Debug Info</string>
+			<key>key</key><string>debug</string>
+			<key>default</key><false/>
+			<key>defaults</key><string>com.user.spotlight26</string>
+			<key>PostNotification</key><string>com.user.spotlight26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Made by nano</string>
+		</dict>
+	</array>
+</dict>
+</plist>
