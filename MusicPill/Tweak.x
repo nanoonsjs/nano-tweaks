@@ -1,4 +1,6 @@
-// MusicPill 0.6.3 - made by nano
+// MusicPill 0.6.4 - made by nano
+// 0.6.4: pill 2% bigger; grows to 4% bigger while scrolling down a page and
+//        eases back to 2% when scrolling up or at the top.
 // 0.6.3: no flash of the old Play/Shuffle when an album opens. They're hidden
 //        the moment they appear and the new row is built right away, instead
 //        of waiting for the next 1/4-second check.
@@ -60,6 +62,10 @@ static NSString *gAlbumDebug = @"-", *gNavDebug = @"-", *gMarqueeDebug = @"-";
 static const BOOL gHideBG = YES;
 // Fixed at Small (the size picked in Settings in 0.5.0). 0 Normal, 1 Compact, 2 Small.
 static const int gSize = 2;
+// Pill scale on top of Small: 2% bigger normally, 4% bigger while scrolling down.
+static BOOL gExpanded = NO;
+#define PILL_GROW_NORMAL 1.02
+#define PILL_GROW_SCROLL 1.04
 static NSString *gPrefsSource = @"defaults";
 static __weak UITabBar *gLastTabBar;
 
@@ -275,6 +281,7 @@ static CGAffineTransform PillTransform(UIView *m) {
     // Total horizontal inset for Normal / Compact / Small.
     CGFloat inset = gSize == 0 ? 24 : (gSize == 1 ? 56 : 96);
     CGFloat s = W > inset + 100 ? (W - inset) / W : 1;
+    s = MIN(1.0, s * (gExpanded ? PILL_GROW_SCROLL : PILL_GROW_NORMAL));
     // Scaling shrinks around the center; shift down a bit so a smaller pill
     // keeps the same small gap above the tab bar instead of floating up.
     CGFloat ty = -6 + H * (1 - s) / 2;
@@ -482,7 +489,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -523,6 +530,50 @@ static void Update(UITabBar *tb) {
     }
     UpdateDebug(tb, root, tabRect, gRound ? mini : nil);
 }
+
+#pragma mark - grow while scrolling
+
+static void SetPillExpanded(BOOL expanded) {
+    if (gExpanded == expanded) return;
+    gExpanded = expanded;
+    UITabBar *tb = gLastTabBar;
+    UIView *mini = tb ? objc_getAssociatedObject(tb, kMini) : nil;
+    if (!mini || !mini.window || !objc_getAssociatedObject(mini, kStyled)) return;
+    CGAffineTransform t = PillTransform(mini);
+    // Record first so the watchdog treats this size as ours and doesn't fight it.
+    objc_setAssociatedObject(mini, kApplied, [NSValue valueWithCGAffineTransform:t], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0
+                        options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState
+                     animations:^{ mini.transform = t; } completion:nil];
+}
+
+static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
+    static CGFloat acc = 0;
+    // At (or above) the top of the page: back to the normal size.
+    if (y <= -sv.adjustedContentInset.top + 2) { acc = 0; SetPillExpanded(NO); return; }
+    if ((dy > 0) != (acc > 0)) acc = 0; // direction changed
+    acc += dy;
+    if (acc > 12) SetPillExpanded(YES);       // scrolling down
+    else if (acc < -12) SetPillExpanded(NO);  // scrolling up
+}
+
+%hook UIScrollView
+- (void)setContentOffset:(CGPoint)offset {
+    CGPoint old = self.contentOffset;
+    %orig;
+    if (!gRound) return;
+    // Only the user scrolling a full page: not side-scrolling rows, not small views.
+    if (!(self.isTracking || self.isDecelerating)) return;
+    if (self.bounds.size.height < 300) return;
+    CGFloat dy = offset.y - old.y, dx = offset.x - old.x;
+    if (fabs(dy) < 0.5 || fabs(dx) > fabs(dy)) return;
+    UITabBar *tb = gLastTabBar;
+    if (!tb || self.window != tb.window) return;
+    UIViewController *root = self.window.rootViewController;
+    if (root.presentedViewController && !root.presentedViewController.isBeingDismissed) return; // full player
+    PageScrolled(self, dy, offset.y);
+}
+%end
 
 %hook UIControl
 // Our hidden originals (Play/Shuffle/Download): if Music tries to bring them
