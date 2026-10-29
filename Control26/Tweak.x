@@ -87,6 +87,7 @@
 #define CARD_PRESSED 0.34
 
 static BOOL gNoAuto = YES;
+static void StopAutoBrightness(void);
 static BOOL gEnabled = YES, gMusic = YES, gColors = YES, gBounce = YES, gDebug = NO, gJelly = YES, gConn = YES;
 
 static const void *kHidByUs = &kHidByUs;
@@ -196,7 +197,6 @@ static NSTimer *gTimer;
 static NSString *gMusicDebug = @"-", *gSliderDebug = @"-", *gConnDebug = @"-";
 static void Tick(void);
 
-static void StopAutoBrightness(void);
 static void StartTimer(void) {
     if (gTimer) return;
     @try { StopAutoBrightness(); } @catch (__unused id e) {}   // each time Control Center opens
