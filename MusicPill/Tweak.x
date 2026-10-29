@@ -1,4 +1,7 @@
-// MusicPill 0.8.8 - made by nano
+// MusicPill 0.8.9 - made by nano
+// 0.8.9: undo 0.8.8's hiding of Music's bar container (Music reuses it for the
+//        player transition: hiding it could hide the player and crash Music).
+//        The pill-grow open animation stays; it only runs once per opening.
 // 0.8.8: the player grows out of the pill (a copy of the pill swells to full
 //        screen and fades as the player comes up), and Music's gray bar
 //        container is hidden along with its bar.
@@ -603,7 +606,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.8 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.9 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1119,9 +1122,6 @@ static void HideOne(UIView *m, BOOL hide);
 static void HideMini(UIView *m, BOOL hide) {
     if (!m) return;
     HideOne(m, hide);
-    // Music's gray container the same size as the bar (shows during its transitions).
-    UIView *c = m.superview;
-    if (c && fabs(c.bounds.size.width - m.bounds.size.width) < 2 && fabs(c.bounds.size.height - m.bounds.size.height) < 2) HideOne(c, hide);
 }
 static void HideOne(UIView *m, BOOL hide) {
     if (hide && !objc_getAssociatedObject(m, kMiniMask)) {
@@ -1168,7 +1168,7 @@ static void SyncPill(void) {
         // The player grows out of the pill: a copy of the pill swells up to
         // full screen and melts away while the player comes up.
         UIWindow *win = tb.window;
-        UIView *snap = [pill snapshotViewAfterScreenUpdates:NO];
+        UIView *snap = pill.window ? [pill snapshotViewAfterScreenUpdates:NO] : nil;
         if (snap && win) {
             CGRect from = [pill convertRect:pill.bounds toView:win];
             UIView *wrap = [[UIView alloc] initWithFrame:from];
