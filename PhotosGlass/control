@@ -1,6 +1,6 @@
 Package: com.user.photosglass
 Name: PhotosGlass
-Version: 0.3.0
+Version: 0.3.1
 Architecture: iphoneos-arm64
 Description: iOS 26 style liquid glass pills for the Photos app toolbar. Made by nano.
 Maintainer: nano

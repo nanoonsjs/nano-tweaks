@@ -1,4 +1,4 @@
-// PhotosGlass 0.3.0 - made by nano
+// PhotosGlass 0.3.1 - made by nano
 // Photos-only. Turns the bottom toolbar into iOS 26 style glass pills:
 // [share]  [middle buttons]  [delete]
 //
@@ -23,12 +23,30 @@ static const void *kContainer = &kContainer;
 static const void *kStyled = &kStyled;
 static const void *kBusy = &kBusy;
 
+// Photos is sandboxed and can't read our prefs through cfprefsd, so read the
+// plist file directly (Dopamine keeps tweak prefs under /var/jb), then fall back.
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
-    CFPropertyListRef v = CFPreferencesCopyAppValue(CFSTR("enabled"), DOM);
-    gEnabled = v ? [(__bridge_transfer id)v boolValue] : YES;
+    NSDictionary *best = nil; NSDate *bestDate = nil;
+    for (NSString *dir in @[@"/var/jb/var/mobile/Library/Preferences/", @"/var/mobile/Library/Preferences/"]) {
+        NSString *p = [dir stringByAppendingString:@"com.user.photosglass.plist"];
+        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
+        if (![d isKindOfClass:[NSDictionary class]]) continue;
+        NSDate *m = [[NSFileManager defaultManager] attributesOfItemAtPath:p error:nil][NSFileModificationDate];
+        if (!best || (m && bestDate && [m compare:bestDate] == NSOrderedDescending)) { best = d; bestDate = m; }
+    }
+    id v = best[@"enabled"];
+    if (!v) {
+        CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("enabled"), DOM);
+        if (cf) v = (__bridge_transfer id)cf;
+    }
+    gEnabled = v ? [v boolValue] : YES;
 }
-static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { LoadPrefs(); }
+static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
+    // Settings may finish writing the file a moment after the notification.
+    dispatch_async(dispatch_get_main_queue(), ^{ LoadPrefs(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ LoadPrefs(); });
+}
 
 static id KV(id obj, NSString *key) {
     if (!obj) return nil;

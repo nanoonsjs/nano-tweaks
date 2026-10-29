@@ -1,39 +1,89 @@
-// MusicPill 0.3.0 - made by nano
+// MusicPill 0.4.0 - made by nano
 // Apple Music only.
 //  1. "Listen Now" tab -> "Home" with a house icon.
-//  2. Now-playing bar -> rounded floating pill (iOS 26 style).
-//     Done ONLY with corner radius + a transform on the bar itself. We never
-//     change its frame, and all work runs after the layout pass finishes, so
-//     it can't cause a layout loop.
-//  3. Debug overlay: lists the views it found near the tab bar so the
-//     detection can be fixed from a screenshot. On by default in this test build.
+//  2. Now-playing bar -> rounded floating glass pill (iOS 26 style).
+//     Only corner radius + transform on the bar; never its frame. All work runs
+//     after the layout pass, so it can't loop.
+//  3. Hides the shared gray blur behind the now-playing bar and tab bar
+//     (PaletteContainerView's UIVisualEffectView) so the gap is see-through.
+//  4. Debug overlay listing what it found near the tab bar.
+//
+// Settings: Music is sandboxed and can't read our prefs through cfprefsd, so
+// the switches did nothing in 0.3.0. We now read the plist file directly
+// (Dopamine keeps tweak prefs under /var/jb) and fall back to cfprefsd.
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 
 #define DOM CFSTR("com.user.musicpill")
+#define DOM_NS @"com.user.musicpill"
 #define NOTIFY CFSTR("com.user.musicpill/prefschanged")
 #define DEBUG_TAG 0x4D504442
+#define GLASS_TAG 0x4D50474C
 
-static BOOL gRename = YES, gRound = YES, gDebug = YES;
+static BOOL gRename = YES, gRound = YES, gHideBG = YES, gDebug = NO;
+static NSString *gPrefsSource = @"defaults";
+static __weak UITabBar *gLastTabBar;
 
 static const void *kMini = &kMini;
 static const void *kBusy = &kBusy;
 static const void *kHome = &kHome;
 static const void *kStyled = &kStyled;
+static const void *kHiddenBG = &kHiddenBG;
 
-static BOOL PrefBool(CFStringRef key, BOOL def) {
-    CFPropertyListRef v = CFPreferencesCopyAppValue(key, DOM);
-    if (!v) return def;
-    return [(__bridge_transfer id)v boolValue];
+#pragma mark - prefs
+
+static NSDictionary *ReadPrefsFile(NSString **source) {
+    NSString *name = [DOM_NS stringByAppendingString:@".plist"];
+    NSArray *dirs = @[@"/var/jb/var/mobile/Library/Preferences/", @"/var/mobile/Library/Preferences/"];
+    NSDictionary *best = nil; NSDate *bestDate = nil;
+    for (NSString *dir in dirs) {
+        NSString *p = [dir stringByAppendingString:name];
+        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
+        if (![d isKindOfClass:[NSDictionary class]]) continue;
+        NSDate *m = [[NSFileManager defaultManager] attributesOfItemAtPath:p error:nil][NSFileModificationDate];
+        if (!best || (m && bestDate && [m compare:bestDate] == NSOrderedDescending)) {
+            best = d; bestDate = m;
+            if (source) *source = p;
+        }
+    }
+    return best;
 }
+
+static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
+    id v = file[key];
+    if (!v) {
+        CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM);
+        if (cf) v = (__bridge_transfer id)cf;
+    }
+    return v ? [v boolValue] : def;
+}
+
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
-    gRename = PrefBool(CFSTR("rename"), YES);
-    gRound  = PrefBool(CFSTR("round"), YES);
-    gDebug  = PrefBool(CFSTR("debug"), YES);
+    NSString *src = nil;
+    NSDictionary *file = ReadPrefsFile(&src);
+    gPrefsSource = src ?: @"cfprefs/defaults";
+    gRename = PrefBool(file, @"rename", YES);
+    gRound  = PrefBool(file, @"round", YES);
+    gHideBG = PrefBool(file, @"hidebg", YES);
+    gDebug  = PrefBool(file, @"debug", NO);
 }
-static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { LoadPrefs(); }
+
+static void Update(UITabBar *tb);
+
+static void ReloadAndApply(void) {
+    LoadPrefs();
+    UITabBar *tb = gLastTabBar;
+    if (tb) { @try { Update(tb); } @catch (__unused id e) {} }
+}
+
+static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
+    // Settings may finish writing the file a moment after the notification.
+    dispatch_async(dispatch_get_main_queue(), ^{ ReloadAndApply(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ ReloadAndApply(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ ReloadAndApply(); });
+}
 
 #pragma mark - Listen Now -> Home
 
@@ -49,9 +99,6 @@ static void MarkHome(UITabBarItem *it) {
     it.selectedImage = House();
 }
 
-// Music renames the tab through the view controller's title, which never calls
-// -[UITabBarItem setTitle:], so 0.2.0 got the "Home" text but not the icon.
-// Catch it from the tab bar instead.
 static void FixTabItems(UITabBar *tb) {
     if (!gRename) return;
     for (UITabBarItem *it in tb.items)
@@ -103,10 +150,9 @@ static void FixTabItems(UITabBar *tb) {
 - (void)setTitle:(NSString *)title { %orig(IsListenNow(title) ? @"Home" : title); }
 %end
 
-#pragma mark - now-playing pill
+#pragma mark - geometry helpers
 
-// Frame of v in root's coordinates, ignoring v's own transform
-// (so it still matches after we've scaled it).
+// Frame of v in root's coordinates, ignoring v's own transform.
 static CGRect UntransformedRect(UIView *v, UIView *root) {
     if (!v.superview) return CGRectNull;
     CGPoint c = [v.superview convertPoint:v.center toView:root];
@@ -114,22 +160,31 @@ static CGRect UntransformedRect(UIView *v, UIView *root) {
     return CGRectMake(c.x - s.width / 2, c.y - s.height / 2, s.width, s.height);
 }
 
-static BOOL Geometry(UIView *v, UIView *root, CGRect tabRect, BOOL loose) {
-    if (v.hidden || v.alpha < 0.01 || v.tag == DEBUG_TAG) return NO;
-    CGRect r = UntransformedRect(v, root);
-    if (CGRectIsNull(r)) return NO;
-    CGFloat h = r.size.height;
-    if (h < 44 || h > 100) return NO;
-    if (r.size.width < root.bounds.size.width * (loose ? 0.6 : 0.9)) return NO;
-    // Sits just above the tab bar (allow a gap for floating tab bars).
-    CGFloat gap = CGRectGetMinY(tabRect) - CGRectGetMaxY(r);
-    return gap >= -4 && gap <= 40;
+static BOOL BarSized(UIView *v, UIView *root) {
+    if (v.hidden || v.alpha < 0.01 || v.tag == DEBUG_TAG || v.tag == GLASS_TAG) return NO;
+    CGFloat h = v.bounds.size.height;
+    return h >= 44 && h <= 100 && v.bounds.size.width >= root.bounds.size.width * 0.6;
 }
 
+static BOOL Geometry(UIView *v, UIView *root, CGRect tabRect, CGFloat minGap) {
+    if (!BarSized(v, root)) return NO;
+    CGRect r = UntransformedRect(v, root);
+    if (CGRectIsNull(r)) return NO;
+    CGFloat gap = CGRectGetMinY(tabRect) - CGRectGetMaxY(r);
+    return gap >= minGap && gap <= 40;
+}
+
+#pragma mark - find the now-playing bar
+
+// iOS 16 Music: PaletteContainerView (h~172, the gray blur behind bar + tab bar)
+//   -> UIVisualEffectView -> ... -> PaletteContainerView...ContainerView (h~68)  <- the bar
 static UIView *FindByName(UIView *view, UIView *root, CGRect tabRect, UITabBar *tb, int depth) {
     for (UIView *sub in view.subviews) {
         if (sub == tb || [sub isKindOfClass:[UIScrollView class]]) continue;
-        if ([NSStringFromClass([sub class]) containsString:@"MiniPlayer"] && Geometry(sub, root, tabRect, YES)) return sub;
+        NSString *n = NSStringFromClass([sub class]);
+        BOOL nameHit = [n containsString:@"MiniPlayer"] ||
+                       ([n containsString:@"PaletteContainerView"] && [n hasSuffix:@"ContainerView"] && ![n isEqualToString:@"PaletteContainerView"] && ![n hasSuffix:@"20PaletteContainerView"]);
+        if (nameHit && Geometry(sub, root, tabRect, -20)) return sub;
         if (depth < 7) { UIView *f = FindByName(sub, root, tabRect, tb, depth + 1); if (f) return f; }
     }
     return nil;
@@ -138,11 +193,24 @@ static UIView *FindByName(UIView *view, UIView *root, CGRect tabRect, UITabBar *
 static UIView *FindByShape(UIView *view, UIView *root, CGRect tabRect, UITabBar *tb, int depth) {
     for (UIView *sub in view.subviews) {
         if (sub == tb || [sub isKindOfClass:[UIScrollView class]] || [sub isKindOfClass:[UITabBar class]]) continue;
-        if (Geometry(sub, root, tabRect, NO)) return sub; // outermost match
-        if (depth < 4) { UIView *f = FindByShape(sub, root, tabRect, tb, depth + 1); if (f) return f; }
+        if (Geometry(sub, root, tabRect, -12)) return sub; // outermost match
+        if (depth < 5) { UIView *f = FindByShape(sub, root, tabRect, tb, depth + 1); if (f) return f; }
     }
     return nil;
 }
+
+// The big gray blur: a PaletteContainerView taller than the bar, and its effect views.
+static UIView *FindPalette(UIView *view, int depth) {
+    for (UIView *sub in view.subviews) {
+        if ([sub isKindOfClass:[UIScrollView class]]) continue;
+        NSString *n = NSStringFromClass([sub class]);
+        if ([n containsString:@"PaletteContainerView"] && sub.bounds.size.height > 100) return sub;
+        if (depth < 4) { UIView *f = FindPalette(sub, depth + 1); if (f) return f; }
+    }
+    return nil;
+}
+
+#pragma mark - styling
 
 static CGAffineTransform PillTransform(UIView *m) {
     CGFloat W = m.bounds.size.width;
@@ -160,18 +228,50 @@ static void StylePill(UIView *m) {
         objc_setAssociatedObject(m, kStyled, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         m.clipsToBounds = YES;
         m.layer.borderWidth = 0.75;
-        m.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+        m.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
     }
-    CGAffineTransform t = PillTransform(m);
-    // Don't fight Music's own animations: only set when it's at rest.
-    if (CGAffineTransformIsIdentity(m.transform)) m.transform = t;
+    // Own glass background, so the pill still has one when the gray blur is hidden.
+    UIView *glass = [m viewWithTag:GLASS_TAG];
+    if (gHideBG && !glass) {
+        UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+        g.tag = GLASS_TAG;
+        g.userInteractionEnabled = NO;
+        g.frame = m.bounds;
+        g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [m insertSubview:g atIndex:0];
+    } else if (!gHideBG && glass) {
+        [glass removeFromSuperview];
+    }
+    if (CGAffineTransformIsIdentity(m.transform)) m.transform = PillTransform(m);
 }
 
 static void UnstylePill(UIView *m) {
-    if (!objc_getAssociatedObject(m, kStyled)) return;
+    if (!m || !objc_getAssociatedObject(m, kStyled)) return;
+    objc_setAssociatedObject(m, kStyled, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (CGAffineTransformEqualToTransform(m.transform, PillTransform(m))) m.transform = CGAffineTransformIdentity;
     m.layer.cornerRadius = 0;
     m.layer.borderWidth = 0;
+    [[m viewWithTag:GLASS_TAG] removeFromSuperview];
+}
+
+// The bar's content lives INSIDE the effect view we hide, so hiding the effect
+// view would hide the bar too. Instead, clear only the blur layers and keep the
+// content view visible.
+static void SetBackdropClear(UIView *palette, BOOL clear) {
+    if (!palette) return;
+    for (UIView *s in palette.subviews) {
+        if (![s isKindOfClass:[UIVisualEffectView class]]) continue;
+        UIVisualEffectView *ev = (UIVisualEffectView *)s;
+        for (UIView *part in ev.subviews) {
+            if (part == ev.contentView) continue;
+            if (clear) {
+                if (part.alpha != 0) { part.alpha = 0; objc_setAssociatedObject(part, kHiddenBG, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+            } else if (objc_getAssociatedObject(part, kHiddenBG)) {
+                part.alpha = 1;
+                objc_setAssociatedObject(part, kHiddenBG, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+        }
+    }
 }
 
 #pragma mark - debug overlay
@@ -179,15 +279,14 @@ static void UnstylePill(UIView *m) {
 static void CollectCandidates(UIView *view, UIView *root, CGRect tabRect, UITabBar *tb, int depth, NSMutableArray *out) {
     for (UIView *sub in view.subviews) {
         if (out.count >= 10) return;
-        if (sub == tb || sub.tag == DEBUG_TAG || [sub isKindOfClass:[UIScrollView class]]) continue;
+        if (sub == tb || sub.tag == DEBUG_TAG || sub.tag == GLASS_TAG || [sub isKindOfClass:[UIScrollView class]]) continue;
         CGRect r = UntransformedRect(sub, root);
         if (!CGRectIsNull(r)) {
             CGFloat gap = CGRectGetMinY(tabRect) - CGRectGetMaxY(r);
             if (r.size.width >= root.bounds.size.width * 0.6 && r.size.height >= 30 && r.size.height <= 220 && gap > -160 && gap < 60) {
                 NSString *name = NSStringFromClass([sub class]);
-                NSRange dot = [name rangeOfString:@"." options:NSBackwardsSearch];
-                if (dot.location != NSNotFound) name = [name substringFromIndex:dot.location + 1];
-                [out addObject:[NSString stringWithFormat:@"%@ h=%.0f gap=%.0f d=%d%@", name, r.size.height, gap, depth, sub.hidden ? @" hidden" : @""]];
+                if (name.length > 40) name = [@"…" stringByAppendingString:[name substringFromIndex:name.length - 39]];
+                [out addObject:[NSString stringWithFormat:@"%@ h=%.0f gap=%.0f d=%d a=%.1f%@", name, r.size.height, gap, depth, sub.alpha, sub.hidden ? @" hidden" : @""]];
             }
         }
         if (depth < 6) CollectCandidates(sub, root, tabRect, tb, depth + 1, out);
@@ -215,11 +314,13 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
     CollectCandidates(root, root, tabRect, tb, 0, c);
     NSString *found = @"none";
     if (mini) {
-        CGRect r = UntransformedRect(mini, root);
-        found = [NSString stringWithFormat:@"%@ h=%.0f", NSStringFromClass([mini class]), r.size.height];
+        NSString *n = NSStringFromClass([mini class]);
+        if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
+        found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill debug (turn off in Settings > MusicPill)\n tab y=%.0f h=%.0f screen h=%.0f\n PICKED: %@\n %@",
-                      CGRectGetMinY(tabRect), tabRect.size.height, root.bounds.size.height, found,
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.4.0 debug\n prefs: %@\n rename=%d round=%d hidebg=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
+                      gPrefsSource, gRename, gRound, gHideBG,
+                      CGRectGetMinY(tabRect), tabRect.size.height, found,
                       [c componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
@@ -237,10 +338,18 @@ static void Update(UITabBar *tb) {
     if (!root || !tb.window) return;
     CGRect tabRect = UntransformedRect(tb, root);
 
+    UIView *palette = FindPalette(root, 0);
+    SetBackdropClear(palette, gRound && gHideBG);
+
     UIView *mini = objc_getAssociatedObject(tb, kMini);
     if (gRound) {
-        if (!mini || !mini.window || ![mini isDescendantOfView:root] || !Geometry(mini, root, tabRect, YES)) {
-            mini = FindByName(root, root, tabRect, tb, 0) ?: FindByShape(root, root, tabRect, tb, 0);
+        // Stick with the bar we already picked while it's on screen and bar-sized.
+        // Re-picking is what caused two nested pills in 0.3.0.
+        BOOL keep = mini && mini.window && [mini isDescendantOfView:root] && BarSized(mini, root);
+        if (!keep) {
+            UIView *found = FindByName(root, root, tabRect, tb, 0) ?: FindByShape(root, root, tabRect, tb, 0);
+            if (found != mini) UnstylePill(mini);
+            mini = found;
             objc_setAssociatedObject(tb, kMini, mini, OBJC_ASSOCIATION_ASSIGN);
         }
         if (mini) StylePill(mini);
@@ -253,6 +362,7 @@ static void Update(UITabBar *tb) {
 %hook UITabBar
 - (void)layoutSubviews {
     %orig;
+    gLastTabBar = self;
     if (objc_getAssociatedObject(self, kBusy)) return;
     objc_setAssociatedObject(self, kBusy, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     __weak UITabBar *weak = self;

@@ -13,7 +13,7 @@
 	<array>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
-			<key>footerText</key><string>Close Music from the app switcher and reopen it after changing these.</string>
+			<key>footerText</key><string>Changes should apply right away. If not, close Music from the app switcher and reopen it.</string>
 		</dict>
 		<dict>
 			<key>cell</key><string>PSSwitchCell</string>
@@ -32,14 +32,22 @@
 			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
 		</dict>
 		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>See-Through Background</string>
+			<key>key</key><string>hidebg</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
 			<key>cell</key><string>PSGroupCell</string>
-			<key>footerText</key><string>Shows a purple box listing what MusicPill found near the tab bar. Send a screenshot of it if the bar isn't round, then turn this off.</string>
+			<key>footerText</key><string>Shows a purple box with what MusicPill found and which settings it can read. Turn this on to test that the switches work.</string>
 		</dict>
 		<dict>
 			<key>cell</key><string>PSSwitchCell</string>
 			<key>label</key><string>Show Debug Info</string>
 			<key>key</key><string>debug</string>
-			<key>default</key><true/>
+			<key>default</key><false/>
 			<key>defaults</key><string>com.user.musicpill</string>
 			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
 		</dict>
