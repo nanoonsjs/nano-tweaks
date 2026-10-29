@@ -1,4 +1,6 @@
-// MusicPill 0.4.0 - made by nano
+// MusicPill 0.5.0 - made by nano
+// 0.5.0: pill size setting (Normal / Compact / Small) and swipe left/right on
+//        the pill for next/previous track.
 // Apple Music only.
 //  1. "Listen Now" tab -> "Home" with a house icon.
 //  2. Now-playing bar -> rounded floating glass pill (iOS 26 style).
@@ -14,6 +16,8 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <dlfcn.h>
+#import <MediaPlayer/MediaPlayer.h>
 
 #define DOM CFSTR("com.user.musicpill")
 #define DOM_NS @"com.user.musicpill"
@@ -21,7 +25,8 @@
 #define DEBUG_TAG 0x4D504442
 #define GLASS_TAG 0x4D50474C
 
-static BOOL gRename = YES, gRound = YES, gHideBG = YES, gDebug = NO;
+static BOOL gRename = YES, gRound = YES, gHideBG = YES, gDebug = NO, gSwipe = YES;
+static int gSize = 1; // 0 Normal, 1 Compact, 2 Small
 static NSString *gPrefsSource = @"defaults";
 static __weak UITabBar *gLastTabBar;
 
@@ -30,6 +35,8 @@ static const void *kBusy = &kBusy;
 static const void *kHome = &kHome;
 static const void *kStyled = &kStyled;
 static const void *kHiddenBG = &kHiddenBG;
+static const void *kApplied = &kApplied;
+static const void *kSwipeAdded = &kSwipeAdded;
 
 #pragma mark - prefs
 
@@ -59,6 +66,15 @@ static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
     return v ? [v boolValue] : def;
 }
 
+static int PrefInt(NSDictionary *file, NSString *key, int def) {
+    id v = file[key];
+    if (!v) {
+        CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM);
+        if (cf) v = (__bridge_transfer id)cf;
+    }
+    return v ? [v intValue] : def;
+}
+
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSString *src = nil;
@@ -68,6 +84,8 @@ static void LoadPrefs(void) {
     gRound  = PrefBool(file, @"round", YES);
     gHideBG = PrefBool(file, @"hidebg", YES);
     gDebug  = PrefBool(file, @"debug", NO);
+    gSwipe  = PrefBool(file, @"swipe", YES);
+    gSize   = MAX(0, MIN(2, PrefInt(file, @"size", 1)));
 }
 
 static void Update(UITabBar *tb);
@@ -213,9 +231,85 @@ static UIView *FindPalette(UIView *view, int depth) {
 #pragma mark - styling
 
 static CGAffineTransform PillTransform(UIView *m) {
-    CGFloat W = m.bounds.size.width;
-    CGFloat s = W > 100 ? (W - 24) / W : 1;
-    return CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -6), s, s);
+    CGFloat W = m.bounds.size.width, H = m.bounds.size.height;
+    // Total horizontal inset for Normal / Compact / Small.
+    CGFloat inset = gSize == 0 ? 24 : (gSize == 1 ? 56 : 96);
+    CGFloat s = W > inset + 100 ? (W - inset) / W : 1;
+    // Scaling shrinks around the center; shift down a bit so a smaller pill
+    // keeps the same small gap above the tab bar instead of floating up.
+    CGFloat ty = -6 + H * (1 - s) / 2;
+    return CGAffineTransformScale(CGAffineTransformMakeTranslation(0, ty), s, s);
+}
+
+static void ApplyPillTransform(UIView *m) {
+    CGAffineTransform t = PillTransform(m);
+    NSValue *last = objc_getAssociatedObject(m, kApplied);
+    // Only touch it when it's at rest (identity) or still what we set last time,
+    // so we never fight Music's own animations.
+    BOOL ours = CGAffineTransformIsIdentity(m.transform) ||
+                (last && CGAffineTransformEqualToTransform(m.transform, last.CGAffineTransformValue));
+    if (ours && !CGAffineTransformEqualToTransform(m.transform, t)) m.transform = t;
+    if (ours) objc_setAssociatedObject(m, kApplied, [NSValue valueWithCGAffineTransform:t], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+#pragma mark - swipe to skip
+
+typedef Boolean (*MRSendCommandFn)(int command, CFDictionaryRef options);
+
+static void SkipTrack(BOOL next) {
+    static MRSendCommandFn send;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
+        if (h) send = (MRSendCommandFn)dlsym(h, "MRMediaRemoteSendCommand");
+    });
+    // MediaRemote commands: 4 = next track, 5 = previous track.
+    if (send && send(next ? 4 : 5, NULL)) return;
+    MPMusicPlayerController *p = [MPMusicPlayerController systemMusicPlayer];
+    if (next) [p skipToNextItem]; else [p skipToPreviousItem];
+}
+
+@interface MPSwipeTarget : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+
+@implementation MPSwipeTarget
++ (instancetype)shared { static MPSwipeTarget *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPSwipeTarget new]; }); return t; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g { return gSwipe && gRound; }
+- (void)swiped:(UISwipeGestureRecognizer *)g {
+    UIView *m = g.view;
+    if (!m || !gSwipe) return;
+    BOOL next = g.direction == UISwipeGestureRecognizerDirectionLeft;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    SkipTrack(next);
+    // Little slide-and-bounce so the swipe feels like it did something.
+    CGAffineTransform base = PillTransform(m);
+    CGAffineTransform nudge = CGAffineTransformTranslate(base, next ? -26 : 26, 0);
+    [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
+        m.transform = nudge;
+    } completion:^(BOOL done) {
+        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0
+                            options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState
+                         animations:^{ m.transform = base; }
+                         completion:^(BOOL d) {
+            objc_setAssociatedObject(m, kApplied, [NSValue valueWithCGAffineTransform:base], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }];
+    }];
+    objc_setAssociatedObject(m, kApplied, [NSValue valueWithCGAffineTransform:base], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+@end
+
+static void AddSwipes(UIView *m) {
+    if (objc_getAssociatedObject(m, kSwipeAdded)) return;
+    objc_setAssociatedObject(m, kSwipeAdded, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    for (NSNumber *dir in @[@(UISwipeGestureRecognizerDirectionLeft), @(UISwipeGestureRecognizerDirectionRight)]) {
+        UISwipeGestureRecognizer *s = [[UISwipeGestureRecognizer alloc] initWithTarget:[MPSwipeTarget shared] action:@selector(swiped:)];
+        s.direction = dir.unsignedIntegerValue;
+        s.delegate = [MPSwipeTarget shared];
+        s.cancelsTouchesInView = YES; // a swipe shouldn't also count as a tap that opens the player
+        [m addGestureRecognizer:s];
+    }
 }
 
 static void StylePill(UIView *m) {
@@ -242,13 +336,16 @@ static void StylePill(UIView *m) {
     } else if (!gHideBG && glass) {
         [glass removeFromSuperview];
     }
-    if (CGAffineTransformIsIdentity(m.transform)) m.transform = PillTransform(m);
+    ApplyPillTransform(m);
+    AddSwipes(m);
 }
 
 static void UnstylePill(UIView *m) {
     if (!m || !objc_getAssociatedObject(m, kStyled)) return;
     objc_setAssociatedObject(m, kStyled, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (CGAffineTransformEqualToTransform(m.transform, PillTransform(m))) m.transform = CGAffineTransformIdentity;
+    NSValue *last = objc_getAssociatedObject(m, kApplied);
+    if (last && CGAffineTransformEqualToTransform(m.transform, last.CGAffineTransformValue)) m.transform = CGAffineTransformIdentity;
+    objc_setAssociatedObject(m, kApplied, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     m.layer.cornerRadius = 0;
     m.layer.borderWidth = 0;
     [[m viewWithTag:GLASS_TAG] removeFromSuperview];
@@ -318,8 +415,8 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.4.0 debug\n prefs: %@\n rename=%d round=%d hidebg=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
-                      gPrefsSource, gRename, gRound, gHideBG,
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.5.0 debug\n prefs: %@\n rename=%d round=%d hidebg=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
+                      gPrefsSource, gRename, gRound, gHideBG, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found,
                       [c componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
