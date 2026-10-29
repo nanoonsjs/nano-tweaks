@@ -1,4 +1,6 @@
-// MusicPill 0.5.3 - made by nano
+// MusicPill 0.6.0 - made by nano
+// 0.6.0: scrolling song title in the pill; iOS 26 style album/playlist buttons
+//        (shuffle circle, white Play, download circle); glass top buttons.
 // 0.5.3: shrink/round the bar's INNER content view instead of its container.
 //        Music keeps resetting the container's transform after the full player
 //        closes, so forcing it there made it flicker. Plus a back-off if
@@ -31,8 +33,13 @@
 #define NOTIFY CFSTR("com.user.musicpill/prefschanged")
 #define DEBUG_TAG 0x4D504442
 #define GLASS_TAG 0x4D50474C
+#define MARQUEE_TAG 0x4D504D51
+#define ROW_TAG 0x4D50524F
+#define NAVGLASS_TAG 0x4D504E47
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
+static BOOL gMarquee = YES, gAlbum = YES, gNavGlass = YES;
+static NSString *gAlbumDebug = @"-", *gNavDebug = @"-", *gMarqueeDebug = @"-";
 // The see-through background is always on (no longer a setting).
 static const BOOL gHideBG = YES;
 // Fixed at Small (the size picked in Settings in 0.5.0). 0 Normal, 1 Compact, 2 Small.
@@ -86,6 +93,9 @@ static void LoadPrefs(void) {
     gRound  = PrefBool(file, @"round", YES);
     gDebug  = PrefBool(file, @"debug", NO);
     gSwipe  = PrefBool(file, @"swipe", YES);
+    gMarquee  = PrefBool(file, @"marquee", YES);
+    gAlbum    = PrefBool(file, @"album", YES);
+    gNavGlass = PrefBool(file, @"navglass", YES);
 }
 
 static void Update(UITabBar *tb);
@@ -414,7 +424,7 @@ static void SetBackdropClear(UIView *palette, BOOL clear) {
 static void CollectCandidates(UIView *view, UIView *root, CGRect tabRect, UITabBar *tb, int depth, NSMutableArray *out) {
     for (UIView *sub in view.subviews) {
         if (out.count >= 10) return;
-        if (sub == tb || sub.tag == DEBUG_TAG || sub.tag == GLASS_TAG || [sub isKindOfClass:[UIScrollView class]]) continue;
+        if (sub == tb || sub.tag == DEBUG_TAG || sub.tag == GLASS_TAG || sub.tag == MARQUEE_TAG || [sub isKindOfClass:[UIScrollView class]]) continue;
         CGRect r = UntransformedRect(sub, root);
         if (!CGRectIsNull(r)) {
             CGFloat gap = CGRectGetMinY(tabRect) - CGRectGetMaxY(r);
@@ -453,9 +463,9 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.5.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
-                      CGRectGetMinY(tabRect), tabRect.size.height, found,
+                      CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
                       [c componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
@@ -512,27 +522,438 @@ static void Update(UITabBar *tb) {
 }
 %end
 
+
+#pragma mark - scrolling title (marquee)
+
+static const void *kMarqText = &kMarqText;
+static const void *kHidLabel = &kHidLabel;
+
+static void FindLabels(UIView *v, int depth, NSMutableArray *out) {
+    for (UIView *s in v.subviews) {
+        if (s.tag == MARQUEE_TAG || s.tag == GLASS_TAG || s.hidden) continue;
+        if ([s isKindOfClass:[UILabel class]] && ((UILabel *)s).text.length) [out addObject:s];
+        if (depth < 6) FindLabels(s, depth + 1, out);
+    }
+}
+
+static UIView *FindMarqueeView(UIView *v, int depth) {
+    for (UIView *s in v.subviews) {
+        if ([NSStringFromClass([s class]) containsString:@"Marquee"]) return s;
+        if (depth < 6) { UIView *f = FindMarqueeView(s, depth + 1); if (f) return f; }
+    }
+    return nil;
+}
+
+static void RemoveMarquee(UILabel *label) {
+    UIView *m = [label.superview viewWithTag:MARQUEE_TAG];
+    if (m.superview == label.superview) [m removeFromSuperview];
+    if (objc_getAssociatedObject(label, kHidLabel)) {
+        label.alpha = 1;
+        objc_setAssociatedObject(label, kHidLabel, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+static UILabel *CopyLabel(UILabel *src) {
+    UILabel *l = [UILabel new];
+    l.text = src.text;
+    l.font = src.font;
+    l.textColor = src.textColor;
+    [l sizeToFit];
+    return l;
+}
+
+static void BuildMarquee(UILabel *label, CGFloat textW) {
+    UIView *box = [[UIView alloc] initWithFrame:label.frame];
+    box.tag = MARQUEE_TAG;
+    box.clipsToBounds = YES;
+    box.userInteractionEnabled = NO;
+
+    const CGFloat gap = 40;
+    UIView *strip = [[UIView alloc] initWithFrame:CGRectMake(0, 0, textW * 2 + gap, box.bounds.size.height)];
+    UILabel *a = CopyLabel(label), *b = CopyLabel(label);
+    CGFloat y = (box.bounds.size.height - a.bounds.size.height) / 2;
+    a.frame = CGRectMake(0, y, textW, a.bounds.size.height);
+    b.frame = CGRectMake(textW + gap, y, textW, b.bounds.size.height);
+    [strip addSubview:a];
+    [strip addSubview:b];
+    [box addSubview:strip];
+
+    // Soft fade on both edges.
+    CAGradientLayer *mask = [CAGradientLayer layer];
+    mask.frame = box.bounds;
+    mask.startPoint = CGPointMake(0, 0.5);
+    mask.endPoint = CGPointMake(1, 0.5);
+    mask.colors = @[(id)UIColor.clearColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.clearColor.CGColor];
+    mask.locations = @[@0, @0.04, @0.92, @1];
+    box.layer.mask = mask;
+
+    // Hold, scroll one full loop at a steady speed, repeat. Loops seamlessly
+    // because the second copy lands exactly where the first started.
+    CGFloat distance = textW + gap;
+    CFTimeInterval hold = 2.0, move = distance / 32.0;
+    CAKeyframeAnimation *anim = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+    anim.values = @[@0, @0, @(-distance)];
+    anim.keyTimes = @[@0, @(hold / (hold + move)), @1];
+    anim.duration = hold + move;
+    anim.repeatCount = HUGE_VALF;
+    anim.removedOnCompletion = NO;
+    [strip.layer addAnimation:anim forKey:@"musicpill.marquee"];
+
+    [label.superview insertSubview:box aboveSubview:label];
+}
+
+static void MarqueeTick(UIView *mini) {
+    if (!mini || !mini.window) return;
+    // 1. Apple's own marquee view, if the bar has one: just switch it on.
+    UIView *apple = FindMarqueeView(mini, 0);
+    if (apple) {
+        @try { [apple setValue:@(gMarquee) forKey:@"marqueeEnabled"]; gMarqueeDebug = @"apple marquee"; return; }
+        @catch (__unused id e) {}
+    }
+    // 2. Otherwise our own: the biggest-font label in the bar is the title.
+    NSMutableArray *labels = [NSMutableArray array];
+    FindLabels(mini, 0, labels);
+    UILabel *title = nil;
+    for (UILabel *l in labels) if (!title || l.font.pointSize > title.font.pointSize) title = l;
+    if (!title) { gMarqueeDebug = @"no label"; return; }
+
+    CGFloat textW = ceil([title.text sizeWithAttributes:@{NSFontAttributeName: title.font}].width);
+    BOOL needs = gMarquee && textW > title.bounds.size.width + 1 && title.bounds.size.width > 20;
+    UIView *box = [title.superview viewWithTag:MARQUEE_TAG];
+    if (box && box.superview != title.superview) box = nil;
+    gMarqueeDebug = [NSString stringWithFormat:@"%@ text=%.0f box=%.0f %@", NSStringFromClass([title class]), textW, title.bounds.size.width, needs ? @"scroll" : @"fits"];
+
+    if (!needs) { if (box || objc_getAssociatedObject(title, kHidLabel)) RemoveMarquee(title); return; }
+
+    NSString *sig = [NSString stringWithFormat:@"%@|%.1f|%.1f", title.text, title.bounds.size.width, title.font.pointSize];
+    if (!box || ![objc_getAssociatedObject(title, kMarqText) isEqualToString:sig]) {
+        [box removeFromSuperview];
+        BuildMarquee(title, textW);
+        objc_setAssociatedObject(title, kMarqText, sig, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        box = [title.superview viewWithTag:MARQUEE_TAG];
+    }
+    if (!CGRectEqualToRect(box.frame, title.frame)) {
+        box.frame = title.frame;
+        box.layer.mask.frame = box.bounds;
+    }
+    if (title.alpha != 0) {
+        title.alpha = 0;
+        objc_setAssociatedObject(title, kHidLabel, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+#pragma mark - iOS 26 album / playlist buttons
+
+static const void *kHidByUs = &kHidByUs;
+static __weak UIControl *gPlayCtl, *gShuffleCtl, *gDownloadCtl;
+static __weak UIView *gRowParent;
+static CFTimeInterval gLastHeaderSearch;
+
+static UIControl *ControlAbove(UIView *v) {
+    int d = 0;
+    for (UIView *p = v; p && d < 6; p = p.superview, d++)
+        if ([p isKindOfClass:[UIControl class]]) return (UIControl *)p;
+    return nil;
+}
+
+static BOOL InBottomBars(UIView *v) {
+    for (UIView *p = v; p; p = p.superview) {
+        if ([p isKindOfClass:[UITabBar class]] || objc_getAssociatedObject(p, kStyled)) return YES;
+        NSString *n = NSStringFromClass([p class]);
+        if ([n containsString:@"PaletteContainerView"]) return YES;
+    }
+    return NO;
+}
+
+static void FindHeaderControls(UIView *v, int depth, UIControl **play, UIControl **shuffle, UIControl **download) {
+    for (UIView *s in v.subviews) {
+        if (s.hidden || s.tag == ROW_TAG || s.tag == DEBUG_TAG || s.tag == NAVGLASS_TAG) continue;
+        if ([s isKindOfClass:[UILabel class]]) {
+            NSString *txt = ((UILabel *)s).text;
+            if (!*play && [txt isEqualToString:@"Play"]) { UIControl *c = ControlAbove(s); if (c && !InBottomBars(c)) *play = c; }
+            else if (!*shuffle && [txt isEqualToString:@"Shuffle"]) { UIControl *c = ControlAbove(s); if (c && !InBottomBars(c)) *shuffle = c; }
+        }
+        if (!*download && [s isKindOfClass:[UIControl class]] && [s.accessibilityLabel isEqualToString:@"Download"] && !InBottomBars(s))
+            *download = (UIControl *)s;
+        if (*play && *shuffle && *download) return;
+        if (depth < 30) FindHeaderControls(s, depth + 1, play, shuffle, download);
+    }
+}
+
+static UIView *CommonParent(UIView *a, UIView *b) {
+    for (UIView *p = a.superview; p; p = p.superview)
+        if ([b isDescendantOfView:p]) return p;
+    return nil;
+}
+
+static void HideOriginal(UIView *v) {
+    if (v.alpha != 0) { v.alpha = 0; objc_setAssociatedObject(v, kHidByUs, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+}
+static void ShowOriginal(UIView *v) {
+    if (v && objc_getAssociatedObject(v, kHidByUs)) { v.alpha = 1; objc_setAssociatedObject(v, kHidByUs, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+}
+
+static void Forward(UIControl *c) {
+    if (!c) return;
+    UIControlEvents ev = c.allControlEvents;
+    if (ev & UIControlEventTouchUpInside) [c sendActionsForControlEvents:UIControlEventTouchUpInside];
+    else if (ev & UIControlEventPrimaryActionTriggered) [c sendActionsForControlEvents:UIControlEventPrimaryActionTriggered];
+}
+
+@interface MPRowTarget : NSObject
++ (instancetype)shared;
+@end
+@implementation MPRowTarget
++ (instancetype)shared { static MPRowTarget *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPRowTarget new]; }); return t; }
+- (void)tap:(UIButton *)b {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    if (b.tag == 1) Forward(gPlayCtl);
+    else if (b.tag == 2) Forward(gShuffleCtl);
+    else if (b.tag == 3) Forward(gDownloadCtl);
+}
+@end
+
+static UIButton *RowButton(NSInteger tag, NSString *symbol, NSString *title, BOOL white) {
+    UIButtonConfiguration *cfg = white ? [UIButtonConfiguration filledButtonConfiguration] : [UIButtonConfiguration filledButtonConfiguration];
+    cfg.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    cfg.baseBackgroundColor = white ? UIColor.whiteColor : [UIColor colorWithWhite:0.20 alpha:1];
+    cfg.baseForegroundColor = white ? UIColor.blackColor : UIColor.whiteColor;
+    cfg.image = [UIImage systemImageNamed:symbol withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:white ? 17 : 18 weight:UIImageSymbolWeightSemibold]];
+    if (title) {
+        cfg.title = title;
+        cfg.imagePadding = 7;
+        cfg.titleTextAttributesTransformer = ^NSDictionary *(NSDictionary *in) {
+            NSMutableDictionary *d = [in mutableCopy];
+            d[NSFontAttributeName] = [UIFont systemFontOfSize:19 weight:UIFontWeightSemibold];
+            return d;
+        };
+    }
+    cfg.contentInsets = NSDirectionalEdgeInsetsZero;
+    UIButton *b = [UIButton buttonWithConfiguration:cfg primaryAction:nil];
+    b.tag = tag;
+    [b addTarget:[MPRowTarget shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+    if (!white) {
+        b.layer.borderWidth = 0.6;
+        b.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.08].CGColor;
+        b.layer.cornerCurve = kCACornerCurveContinuous;
+    }
+    return b;
+}
+
+static void TearDownRow(void) {
+    UIView *parent = gRowParent;
+    [[parent viewWithTag:ROW_TAG] removeFromSuperview];
+    ShowOriginal(gPlayCtl); ShowOriginal(gShuffleCtl); ShowOriginal(gDownloadCtl);
+}
+
+static void AlbumTick(UIWindow *w) {
+    if (!w) return;
+    if (!gAlbum) { TearDownRow(); gAlbumDebug = @"off"; return; }
+
+    UIControl *play = gPlayCtl, *shuffle = gShuffleCtl;
+    BOOL lost = !play || !shuffle || !play.window || !shuffle.window;
+    if (lost) {
+        CFTimeInterval now = CACurrentMediaTime();
+        if (now - gLastHeaderSearch < 0.5) return;
+        gLastHeaderSearch = now;
+        TearDownRow();
+        UIControl *p = nil, *s = nil, *d = nil;
+        FindHeaderControls(w, 0, &p, &s, &d);
+        gPlayCtl = p; gShuffleCtl = s; gDownloadCtl = d;
+        play = p; shuffle = s;
+        if (!play || !shuffle) { gAlbumDebug = [NSString stringWithFormat:@"play=%d shuffle=%d", play != nil, shuffle != nil]; return; }
+    }
+    UIView *parent = CommonParent(play, shuffle);
+    // Only take over if the originals can be triggered from our buttons.
+    if (!parent || !play.allControlEvents || !shuffle.allControlEvents) {
+        gAlbumDebug = [NSString stringWithFormat:@"%@ ev=%lu/%lu parent=%d (can't forward taps)",
+                       NSStringFromClass([play class]), (unsigned long)play.allControlEvents, (unsigned long)shuffle.allControlEvents, parent != nil];
+        return;
+    }
+    if (gRowParent && gRowParent != parent) TearDownRow();
+    gRowParent = parent;
+
+    UIView *row = [parent viewWithTag:ROW_TAG];
+    if (row.superview != parent) row = nil;
+    if (!row) {
+        row = [UIView new];
+        row.tag = ROW_TAG;
+        [row addSubview:RowButton(2, @"shuffle", nil, NO)];
+        [row addSubview:RowButton(1, @"play.fill", @"Play", YES)];
+        [row addSubview:RowButton(3, @"arrow.down", nil, NO)];
+        [parent addSubview:row];
+    }
+    [parent bringSubviewToFront:row];
+
+    CGRect pf = [play convertRect:play.bounds toView:parent];
+    CGRect sf = [shuffle convertRect:shuffle.bounds toView:parent];
+    CGRect u = CGRectUnion(pf, sf);
+    CGFloat h = MAX(u.size.height, 40);
+    CGRect rf = CGRectMake(u.origin.x, CGRectGetMidY(u) - h / 2, u.size.width, h);
+    if (!CGRectEqualToRect(row.frame, rf)) row.frame = rf;
+
+    UIControl *dl = gDownloadCtl;
+    // Music hides its download button once the album is downloaded; mirror that.
+    BOOL showDL = dl && dl.window && !dl.hidden && dl.superview && !dl.superview.hidden;
+    UIButton *bShuffle = [row viewWithTag:2], *bPlay = [row viewWithTag:1], *bDL = [row viewWithTag:3];
+    CGFloat W = rf.size.width, gap = 11, playW = MIN(W * 0.45, 220);
+    CGFloat x0 = (W - playW) / 2;
+    CGRect fs = CGRectMake(x0 - gap - h, 0, h, h), fp = CGRectMake(x0, 0, playW, h), fd = CGRectMake(x0 + playW + gap, 0, h, h);
+    if (!CGRectEqualToRect(bShuffle.frame, fs)) bShuffle.frame = fs;
+    if (!CGRectEqualToRect(bPlay.frame, fp)) bPlay.frame = fp;
+    if (!CGRectEqualToRect(bDL.frame, fd)) bDL.frame = fd;
+    bShuffle.layer.cornerRadius = h / 2;
+    bDL.layer.cornerRadius = h / 2;
+    bDL.hidden = !showDL;
+
+    HideOriginal(play);
+    HideOriginal(shuffle);
+    if (showDL) HideOriginal(dl);
+    gAlbumDebug = [NSString stringWithFormat:@"row ok play=%@ dl=%d", NSStringFromClass([play class]), showDL];
+}
+
+#pragma mark - glass top buttons
+
+static const void *kClearedBG = &kClearedBG;
+
+static void CollectBarButtons(UIView *v, int depth, NSMutableArray *out) {
+    for (UIView *s in v.subviews) {
+        if (s.hidden || s.alpha < 0.01 || s.tag == NAVGLASS_TAG) continue;
+        NSString *n = NSStringFromClass([s class]);
+        if ([n containsString:@"ButtonBarButton"] || [n containsString:@"BackButton"]) {
+            if (s.bounds.size.width > 2) [out addObject:s];
+            continue;
+        }
+        if (depth < 6) CollectBarButtons(s, depth + 1, out);
+    }
+}
+
+static UIView *GlyphIn(UIView *v, int depth) {
+    for (UIView *s in v.subviews) {
+        if (s.hidden || s.alpha < 0.01 || s.bounds.size.width < 2) continue;
+        if ([s isKindOfClass:[UIImageView class]] && ((UIImageView *)s).image) return s;
+        if (depth < 5) { UIView *g = GlyphIn(s, depth + 1); if (g) return g; }
+    }
+    return nil;
+}
+
+// Music's own gray circles behind its top buttons: clear them so only our glass shows.
+static void ClearCircles(UIView *v, int depth) {
+    for (UIView *s in v.subviews) {
+        if ([s isKindOfClass:[UIImageView class]] || [s isKindOfClass:[UILabel class]]) continue;
+        if (s.backgroundColor && CGColorGetAlpha(s.backgroundColor.CGColor) > 0.01 &&
+            fabs(s.bounds.size.width - s.bounds.size.height) < 3 && s.bounds.size.width >= 20) {
+            s.backgroundColor = UIColor.clearColor;
+            objc_setAssociatedObject(s, kClearedBG, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (depth < 4) ClearCircles(s, depth + 1);
+    }
+}
+
+static UIView *MakeNavGlass(void) {
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    g.userInteractionEnabled = NO;
+    g.clipsToBounds = YES;
+    g.layer.cornerCurve = kCACornerCurveContinuous;
+    g.layer.borderWidth = 0.75;
+    g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.15].CGColor;
+    return g;
+}
+
+static void NavTick(UINavigationBar *nb) {
+    if (!nb || !nb.window) return;
+    UIView *container = [nb viewWithTag:NAVGLASS_TAG];
+    if (!gNavGlass) { [container removeFromSuperview]; gNavDebug = @"off"; return; }
+
+    if (![nb.tintColor isEqual:UIColor.whiteColor]) nb.tintColor = UIColor.whiteColor;
+
+    NSMutableArray *buttons = [NSMutableArray array];
+    CollectBarButtons(nb, 0, buttons);
+    CGFloat mid = nb.bounds.size.width / 2;
+    NSMutableArray *rects = [NSMutableArray array];
+    CGRect right = CGRectNull;
+    for (UIView *b in buttons) {
+        if (gDownloadCtl && [gDownloadCtl isDescendantOfView:b] && objc_getAssociatedObject(gDownloadCtl, kHidByUs)) continue; // moved to the row
+        ClearCircles(b, 0);
+        UIView *g = GlyphIn(b, 0) ?: b;
+        CGRect r = [g convertRect:g.bounds toView:nb];
+        if (CGRectGetMidX(r) < mid) [rects addObject:[NSValue valueWithCGRect:r]];
+        else right = CGRectUnion(right, r);
+    }
+    gNavDebug = [NSString stringWithFormat:@"%lu buttons", (unsigned long)buttons.count];
+
+    const CGFloat H = 44;
+    NSMutableArray *pills = [NSMutableArray array];
+    for (NSValue *v in rects) {
+        CGRect r = v.CGRectValue;
+        [pills addObject:[NSValue valueWithCGRect:CGRectMake(round(CGRectGetMidX(r) - H / 2), round(CGRectGetMidY(r) - H / 2), H, H)]];
+    }
+    if (!CGRectIsNull(right)) {
+        CGFloat w = MAX(H, right.size.width + 30);
+        [pills addObject:[NSValue valueWithCGRect:CGRectMake(round(CGRectGetMidX(right) - w / 2), round(CGRectGetMidY(right) - H / 2), round(w), H)]];
+    }
+
+    if (!container) {
+        container = [UIView new];
+        container.tag = NAVGLASS_TAG;
+        container.userInteractionEnabled = NO;
+        UIView *bg = nil;
+        for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"Background"]) { bg = s; break; }
+        if (bg) [nb insertSubview:container aboveSubview:bg]; else [nb insertSubview:container atIndex:0];
+    }
+    if (!CGRectEqualToRect(container.frame, nb.bounds)) container.frame = nb.bounds;
+    while (container.subviews.count < pills.count) [container addSubview:MakeNavGlass()];
+    for (NSUInteger i = 0; i < container.subviews.count; i++) {
+        UIView *g = container.subviews[i];
+        if (i < pills.count) {
+            CGRect f = [pills[i] CGRectValue];
+            if (!CGRectEqualToRect(g.frame, f)) g.frame = f;
+            g.layer.cornerRadius = H / 2;
+            g.hidden = NO;
+        } else g.hidden = YES;
+    }
+}
+
+static UINavigationBar *TopNavBar(UIWindow *w) {
+    UIViewController *vc = w.rootViewController;
+    while (vc.presentedViewController && !vc.presentedViewController.isBeingDismissed) vc = vc.presentedViewController;
+    if ([vc isKindOfClass:[UITabBarController class]]) vc = ((UITabBarController *)vc).selectedViewController;
+    if ([vc isKindOfClass:[UINavigationController class]]) return ((UINavigationController *)vc).navigationBar;
+    return vc.navigationController.navigationBar;
+}
+
 // Opening and closing the full player resets the bar without laying out the
 // tab bar again, so nothing re-shrank it. Check a few times a second (cheap:
 // it only compares a transform) and re-apply once the bar is settled.
 static void StartWatchdog(void) {
+    static int tick = 0;
     [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *timer) {
-        if (!gRound) return;
         if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+        tick++;
         UITabBar *tb = gLastTabBar;
-        if (!tb) return;
-        UIView *mini = objc_getAssociatedObject(tb, kMini);
-        if (!mini || !mini.window || mini.hidden || mini.alpha < 0.01) return;
-        if (mini.layer.animationKeys.count) return; // let Music's animation finish first
-        // Don't touch it while the full player is up.
-        UIViewController *root = mini.window.rootViewController;
-        if (root.presentedViewController && !root.presentedViewController.isBeingDismissed) return;
-        if (!objc_getAssociatedObject(mini, kStyled)) return;
-        @try {
-            CGFloat r = mini.bounds.size.height / 2;
-            if (mini.layer.cornerRadius != r) mini.layer.cornerRadius = r;
-            ApplyPillTransform(mini, YES);
-        } @catch (__unused id e) {}
+        UIWindow *w = tb.window;
+        UIView *mini = tb ? objc_getAssociatedObject(tb, kMini) : nil;
+        UIViewController *root = w.rootViewController;
+        BOOL playerUp = root.presentedViewController && !root.presentedViewController.isBeingDismissed;
+
+        // Keep the pill small.
+        if (gRound && mini && mini.window && !mini.hidden && mini.alpha >= 0.01 &&
+            !mini.layer.animationKeys.count && !playerUp && objc_getAssociatedObject(mini, kStyled)) {
+            @try {
+                CGFloat r = mini.bounds.size.height / 2;
+                if (mini.layer.cornerRadius != r) mini.layer.cornerRadius = r;
+                ApplyPillTransform(mini, YES);
+            } @catch (__unused id e) {}
+        }
+        // Scrolling title.
+        if (mini && !playerUp) { @try { MarqueeTick(mini); } @catch (__unused id e) {} }
+        // Album/playlist buttons and glass top buttons.
+        if (w && !playerUp) {
+            @try { AlbumTick(w); } @catch (__unused id e) {}
+            @try { NavTick(TopNavBar(w)); } @catch (__unused id e) {}
+        }
+        // Keep the debug box current.
+        if (gDebug && tb && tick % 4 == 0) { @try { Update(tb); } @catch (__unused id e) {} }
     }];
 }
 

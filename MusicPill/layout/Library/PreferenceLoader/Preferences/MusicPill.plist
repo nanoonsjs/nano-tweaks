@@ -45,6 +45,35 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
+			<key>label</key><string>iOS 26 Look</string>
+			<key>footerText</key><string>Scrolling title for long song names in the pill. Album and playlist pages get a shuffle circle, white Play button and download circle. Top buttons get glass.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Scrolling Song Title</string>
+			<key>key</key><string>marquee</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>iOS 26 Album Buttons</string>
+			<key>key</key><string>album</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Glass Top Buttons</string>
+			<key>key</key><string>navglass</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
 			<key>footerText</key><string>Shows a purple box with what MusicPill found and which settings it can read. Turn this on to test that the switches work.</string>
 		</dict>
 		<dict>
