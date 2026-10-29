@@ -1,4 +1,7 @@
-// MusicPill 0.6.5 - made by nano
+// MusicPill 0.7.0 - made by nano
+// 0.7.0: full player queue: "Playing Next" -> "Continue Playing", round queue
+//        button, and a debug map of the player screen to build the iOS 26
+//        shuffle/repeat/autoplay row next.
 // 0.6.5: normal pill another 4% bigger (about 6% over Small); dragging the page
 //        down (finger moving down) grows it 10% more, dragging up returns it
 //        to normal. Reversed from 0.6.4, and no reset at the top.
@@ -55,9 +58,10 @@
 #define ROW_TAG 0x4D50524F
 #define NAVGLASS_TAG 0x4D504E47
 #define PORTAL_TAG 0x4D50504F
+#define PLAYERDEBUG_TAG 0x4D505044
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
-static BOOL gMarquee = YES, gAlbum = YES, gNavGlass = YES;
+static BOOL gMarquee = YES, gAlbum = YES, gNavGlass = YES, gQueueLook = YES;
 static NSString *gAlbumDebug = @"-", *gNavDebug = @"-", *gMarqueeDebug = @"-";
 // The see-through background is always on (no longer a setting).
 static const BOOL gHideBG = YES;
@@ -122,9 +126,42 @@ static void LoadPrefs(void) {
     gMarquee  = PrefBool(file, @"marquee", YES);
     gAlbum    = PrefBool(file, @"album", YES);
     gNavGlass = PrefBool(file, @"navglass", YES);
+    gQueueLook = PrefBool(file, @"queuelook", YES);
 }
 
 static void Update(UITabBar *tb);
+
+// iOS 26 wording on the queue screen.
+static NSString *MapQueueText(NSString *s) {
+    if (!gQueueLook || ![s isKindOfClass:[NSString class]]) return s;
+    if ([s isEqualToString:@"Playing Next"]) return @"Continue Playing";
+    if ([s isEqualToString:@"Autoplaying similar music"]) return @"AutoPlaying similar music";
+    return s;
+}
+
+static BOOL PlayerIsUp(UIWindow *w, UIView **playerView) {
+    UIViewController *p = w.rootViewController.presentedViewController;
+    if (!p || p.isBeingDismissed) return NO;
+    if (playerView) *playerView = p.view;
+    return YES;
+}
+
+// The queue button (bottom right of the full player) gets a filled background
+// when selected; make that background a circle like iOS 26.
+static void RoundIfQueueButton(UIView *v) {
+    if (!gQueueLook) return;
+    CGFloat w = v.bounds.size.width, h = v.bounds.size.height;
+    if (w < 34 || w > 70 || fabs(w - h) > 6) return;
+    UIWindow *win = v.window;
+    UIView *player = nil;
+    if (!win || !PlayerIsUp(win, &player) || ![v isDescendantOfView:player]) return;
+    CGRect r = [v convertRect:v.bounds toView:win];
+    CGFloat H = win.bounds.size.height;
+    if (CGRectGetMinY(r) < H * 0.78 || CGRectGetMidX(r) < win.bounds.size.width * 0.6) return;
+    if (!v.backgroundColor || CGColorGetAlpha(v.backgroundColor.CGColor) < 0.05) return;
+    CGFloat radius = MIN(w, h) / 2;
+    if (v.layer.cornerRadius != radius) { v.layer.cornerRadius = radius; v.layer.cornerCurve = kCACornerCurveContinuous; }
+}
 static void AlbumControlLaidOut(UIControl *c);
 
 static void ReloadAndApply(void) {
@@ -491,7 +528,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.7.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -596,6 +633,9 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
 - (void)setBackgroundColor:(UIColor *)color {
     if (color && gNavGlass && objc_getAssociatedObject(self, kClearedBG)) { %orig(UIColor.clearColor); return; }
     %orig;
+    // Round the queue button's background the moment Music colors it, so the
+    // square never shows.
+    if (color && gQueueLook && self.window) { @try { RoundIfQueueButton(self); } @catch (__unused id e) {} }
 }
 %end
 
@@ -1031,8 +1071,20 @@ static BOOL IsHeaderTitle(NSString *s) {
 
 %hook UILabel
 - (void)setText:(NSString *)text {
-    %orig;
-    if (gAlbum && IsHeaderTitle(text) && self.window) { @try { PreHide(self); } @catch (__unused id e) {} }
+    NSString *mapped = MapQueueText(text);
+    %orig(mapped);
+    if (gAlbum && IsHeaderTitle(mapped) && self.window) { @try { PreHide(self); } @catch (__unused id e) {} }
+}
+- (void)setAttributedText:(NSAttributedString *)text {
+    if (gQueueLook && text.length) {
+        NSString *m = MapQueueText(text.string);
+        if (m != text.string) {
+            NSMutableAttributedString *x = [text mutableCopy];
+            [x replaceCharactersInRange:NSMakeRange(0, x.length) withString:m];
+            text = x;
+        }
+    }
+    %orig(text);
 }
 - (void)didMoveToWindow {
     %orig;
@@ -1197,6 +1249,69 @@ static UINavigationBar *TopNavBar(UIWindow *w) {
 // Opening and closing the full player resets the bar without laying out the
 // tab bar again, so nothing re-shrank it. Check a few times a second (cheap:
 // it only compares a transform) and re-apply once the bar is settled.
+#pragma mark - full player
+
+static void SweepQueueButtons(UIView *v, int depth) {
+    for (UIView *s in v.subviews) {
+        if (s.hidden || [s isKindOfClass:[UIScrollView class]]) continue;
+        RoundIfQueueButton(s);
+        if (depth < 14) SweepQueueButtons(s, depth + 1);
+    }
+}
+
+static NSString *ShortName(UIView *v) {
+    NSString *n = NSStringFromClass([v class]);
+    NSRange dot = [n rangeOfString:@"." options:NSBackwardsSearch];
+    if (dot.location != NSNotFound) n = [n substringFromIndex:dot.location + 1];
+    if (n.length > 30) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 29]];
+    return n;
+}
+
+static void MapPlayer(UIView *v, UIWindow *w, int depth, NSMutableArray *out) {
+    for (UIView *s in v.subviews) {
+        if (out.count >= 34) return;
+        if (s.hidden || s.alpha < 0.01 || s.tag == PLAYERDEBUG_TAG) continue;
+        BOOL isCtl = [s isKindOfClass:[UIControl class]];
+        BOOL isHeader = [s isKindOfClass:[UILabel class]] &&
+            ([((UILabel *)s).text isEqualToString:@"Continue Playing"] || [((UILabel *)s).text isEqualToString:@"Playing Next"]);
+        if (isCtl || isHeader) {
+            CGRect r = [s convertRect:s.bounds toView:w];
+            NSString *ax = s.accessibilityLabel ?: (isHeader ? ((UILabel *)s).text : @"");
+            NSString *chain = [NSString stringWithFormat:@"%@<%@", ShortName(s.superview), ShortName(s.superview.superview)];
+            [out addObject:[NSString stringWithFormat:@"%@ '%@' %.0f,%.0f %.0fx%.0f in %@",
+                            ShortName(s), ax, r.origin.x, r.origin.y, r.size.width, r.size.height, chain]];
+        }
+        if (isCtl) continue;
+        if (depth < 18) MapPlayer(s, w, depth + 1, out);
+    }
+}
+
+static void PlayerDebug(UIView *player, UIWindow *w) {
+    UILabel *l = (UILabel *)[w viewWithTag:PLAYERDEBUG_TAG];
+    if (!gDebug || !player) { [l removeFromSuperview]; return; }
+    if (![l isKindOfClass:[UILabel class]]) {
+        l = [UILabel new];
+        l.tag = PLAYERDEBUG_TAG;
+        l.numberOfLines = 0;
+        l.font = [UIFont monospacedSystemFontOfSize:8.5 weight:UIFontWeightRegular];
+        l.textColor = UIColor.whiteColor;
+        l.backgroundColor = [UIColor colorWithRed:0.35 green:0 blue:0.35 alpha:0.88];
+        l.userInteractionEnabled = NO;
+        l.layer.cornerRadius = 8;
+        l.clipsToBounds = YES;
+        [w addSubview:l];
+    }
+    NSMutableArray *lines = [NSMutableArray array];
+    MapPlayer(player, w, 0, lines);
+    NSString *text = [NSString stringWithFormat:@" MusicPill player map (open the queue, screenshot this)\n %@", [lines componentsJoinedByString:@"\n "]];
+    if (![l.text isEqualToString:text]) l.text = text;
+    CGFloat width = w.bounds.size.width - 16;
+    CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
+    CGRect f = CGRectMake(8, 50, width, MIN(s.height + 6, w.bounds.size.height - 100));
+    if (!CGRectEqualToRect(l.frame, f)) l.frame = f;
+    [w bringSubviewToFront:l];
+}
+
 static void StartWatchdog(void) {
     static int tick = 0;
     [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *timer) {
@@ -1223,6 +1338,14 @@ static void StartWatchdog(void) {
         if (w && !playerUp) {
             @try { AlbumTick(w); } @catch (__unused id e) {}
             @try { NavTick(TopNavBar(w)); } @catch (__unused id e) {}
+        }
+        // Full player: round queue button (backup for the hook) + debug map.
+        UIView *player = nil;
+        if (w && PlayerIsUp(w, &player)) {
+            @try { SweepQueueButtons(player, 0); } @catch (__unused id e) {}
+            if (tick % 4 == 0) { @try { PlayerDebug(player, w); } @catch (__unused id e) {} }
+        } else if (w) {
+            [[w viewWithTag:PLAYERDEBUG_TAG] removeFromSuperview];
         }
         // Keep the debug box current.
         if (gDebug && tb && tick % 4 == 0) { @try { Update(tb); } @catch (__unused id e) {} }

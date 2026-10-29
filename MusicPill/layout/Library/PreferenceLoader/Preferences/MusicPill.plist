@@ -73,6 +73,14 @@
 			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
 		</dict>
 		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>iOS 26 Queue Look</string>
+			<key>key</key><string>queuelook</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
 			<key>cell</key><string>PSGroupCell</string>
 			<key>footerText</key><string>Shows a purple box with what MusicPill found and which settings it can read. Turn this on to test that the switches work.</string>
 		</dict>
