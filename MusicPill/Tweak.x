@@ -1,6 +1,7 @@
-// MusicPill 0.6.4 - made by nano
-// 0.6.4: pill 2% bigger; grows to 4% bigger while scrolling down a page and
-//        eases back to 2% when scrolling up or at the top.
+// MusicPill 0.6.5 - made by nano
+// 0.6.5: normal pill another 4% bigger (about 6% over Small); dragging the page
+//        down (finger moving down) grows it 10% more, dragging up returns it
+//        to normal. Reversed from 0.6.4, and no reset at the top.
 // 0.6.3: no flash of the old Play/Shuffle when an album opens. They're hidden
 //        the moment they appear and the new row is built right away, instead
 //        of waiting for the next 1/4-second check.
@@ -62,10 +63,11 @@ static NSString *gAlbumDebug = @"-", *gNavDebug = @"-", *gMarqueeDebug = @"-";
 static const BOOL gHideBG = YES;
 // Fixed at Small (the size picked in Settings in 0.5.0). 0 Normal, 1 Compact, 2 Small.
 static const int gSize = 2;
-// Pill scale on top of Small: 2% bigger normally, 4% bigger while scrolling down.
+// Pill scale on top of Small: ~6% bigger normally (1.02 x 1.04), and 10% bigger
+// than that while the page is dragged down.
 static BOOL gExpanded = NO;
-#define PILL_GROW_NORMAL 1.02
-#define PILL_GROW_SCROLL 1.04
+#define PILL_GROW_NORMAL (1.02 * 1.04)
+#define PILL_GROW_SCROLL (1.02 * 1.04 * 1.10)
 static NSString *gPrefsSource = @"defaults";
 static __weak UITabBar *gLastTabBar;
 
@@ -489,7 +491,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.6.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -549,12 +551,12 @@ static void SetPillExpanded(BOOL expanded) {
 
 static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
     static CGFloat acc = 0;
-    // At (or above) the top of the page: back to the normal size.
-    if (y <= -sv.adjustedContentInset.top + 2) { acc = 0; SetPillExpanded(NO); return; }
     if ((dy > 0) != (acc > 0)) acc = 0; // direction changed
     acc += dy;
-    if (acc > 12) SetPillExpanded(YES);       // scrolling down
-    else if (acc < -12) SetPillExpanded(NO);  // scrolling up
+    // dy < 0: finger moving down (page moves back toward the top) -> bigger.
+    // dy > 0: finger moving up (page moves down) -> normal.
+    if (acc < -12) SetPillExpanded(YES);
+    else if (acc > 12) SetPillExpanded(NO);
 }
 
 %hook UIScrollView
