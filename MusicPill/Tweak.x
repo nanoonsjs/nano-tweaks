@@ -1,4 +1,6 @@
-// MusicPill 0.8.1 - made by nano
+// MusicPill 0.8.2 - made by nano
+// 0.8.2: no freeze: the collapsed pill reads song info from MediaRemote in the
+//        background instead of asking Music's player on the main thread.
 // 0.8.1: collapsed row redone: our own iOS 26 pill (artwork, full-size title
 //        with the E badge, artist, play) instead of shrinking Music's bar,
 //        circles sized / spaced like iOS 26, the search circle no longer
@@ -568,7 +570,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.8.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -783,21 +785,48 @@ static BOOL OpenPlayer(UIView *mini) {
     _play.frame = CGRectMake(S.width - pw - 6, (S.height - pw) / 2, pw, pw);
 }
 - (void)refresh {
-    MPMusicPlayerController *p = [MPMusicPlayerController systemMusicPlayer];
-    MPMediaItem *it = p.nowPlayingItem;
-    NSString *t = it.title ?: @"Not Playing", *ar = it.artist ?: @"";
-    if (![_title.text isEqualToString:t]) _title.text = t;
-    if (![_artist.text isEqualToString:ar]) _artist.text = ar;
-    _badge.hidden = !it.isExplicitItem;
-    UIImage *img = [it.artwork imageWithSize:CGSizeMake(120, 120)];
-    if (img != _art.image && (img || !it)) _art.image = img;
-    BOOL playing = p.playbackState == MPMusicPlaybackStatePlaying;
-    NSString *sym = playing ? @"pause.fill" : @"play.fill";
-    if (![_play.accessibilityValue isEqualToString:sym]) {
-        _play.accessibilityValue = sym;
-        [_play setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
-    }
-    [self setNeedsLayout];
+    // Ask MediaRemote (async, off the main thread); never Music's own player.
+    typedef void (*InfoFn)(dispatch_queue_t, void (^)(CFDictionaryRef));
+    typedef void (*PlayingFn)(dispatch_queue_t, void (^)(Boolean));
+    static InfoFn info; static PlayingFn playing; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
+        if (h) { info = (InfoFn)dlsym(h, "MRMediaRemoteGetNowPlayingInfo"); playing = (PlayingFn)dlsym(h, "MRMediaRemoteGetNowPlayingApplicationIsPlaying"); }
+    });
+    __weak MPMiniPill *weak = self;
+    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    if (info) info(q, ^(CFDictionaryRef d) {
+        NSDictionary *dict = (__bridge NSDictionary *)d;
+        NSString *title = dict[@"kMRMediaRemoteNowPlayingInfoTitle"], *artist = dict[@"kMRMediaRemoteNowPlayingInfoArtist"];
+        BOOL explicitTrack = [dict[@"kMRMediaRemoteNowPlayingInfoIsExplicitTrack"] boolValue];
+        NSData *art = dict[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
+        static NSData *lastArt; static UIImage *lastImg;
+        UIImage *img = nil;
+        if ([art isKindOfClass:[NSData class]]) {
+            if ([art isEqualToData:lastArt]) img = lastImg;
+            else { img = [UIImage imageWithData:art]; lastArt = art; lastImg = img; }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MPMiniPill *me = weak; if (!me) return;
+            NSString *t2 = [title isKindOfClass:[NSString class]] ? title : @"Not Playing";
+            NSString *a2 = [artist isKindOfClass:[NSString class]] ? artist : @"";
+            if (![me.title.text isEqualToString:t2]) me.title.text = t2;
+            if (![me.artist.text isEqualToString:a2]) me.artist.text = a2;
+            me.badge.hidden = !explicitTrack;
+            if (me.art.image != img) me.art.image = img;
+            [me setNeedsLayout];
+        });
+    });
+    if (playing) playing(q, ^(Boolean p) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MPMiniPill *me = weak; if (!me) return;
+            NSString *sym = p ? @"pause.fill" : @"play.fill";
+            if (![me.play.accessibilityValue isEqualToString:sym]) {
+                me.play.accessibilityValue = sym;
+                [me.play setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+            }
+        });
+    });
 }
 - (void)togglePlay {
     SendMR(2);
@@ -886,7 +915,7 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
             pill.frame = gCollapsedPill; [pill layoutIfNeeded];
         } completion:nil];
         wobble(pill, 1.05, 0.9, 0.06);
-        gPillTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *tm) { [pill refresh]; }];
+        gPillTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *tm) { [pill refresh]; }];
     } else {
         CGRect miniHome = miniRect;
         [UIView animateWithDuration:0.2 delay:0.16 options:o animations:^{ tb.alpha = 1; } completion:nil];
