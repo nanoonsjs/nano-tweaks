@@ -281,6 +281,7 @@ static UIColor *Dyn(UIColor *light, UIColor *dark) {
 }
 static UIColor *GlassIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackColor, UIColor.whiteColor); return c; }
 static UIColor *GlassIconDim(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:0 alpha:0.55], [UIColor colorWithWhite:1 alpha:0.62]); return c; }
+static BOOL HighContrast(void);
 static UIColor *GlassFillDyn(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:1 alpha:0.72], GlassFillDyn()); return c; }
 static UIView *GlyphIn(UIView *v, int depth);
 
