@@ -1,4 +1,7 @@
-// MusicPill 1.0.9 - made by nano
+// MusicPill 1.0.10 - made by nano
+// 1.0.10: artist name = the big label level with the play button (not "Similar
+//         Artists"), header hidden the moment its play button exists, star disc
+//         fixed (was a big square), Music's own circles cut away on moved icons.
 // 1.0.9: icons moved by their own transform (Music resets its buttons) so back
 //        and share/••• line up, smaller share icon, lighter steady glass, no bar
 //        background or small title on any page, artist page: name found across
@@ -887,7 +890,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.9 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.10 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2844,6 +2847,21 @@ static NSString *gShareDebug = @"-";
 
 // Moves a Music button sideways so its icon sits at a fixed x on screen. Skipped
 // while the page is sliding in or out (big offsets), so pushes still look right.
+// Only the icon of a Music button shows (its own gray circle is cut away), so
+// moving the icon never leaves Music's circle behind.
+static void GlyphOnly(UIView *c) {
+    UIView *g = GlyphIn(c, 0);
+    if (!g) return;
+    CGRect r = CGRectInset([g convertRect:g.bounds toView:c], -8, -8);
+    CALayer *m = c.layer.mask;
+    if (!m || ![m.name isEqualToString:@"mp.glyphonly"]) {
+        m = [CALayer layer];
+        m.name = @"mp.glyphonly";
+        m.backgroundColor = UIColor.blackColor.CGColor;
+        c.layer.mask = m;
+    }
+    if (!CGRectEqualToRect(m.frame, r)) { [CATransaction begin]; [CATransaction setDisableActions:YES]; m.frame = r; [CATransaction commit]; }
+}
 static void AlignGlyph(UIView *c, CGFloat targetX, CGFloat scale) {
     UIView *g = GlyphIn(c, 0);
     if (!g || !c.window) return;
@@ -2875,6 +2893,7 @@ static void PlaceSharePair(UIView *more) {
     StripMusicCircle(more);
     UIView *dots = GlyphIn(more, 0);
     AlignGlyph(more, w.bounds.size.width - TOPMARGIN - 28, 1.15);
+    GlyphOnly(more);
 
     UIView *g = FloatGlassIn(more, host, more, kPairGlass);
     AttachJelly(more, g);
@@ -2925,6 +2944,7 @@ static __weak UIView *gArtistPage;   // play found (even before the name)
 static __weak UIView *gArtistStar;   // Music's own favorite star (top right)
 static __weak UILabel *gArtistName;
 static NSString *gArtistDebug = @"-";
+static NSString *gAddDebug = @"";
 static BOOL gArtistFav, gArtistFavKnown;
 static CFTimeInterval gArtistFavLock;
 
@@ -2978,7 +2998,13 @@ static UILabel *ArtistNameNear(UIView *play) {
             CGRect lf = [l convertRect:l.bounds toView:nil];
             if (fabs(CGRectGetMidY(lf) - CGRectGetMidY(pf)) > 90) continue;
             if (dbg.length < 90) [dbg appendFormat:@"'%@'%.0f ", [l.text substringToIndex:MIN(l.text.length, (NSUInteger)10)], l.font.pointSize];
-            if (l.font.pointSize >= 22 && CGRectGetMinX(lf) < CGRectGetMinX(pf) && (!best || l.font.pointSize > best.font.pointSize)) best = l;
+            CGFloat W = play.window.bounds.size.width;
+            BOOL onScreen = CGRectGetMinX(lf) >= -1 && CGRectGetMaxX(lf) <= W + 1;
+            CGFloat dy = fabs(CGRectGetMidY(lf) - CGRectGetMidY(pf));
+            if (onScreen && dy < 45 && l.font.pointSize >= 24 && CGRectGetMinX(lf) < CGRectGetMinX(pf)) {
+                CGFloat bdy = best ? fabs(CGRectGetMidY([best convertRect:best.bounds toView:nil]) - CGRectGetMidY(pf)) : 1e9;
+                if (dy < bdy) best = l;
+            }
             continue;
         }
         [stack addObjectsFromArray:v.subviews];
@@ -2988,11 +3014,12 @@ static UILabel *ArtistNameNear(UIView *play) {
 }
 
 static UIView *GlassDisc(CGFloat D) {
-    UIVisualEffectView *e = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+    UIView *e = [UIView new];
+    e.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94];
     e.userInteractionEnabled = NO; e.clipsToBounds = YES;
     e.frame = CGRectMake(0, 0, D, D); e.layer.cornerRadius = D / 2;
-    e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
-    e.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    e.layer.cornerCurve = kCACornerCurveContinuous;
+    e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
     return e;
 }
 
@@ -3075,10 +3102,18 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
 // favorite star). Safe to call from Music's layout pass.
 static void ArtistTick(UIView *play) {
     if (!play.window) return;
+    {
+        NSNumber *t0 = objc_getAssociatedObject(play, &gAddDebug);
+        if (!t0 || CACurrentMediaTime() - t0.doubleValue <= 1.5) MaskOut(play);   // hidden before it's drawn
+    }
     UILabel *name = gArtistName;
     if (!name || !name.window || ![name isDescendantOfView:play.window]) name = ArtistNameNear(play);
     gArtistPage = play;
-    if (!name) { gArtistDebug = [NSString stringWithFormat:@"play=%@ (no name) near: %@", gArtistWhy ?: NSStringFromClass([play class]), gNameDebug]; return; }
+    if (!name) {
+        // Hidden early; if it turns out there's no artist name here, show it again.
+        NSNumber *t0 = objc_getAssociatedObject(play, &gAddDebug);
+        if (!t0) objc_setAssociatedObject(play, &gAddDebug, @(CACurrentMediaTime()), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        else if (CACurrentMediaTime() - t0.doubleValue > 1.5 && play.layer.mask) play.layer.mask = nil; gArtistDebug = [NSString stringWithFormat:@"play=%@ (no name) near: %@", gArtistWhy ?: NSStringFromClass([play class]), gNameDebug]; return; }
     UIView *container = CommonParent(play, name);
     if (!container) return;
     gArtistPlay = play; gArtistName = name;
@@ -3148,7 +3183,7 @@ static void ArtistTick(UIView *play) {
         }
     }
     if (gArtistFavKnown && CACurrentMediaTime() > gArtistFavLock) SetStar((UIButton *)[ov viewWithTag:4], gArtistFav, NO);
-    gArtistDebug = [NSString stringWithFormat:@"ok play=%@ name=%@ fav=%d/%d", NSStringFromClass([play class]), NSStringFromClass([name class]), gArtistFavKnown, gArtistFav];
+    gArtistDebug = [NSString stringWithFormat:@"ok name='%@' fav=%d/%d%@", name.text, gArtistFavKnown, gArtistFav, gAddDebug];
 }
 
 // Latest release: a rounded card, and a round + instead of "+ Add".
@@ -3191,6 +3226,7 @@ static void SetPlusSymbol(UIButton *b, NSString *sym) {
     }];
 }
 static void ArtistAddTick(UIView *root) {
+    int seenAdd = 0, withCtl = 0;
     NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
     NSMutableSet *live = [NSMutableSet set];
     int guard = 0;
@@ -3200,7 +3236,9 @@ static void ArtistAddTick(UIView *root) {
         if ([v isKindOfClass:[UILabel class]]) {
             NSString *tx = ((UILabel *)v).text;
             if (!([tx isEqualToString:@"Add"] || [tx isEqualToString:@"Added"])) continue;
+            seenAdd++;
             UIControl *c = ControlAbove(v);
+            if (c) withCtl++;
             UIView *cell = nil;
             for (UIView *p = c.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionViewCell class]]) { cell = p; break; }
             if (!c || !cell) continue;
@@ -3255,6 +3293,7 @@ static void ArtistAddTick(UIView *root) {
         }
         [stack addObjectsFromArray:v.subviews];
     }
+    gAddDebug = [NSString stringWithFormat:@" add=%d/%d", seenAdd, withCtl];
 }
 
 static void ArtistScan(UIWindow *w) {
@@ -3385,6 +3424,7 @@ static void FloatTick(UIWindow *w) {
     if (back) {
         if (!CGAffineTransformIsIdentity(back.transform)) back.transform = CGAffineTransformIdentity;
         AlignGlyph(back, TOPMARGIN + TOPBTN / 2, 1);
+        if (![NSStringFromClass([back class]) containsString:@"BarButton"]) GlyphOnly(back);
         GlassCircleFor((UIControl *)back, TOPBTN);
     }
     // Mid-download Music swaps in a progress view with no image; keep the last one we caught.
@@ -3456,12 +3496,23 @@ static void HeadPlayLayoutHook(UIView *self, SEL _cmd) {
     static BOOL busy;
     if (busy) return;
     busy = YES;
-    @try { if (LooksLikeArtistPlay(self)) ArtistTick(self); } @catch (__unused id e) {}
+    @try {
+        if (self.window && !InBottomBars(self)) {
+            // Its class alone says "artist header": hide it before it's ever drawn.
+            ArtistTick(self);
+        }
+    } @catch (__unused id e) {}
     busy = NO;
+}
+static IMP gHeadPlayWinOrig;
+static void HeadPlayWinHook(UIView *self, SEL _cmd) {
+    if (gHeadPlayWinOrig) ((void (*)(id, SEL))gHeadPlayWinOrig)(self, _cmd);
+    @try { if (self.window && !InBottomBars(self)) ArtistTick(self); } @catch (__unused id e) {}
 }
 static void HookSymbolButton(void) {
     Class hp = objc_getClass("MusicPageHeaderPlayButton") ?: objc_getClass("MusicApplication.MusicPageHeaderPlayButton");
     if (hp) MSHookMessageEx(hp, @selector(layoutSubviews), (IMP)HeadPlayLayoutHook, &gHeadPlayLayoutOrig);
+    if (hp) MSHookMessageEx(hp, @selector(didMoveToWindow), (IMP)HeadPlayWinHook, &gHeadPlayWinOrig);
     Class sym = objc_getClass("MusicApplication.SymbolButton");
     if (sym) MSHookMessageEx(sym, @selector(layoutSubviews), (IMP)SymLayoutHook, &gSymLayoutOrig);
 }
