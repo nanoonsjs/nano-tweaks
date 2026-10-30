@@ -1,4 +1,6 @@
-// MusicPill 1.2.13 - made by nano
+// MusicPill 1.2.14 - made by nano
+// 1.2.14: both Apple Music / Library titles show (plain colour per mode), the
+//         switch leaves as a liquid drop into the X and comes back out of it.
 // 1.2.13: light mode: frosted glass with a visible rim and soft shadow, back
 //         button no longer dark, queue bar white with Increase Contrast, search
 //         switch drawn by iOS (both titles show), liquid drop on tapping search.
@@ -1247,7 +1249,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.13 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.14 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3075,13 +3077,23 @@ static void StyleSegment(UISegmentedControl *seg) {
         objc_setAssociatedObject(seg, @selector(StyleSegment:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(seg, kNarrowSeg, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         seg.frame = seg.frame;   // apply the narrow width now
-        NSDictionary *ta = @{NSForegroundColorAttributeName: GlassIcon(), NSFontAttributeName: [UIFont systemFontOfSize:15 weight:UIFontWeightMedium]};
-        [seg setTitleTextAttributes:ta forState:UIControlStateNormal];
-        [seg setTitleTextAttributes:ta forState:UIControlStateSelected];
+
         seg.selectedSegmentTintColor = Dyn([UIColor colorWithWhite:1 alpha:0.95], [UIColor colorWithWhite:0 alpha:0.8]);
         seg.layer.borderWidth = 0;
         [seg addTarget:[MPSegBounce shared] action:@selector(changed:) forControlEvents:UIControlEventValueChanged];
         seg.layer.cornerCurve = kCACornerCurveContinuous;
+    }
+    {
+        BOOL dark = seg.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+        NSNumber *was = objc_getAssociatedObject(seg, @selector(setTitleTextAttributes:forState:));
+        if (!was || was.boolValue != dark) {
+            objc_setAssociatedObject(seg, @selector(setTitleTextAttributes:forState:), @(dark), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            UIFont *fnt = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+            UIColor *txt = dark ? UIColor.whiteColor : UIColor.blackColor;
+            NSDictionary *ta = @{NSForegroundColorAttributeName: txt, NSFontAttributeName: fnt};
+            for (NSNumber *s in @[@(UIControlStateNormal), @(UIControlStateSelected), @(UIControlStateHighlighted), @(UIControlStateSelected | UIControlStateHighlighted)])
+                [seg setTitleTextAttributes:ta forState:s.unsignedIntegerValue];
+        }
     }
     // Track: nothing in dark mode, a faint grey in light mode so the switch reads.
     static UIColor *track;
@@ -3453,8 +3465,18 @@ static void ScopeEval(BOOL animated) {
     CGRect ff = [tf convertRect:tf.bounds toView:w];
     if (!animated) { seg.alpha = atTop ? 1 : 0; return; }
     UIViewAnimationOptions o = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
-    // A thin capsule along the bottom of the search field: where the glass merges in.
-    CGRect merge = CGRectMake(CGRectGetMidX(ff) - sf.size.width * 0.35, CGRectGetMaxY(ff) - sf.size.height * 0.55, sf.size.width * 0.7, sf.size.height * 0.55);
+    // The X (Cancel) button is where the glass goes and comes from.
+    UIView *x = nil;
+    @try { x = [sb valueForKey:@"cancelButton"]; } @catch (__unused id e) {}
+    UIView *xd = [x viewWithTag:XDISC_TAG] ?: x;
+    CGRect xf = xd.window ? [xd convertRect:xd.bounds toView:w] : CGRectMake(CGRectGetMaxX(ff) - 40, CGRectGetMinY(ff), 40, 40);
+    CGFloat H = sf.size.height;
+    CGPoint sc = CGPointMake(CGRectGetMidX(sf), CGRectGetMidY(sf)), xc = CGPointMake(CGRectGetMidX(xf), CGRectGetMidY(xf));
+    CGPoint mid = CGPointMake((sc.x + xc.x) / 2, (sc.y + xc.y) / 2 + 6);
+    CGFloat dist = hypot(xc.x - sc.x, xc.y - sc.y);
+    CGRect stretch = CGRectMake(mid.x - dist * 0.32, mid.y - H * 0.32, dist * 0.64, H * 0.64);   // long drop in the middle
+    CGRect drop = CGRectMake(xc.x - H * 0.36, xc.y - H * 0.36, H * 0.72, H * 0.72);               // small round drop at the X
+    void (^xWobble)(CFTimeInterval) = ^(CFTimeInterval d) { if (xd) Wobble(xd, 1.18, 0.86, d); };
 
     if (!atTop) {
         UIView *snap = [seg snapshotViewAfterScreenUpdates:NO];
@@ -3462,30 +3484,34 @@ static void ScopeEval(BOOL animated) {
         [w addSubview:b];
         live = b;
         seg.alpha = 0;
-        // The switch's glass lifts and narrows, flowing up into the field like the bottom bar's squeeze.
-        [UIView animateWithDuration:0.16 delay:0 options:o animations:^{ snap.alpha = 0; } completion:nil];
-        [UIView animateWithDuration:0.52 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.5 options:o animations:^{
-            LiquidTo(b, merge);
-        } completion:nil];
-        Wobble(b, 0.88, 1.14, 0);
-        [UIView animateWithDuration:0.2 delay:0.24 options:o animations:^{ b.alpha = 0; } completion:^(BOOL d) { [b removeFromSuperview]; }];
-        Wobble(tf, 1.03, 0.92, 0.2);
+        [UIView animateWithDuration:0.14 delay:0 options:o animations:^{ snap.alpha = 0; } completion:nil];
+        // 1. pinches in, 2. stretches into a long drop half way, 3. rounds into a drop
+        //    that lands in the X, which swallows it with a wobble.
+        [UIView animateKeyframesWithDuration:0.62 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic | UIViewKeyframeAnimationOptionBeginFromCurrentState animations:^{
+            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.22 animations:^{ LiquidTo(b, CGRectInset(sf, sf.size.width * 0.18, H * 0.04)); }];
+            [UIView addKeyframeWithRelativeStartTime:0.22 relativeDuration:0.36 animations:^{ LiquidTo(b, stretch); }];
+            [UIView addKeyframeWithRelativeStartTime:0.58 relativeDuration:0.30 animations:^{ LiquidTo(b, drop); }];
+            [UIView addKeyframeWithRelativeStartTime:0.88 relativeDuration:0.12 animations:^{ LiquidTo(b, CGRectInset(drop, H * 0.2, H * 0.2)); b.alpha = 0; }];
+        } completion:^(BOOL d) { [b removeFromSuperview]; }];
+        xWobble(0.52);
     } else {
         UIView *snap = [seg snapshotViewAfterScreenUpdates:YES];
-        UIView *b = LiquidBlob(merge, snap);
-        snap.alpha = 0;
-        b.alpha = 0;
+        UIView *b = LiquidBlob(CGRectInset(drop, H * 0.2, H * 0.2), snap);
+        snap.alpha = 0; b.alpha = 0;
         [w addSubview:b];
         live = b;
-        Wobble(tf, 1.03, 0.92, 0);
-        [UIView animateWithDuration:0.12 delay:0 options:o animations:^{ b.alpha = 1; } completion:nil];
-        // Glass drips out of the field and spreads back into the switch, settling with a wobble.
-        [UIView animateWithDuration:0.58 delay:0.02 usingSpringWithDamping:0.68 initialSpringVelocity:0.5 options:o animations:^{
-            LiquidTo(b, sf);
-        } completion:nil];
-        Wobble(b, 1.06, 0.9, 0.1);
-        [UIView animateWithDuration:0.2 delay:0.22 options:o animations:^{ snap.alpha = 1; } completion:nil];
-        [UIView animateWithDuration:0.18 delay:0.48 options:o animations:^{ seg.alpha = 1; b.alpha = 0; } completion:^(BOOL d) { [b removeFromSuperview]; }];
+        xWobble(0);
+        // The X lets a drop go, it stretches back across and spreads into the switch.
+        [UIView animateKeyframesWithDuration:0.64 delay:0.04 options:UIViewKeyframeAnimationOptionCalculationModeCubic | UIViewKeyframeAnimationOptionBeginFromCurrentState animations:^{
+            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.14 animations:^{ b.alpha = 1; LiquidTo(b, drop); }];
+            [UIView addKeyframeWithRelativeStartTime:0.14 relativeDuration:0.34 animations:^{ LiquidTo(b, stretch); }];
+            [UIView addKeyframeWithRelativeStartTime:0.48 relativeDuration:0.30 animations:^{ LiquidTo(b, CGRectInset(sf, sf.size.width * 0.12, 0)); }];
+            [UIView addKeyframeWithRelativeStartTime:0.78 relativeDuration:0.22 animations:^{ LiquidTo(b, sf); }];
+        } completion:^(BOOL d) {
+            Wobble(b, 1.05, 0.9, 0);
+            [UIView animateWithDuration:0.18 delay:0.05 options:o animations:^{ seg.alpha = 1; b.alpha = 0; } completion:^(BOOL f) { [b removeFromSuperview]; }];
+        }];
+        [UIView animateWithDuration:0.2 delay:0.5 options:o animations:^{ snap.alpha = 1; } completion:nil];
     }
 }
 static void ScopeAutoHide(UISearchBar *sb, UINavigationBar *nb) {
