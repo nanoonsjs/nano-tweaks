@@ -1,4 +1,6 @@
-// MusicPill 1.0.15 - made by nano
+// MusicPill 1.0.16 - made by nano
+// 1.0.16: artist header lives in the page's header cell and is removed when the
+//         page goes away (it stayed on Search after going back).
 // 1.0.15: favorite state read right (star.circle.fill), Music's hidden play no
 //         longer takes taps (it started radio), side name hidden by position.
 // 1.0.14: our own back button (Music's icon vanished while scrolling), top
@@ -929,7 +931,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.15 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.16 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2980,7 +2982,8 @@ static void HideTopDownload(UIView *dl) {
 #define CARD_TAG 0x4D504344
 #define PLUS_TAG 0x4D50504C
 static __weak UIView *gArtistPlay;
-static __weak UIView *gArtistPage;   // play found (even before the name)
+static __weak UIView *gArtistPage;
+static __weak UIView *gArtistOverlay;   // our header, removed when its page goes away   // play found (even before the name)
 static __weak UIView *gArtistStar;   // Music's own favorite star (top right)
 static __weak UIView *gArtistName;
 static NSString *gArtistNameText;
@@ -3272,8 +3275,13 @@ static void ArtistTick(UIView *play) {
         NSNumber *t0 = objc_getAssociatedObject(play, &gAddDebug);
         if (!t0) objc_setAssociatedObject(play, &gAddDebug, @(CACurrentMediaTime()), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         else if (CACurrentMediaTime() - t0.doubleValue > 1.5 && play.layer.mask) play.layer.mask = nil; gArtistDebug = [NSString stringWithFormat:@"play=%@ (no name) near: %@", gArtistWhy ?: NSStringFromClass([play class]), gNameDebug]; return; }
-    UIView *container = CommonParent(play, name);
-    while (container.superview && container.bounds.size.width < play.window.bounds.size.width * 0.9) container = container.superview;
+    // Our header lives in the page's own header cell, so it leaves with the page.
+    UIView *container = nil;
+    for (UIView *p = play.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionReusableView class]]) { container = p; break; }
+    if (!container) {
+        container = CommonParent(play, name);
+        while (container.superview && container.bounds.size.width < play.window.bounds.size.width * 0.9 && ![container.superview isKindOfClass:[UIScrollView class]]) container = container.superview;
+    }
     if (!container) return;
     if (gArtistPlay != play || ![gArtistNameText isEqualToString:nameText]) {
         // A new artist header: drop overlays left from another one.
@@ -3320,6 +3328,8 @@ static void ArtistTick(UIView *play) {
         [container addSubview:ov];
         SetStar(st, NO, NO);
     }
+    if (gArtistOverlay && gArtistOverlay != ov) [gArtistOverlay removeFromSuperview];
+    gArtistOverlay = ov;
     if (container.subviews.lastObject != ov) [container bringSubviewToFront:ov];
     CGRect pf = [play convertRect:play.bounds toView:container], lf = [name convertRect:name.bounds toView:container];
     CGFloat bottom = MAX(CGRectGetMaxY(pf), CGRectGetMaxY(lf)) + 12, W = container.bounds.size.width;
@@ -3473,6 +3483,9 @@ static void ArtistScan(UIWindow *w) {
     UIView *play = gArtistPlay ?: gArtistPage;
     if (play && play.window == w) { ArtistTick(play); }
     else {
+        // The artist page is gone (back, or another tab): take our header with it.
+        UIView *ov = gArtistOverlay;
+        if (ov) { [ov removeFromSuperview]; gArtistOverlay = nil; }
         static CFTimeInterval last;
         if (CACurrentMediaTime() - last < 0.25) return;
         last = CACurrentMediaTime();
