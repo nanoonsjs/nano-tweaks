@@ -1,4 +1,8 @@
-// MusicPill 1.0.18 - made by nano
+// MusicPill 1.0.19 - made by nano
+// 1.0.19: artist fade covers the photo's last line again (8pt), search bar
+//         styled on every tick (was square on first open), X centred and
+//         smaller, Apple Music/Library a proper rounded glass switch that
+//         fades away when the list scrolls and comes back at the very top.
 // 1.0.18: artist fade ends at the header's real bottom (no black band when
 //         scrolling), search field back to Apple's height as a glass capsule,
 //         "Apple Music | Library" glass capsule switch, Cancel is a round glass
@@ -939,7 +943,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.18 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.19 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2647,36 +2651,32 @@ static void MaskOut(UIView *v);
 // ---- Search page, iOS 26 look ----
 static NSString *gSearchDebug = @"-";
 // A taller capsule search field (the background image sets its height).
-static UIImage *CapsuleImage(CGFloat h, UIColor *fill, UIColor *stroke) {
-    UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(h + 2, h)];
-    UIImage *img = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
-        UIBezierPath *p = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0.5, 0.5, h + 1, h - 1) cornerRadius:(h - 1) / 2];
-        if (fill) { [fill setFill]; [p fill]; }
-        if (stroke) { [stroke setStroke]; p.lineWidth = 0.75; [p stroke]; }
-    }];
-    return [img resizableImageWithCapInsets:UIEdgeInsetsMake(h / 2 - 1, h / 2, h / 2 - 1, h / 2)];
-}
 static UIColor *GlassFill(void) { return [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94]; }
 #define XDISC_TAG 0x4D505844
 static void StyleSegment(UISegmentedControl *seg) {
     CGFloat h = seg.bounds.size.height;
     if (h < 10) return;
-    NSNumber *done = objc_getAssociatedObject(seg, @selector(StyleSegment:));
-    if (!done || fabs(done.doubleValue - h) > 0.5) {
-        objc_setAssociatedObject(seg, @selector(StyleSegment:), @(h), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        UIImage *clear = [[UIImage alloc] init];
-        [seg setBackgroundImage:CapsuleImage(h, UIColor.clearColor, nil) forState:UIControlStateNormal barMetrics:UIBarMetricsDefault];
-        [seg setBackgroundImage:CapsuleImage(h, [UIColor colorWithWhite:0 alpha:0.75], nil) forState:UIControlStateSelected barMetrics:UIBarMetricsDefault];
-        [seg setBackgroundImage:CapsuleImage(h, [UIColor colorWithWhite:0 alpha:0.75], nil) forState:UIControlStateSelected | UIControlStateHighlighted barMetrics:UIBarMetricsDefault];
-        [seg setDividerImage:clear forLeftSegmentState:UIControlStateNormal rightSegmentState:UIControlStateNormal barMetrics:UIBarMetricsDefault];
-        [seg setDividerImage:clear forLeftSegmentState:UIControlStateSelected rightSegmentState:UIControlStateNormal barMetrics:UIBarMetricsDefault];
-        [seg setDividerImage:clear forLeftSegmentState:UIControlStateNormal rightSegmentState:UIControlStateSelected barMetrics:UIBarMetricsDefault];
-        NSDictionary *ta = @{NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: [UIFont systemFontOfSize:16 weight:UIFontWeightMedium]};
+    if (!objc_getAssociatedObject(seg, @selector(StyleSegment:))) {
+        objc_setAssociatedObject(seg, @selector(StyleSegment:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        NSDictionary *ta = @{NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: [UIFont systemFontOfSize:15 weight:UIFontWeightMedium]};
         [seg setTitleTextAttributes:ta forState:UIControlStateNormal];
         [seg setTitleTextAttributes:ta forState:UIControlStateSelected];
-        seg.backgroundColor = GlassFill();
-        seg.layer.cornerRadius = h / 2; seg.layer.cornerCurve = kCACornerCurveContinuous; seg.clipsToBounds = YES;
+        seg.selectedSegmentTintColor = [UIColor colorWithWhite:0 alpha:0.8];
         seg.layer.borderWidth = 0.75; seg.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+        seg.layer.cornerCurve = kCACornerCurveContinuous;
+    }
+    if (![seg.backgroundColor isEqual:GlassFill()]) seg.backgroundColor = GlassFill();
+    // UISegmentedControl resets its corners on layout, so this runs every time.
+    if (seg.layer.cornerRadius != h / 2) seg.layer.cornerRadius = h / 2;
+    if (!seg.clipsToBounds) seg.clipsToBounds = YES;
+    for (UIView *s in seg.subviews) {
+        if (![s isKindOfClass:[UIImageView class]]) continue;
+        CGRect f = s.frame;
+        if (f.size.width <= 2) { if (!s.hidden) s.hidden = YES; continue; }                       // dividers
+        if (f.size.width >= seg.bounds.size.width - 4) { if (s.alpha != 0) s.alpha = 0; continue; } // Apple's gray background
+        if (f.size.height > 10 && s.layer.cornerRadius != f.size.height / 2) {                   // selected pill
+            s.layer.cornerRadius = f.size.height / 2; s.layer.cornerCurve = kCACornerCurveContinuous; s.clipsToBounds = YES;
+        }
     }
     for (NSUInteger i = 0; i < seg.numberOfSegments; i++)
         if ([[seg titleForSegmentAtIndex:i] isEqualToString:@"Your Library"]) [seg setTitle:@"Library" forSegmentAtIndex:i];
@@ -2709,7 +2709,7 @@ static void StyleSearchBar(UISearchBar *sb) {
         if ([cancel isKindOfClass:[UIButton class]]) {
             if ([cancel currentTitle].length) [cancel setTitle:@"" forState:UIControlStateNormal];
             if (![cancel imageForState:UIControlStateNormal])
-                [cancel setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
+                [cancel setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
             cancel.tintColor = UIColor.whiteColor;
             UIView *disc = [cancel viewWithTag:XDISC_TAG];
             if (!disc) {
@@ -2719,11 +2719,13 @@ static void StyleSearchBar(UISearchBar *sb) {
                 disc.layer.borderWidth = 0.75; disc.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
                 [cancel insertSubview:disc atIndex:0];
             }
-            CGFloat D = 44;
-            CGRect df = CGRectMake(round(CGRectGetMidX(cancel.bounds) - D / 2 + 4), round(CGRectGetMidY(cancel.bounds) - D / 2), D, D);
+            CGFloat D = 40;
+            if (cancel.imageView && !CGAffineTransformIsIdentity(cancel.imageView.transform)) cancel.imageView.transform = CGAffineTransformIdentity;
+            CGPoint ic = cancel.imageView ? cancel.imageView.center : CGPointMake(CGRectGetMidX(cancel.bounds), CGRectGetMidY(cancel.bounds));
+            CGRect df = CGRectMake(round(ic.x - D / 2), round(ic.y - D / 2), D, D);
             if (!CGRectEqualToRect(disc.frame, df)) { disc.frame = df; disc.layer.cornerRadius = D / 2; }
             [cancel sendSubviewToBack:disc];
-            if (cancel.imageView) { [cancel bringSubviewToFront:cancel.imageView]; cancel.imageView.transform = CGAffineTransformMakeTranslation(4, 0); }
+            if (cancel.imageView) [cancel bringSubviewToFront:cancel.imageView];
         }
     } @catch (__unused id e) {}
     busy = NO;
@@ -2791,8 +2793,50 @@ static __weak UIView *gAccountView;
 }
 @end
 #define AVATAR_TAG 0x4D504156
+static void ScopeAutoHide(UISearchBar *sb, UINavigationBar *nb) {
+    UISegmentedControl *seg = nil;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:sb];
+    int g = 0;
+    while (st.count && g++ < 120 && !seg) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if ([v isKindOfClass:[UISegmentedControl class]]) { seg = (UISegmentedControl *)v; break; }
+        [st addObjectsFromArray:v.subviews];
+    }
+    if (!seg.window) return;
+    // The list under the search: results page if showing, else the page itself.
+    UISearchController *sc = nb.topItem.searchController;
+    UIView *page = sc.searchResultsController.view;
+    if (!page.window || page.hidden || page.alpha < 0.01) {
+        UIResponder *r = nb;
+        while (r && ![r isKindOfClass:[UINavigationController class]]) r = r.nextResponder;
+        page = ((UINavigationController *)r).topViewController.view;
+    }
+    UIScrollView *list = nil;
+    NSMutableArray *s2 = [NSMutableArray arrayWithObject:page ?: seg.window];
+    g = 0;
+    while (s2.count && g++ < 400) {
+        UIView *v = s2.firstObject; [s2 removeObjectAtIndex:0];
+        if (v.hidden || v.alpha < 0.01) continue;
+        if ([v isKindOfClass:[UIScrollView class]] && v.bounds.size.height > seg.window.bounds.size.height * 0.4 && ![sb isDescendantOfView:v]) {
+            if (!list || v.bounds.size.height * v.bounds.size.width > list.bounds.size.height * list.bounds.size.width) list = (UIScrollView *)v;
+            continue;
+        }
+        [s2 addObjectsFromArray:v.subviews];
+    }
+    if (!list) return;
+    BOOL atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 6;
+    BOOL hidden = seg.alpha < 0.5;
+    if (atTop == !hidden) return;
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.3 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+        seg.alpha = atTop ? 1 : 0;
+        seg.transform = atTop ? CGAffineTransformIdentity : CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -10), 0.94, 0.94);
+    } completion:nil];
+}
+
 static void SearchPage(UINavigationBar *nb) {
     BOOL isSearch = [nb.topItem.title isEqualToString:@"Search"];
+    UISearchBar *bar = nb.topItem.searchController.searchBar;
+    if (bar.window) { StyleSearchBar(bar); if (isSearch) ScopeAutoHide(bar, nb); }
     UIView *large = nil;
     for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"LargeTitle"]) large = s;
     UIView *av = [large viewWithTag:AVATAR_TAG];
@@ -3541,7 +3585,7 @@ static void ArtistTick(UIView *play) {
         CAGradientLayer *gl = [CAGradientLayer layer];
         gl.name = @"mp.fade";
         gl.colors = @[(id)[UIColor colorWithWhite:0 alpha:0].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor, (id)[UIColor colorWithWhite:0 alpha:1].CGColor];
-        gl.locations = @[@0, @0.45, @1];
+        gl.locations = @[@0, @(0.45 * OH / (OH + 8)), @(OH / (OH + 8))];
         [ov.layer addSublayer:gl];
         UILabel *l = [UILabel new];
         l.tag = 1; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.whiteColor;
@@ -3570,7 +3614,7 @@ static void ArtistTick(UIView *play) {
     CGFloat bottom = MAX(CGRectGetMaxY(pf), CGRectGetMaxY(lf)) + 12, W = container.bounds.size.width;
     // Run to the very bottom of Music's header cell, so no strip of photo shows under it.
     if ([container isKindOfClass:[UICollectionReusableView class]] && container.bounds.size.height - bottom < 60 && container.bounds.size.height > bottom) bottom = container.bounds.size.height;
-    CGRect of = CGRectMake(0, bottom - OH, W, OH);
+    CGRect of = CGRectMake(0, bottom - OH, W, OH + 8);   // 8pt solid past the fade covers the photo's last line
     if (!CGRectEqualToRect(ov.frame, of)) {
         ov.frame = of;
         for (CALayer *l in ov.layer.sublayers) if ([l.name isEqualToString:@"mp.fade"]) { [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = ov.bounds; [CATransaction commit]; }
