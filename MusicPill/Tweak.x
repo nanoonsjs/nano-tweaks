@@ -1,4 +1,6 @@
-// MusicPill 1.2.2 - made by nano
+// MusicPill 1.2.3 - made by nano
+// 1.2.3: animated cover: only the album's own header video is taken (a music
+//         video tile elsewhere was picked before), remembered per album.
 // 1.2.2: an album / artist share button no longer stays behind on Library.
 // 1.2.1: player ••• / Lossless / album download found by symbol and text too
 //        (VoiceOver labels are empty after a reboot, which broke them).
@@ -1197,7 +1199,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -4667,19 +4669,6 @@ static __weak AVPlayer *gMotionPlayer;
 static __weak UIView *gMotionPage;
 static NSString *gMotionDebug = @"-";
 static NSMutableString *gVideoSeen;
-static AVPlayerLayer *FindPlayerLayer(CALayer *l, int depth) {
-    if ([l isKindOfClass:[AVPlayerLayer class]] && ((AVPlayerLayer *)l).player) return (AVPlayerLayer *)l;
-    NSString *cn = NSStringFromClass([l class]);
-    if (gVideoSeen.length < 160 && ([cn containsString:@"Video"] || [cn containsString:@"Player"] || [cn containsString:@"SampleBuffer"] || [cn containsString:@"Motion"]))
-        [gVideoSeen appendFormat:@"%@%@ ", cn, [l isKindOfClass:[AVPlayerLayer class]] ? @"(noplayer)" : @""];
-    if ([l.delegate isKindOfClass:[UIView class]]) {
-        NSString *vn = NSStringFromClass([(UIView *)l.delegate class]);
-        if (gVideoSeen.length < 160 && ([vn containsString:@"Video"] || [vn containsString:@"Motion"] || [vn containsString:@"Player"]) && ![gVideoSeen containsString:vn]) [gVideoSeen appendFormat:@"v:%@ ", vn];
-    }
-    if (depth > 30) return nil;
-    for (CALayer *s in l.sublayers) { AVPlayerLayer *p = FindPlayerLayer(s, depth + 1); if (p) return p; }
-    return nil;
-}
 static NSString *PageTitleOf(UIView *v);
 static BOOL PageHasLabel(UIView *page, NSString *text) {
     if (!text.length) return NO;
@@ -4702,6 +4691,13 @@ static BOOL PageHasLabel(UIView *page, NSString *text) {
     }
     return NO;
 }
+static NSMapTable *gMotionByAlbum;   // album title -> its cover video player
+static NSString *AlbumKey(NSString *s) {
+    s = s.lowercaseString;
+    for (NSString *suf in @[@" - single", @" - ep"]) if ([s hasSuffix:suf]) s = [s substringToIndex:s.length - suf.length];
+    return s;
+}
+static NSString *PageTitleOf(UIView *v);
 static void MotionTick(UIWindow *w) {
     // 1. On an album page with a motion cover: remember its player.
     UIView *rp = gRowParent;
@@ -4716,8 +4712,31 @@ static void MotionTick(UIWindow *w) {
         if (CACurrentMediaTime() - lastScan > 0.5) {
             lastScan = CACurrentMediaTime();
             gVideoSeen = [NSMutableString string];
-            AVPlayerLayer *pl = FindPlayerLayer(page.layer, 0);
-            if (pl.player) { gMotionPlayer = pl.player; gMotionPage = page; }
+            // The cover video: a big player layer above the album's Play row (not a
+            // music-video tile or anything else further down the page).
+            CGFloat rowTop = [rp convertPoint:CGPointZero toView:nil].y;
+            NSMutableArray *ls = [NSMutableArray arrayWithObject:page.layer];
+            AVPlayerLayer *pick = nil;
+            int g = 0;
+            while (ls.count && g++ < 3000) {
+                CALayer *l = ls.lastObject; [ls removeLastObject];
+                if ([l isKindOfClass:[AVPlayerLayer class]] && ((AVPlayerLayer *)l).player && !l.hidden) {
+                    CGRect f = [l convertRect:l.bounds toLayer:w.layer];
+                    if (f.size.width >= w.bounds.size.width * 0.6 && CGRectGetMinY(f) < rowTop) { pick = (AVPlayerLayer *)l; break; }
+                    if (gVideoSeen.length < 120) [gVideoSeen appendFormat:@"skip%.0fx%.0f@%.0f ", f.size.width, f.size.height, f.origin.y];
+                }
+                [ls addObjectsFromArray:l.sublayers ?: @[]];
+            }
+            if (pick.player) {
+                gMotionPlayer = pick.player; gMotionPage = page;
+                // Remembered per album, so the player finds the right one later.
+                NSString *key = PageTitleOf(rp).lowercaseString;
+                if (key.length) {
+                    if (!gMotionByAlbum) gMotionByAlbum = [NSMapTable strongToWeakObjectsMapTable];
+                    [gMotionByAlbum setObject:pick.player forKey:key];
+                }
+                [gVideoSeen appendFormat:@"cover '%@'", key];
+            }
             videoDebug = [gVideoSeen copy];
         }
     }
@@ -4745,7 +4764,16 @@ static void MotionTick(UIWindow *w) {
     }
     static __weak UIView *shown;
     AVPlayer *mp = gMotionPlayer;
-    BOOL match = up && art && mp && gMotionPage && PageHasLabel(gMotionPage, gNowAlbum);
+    // This album's own cover video (by title), else the last page's if it matches.
+    AVPlayer *byTitle = nil;
+    for (NSString *k in gMotionByAlbum.keyEnumerator.allObjects) if ([AlbumKey(k) isEqualToString:AlbumKey(gNowAlbum ?: @"")]) { byTitle = [gMotionByAlbum objectForKey:k]; break; }
+    if (byTitle) mp = byTitle;
+    BOOL match = up && art && mp && (byTitle || (gMotionPage && PageHasLabel(gMotionPage, gNowAlbum)));
+    if (match && objc_getAssociatedObject(art, &gMotionByAlbum) != mp) {
+        // A different song's video was showing: swap it.
+        [[art viewWithTag:MOTION_TAG] removeFromSuperview];
+        objc_setAssociatedObject(art, &gMotionByAlbum, mp, OBJC_ASSOCIATION_ASSIGN);
+    }
     if (!match) {
         [shown removeFromSuperview];
         gMotionDebug = [NSString stringWithFormat:@"player=%d art=%d video=%d album=%@ page=%d match=%d seen=%@ cands=%@", up, art != nil, mp != nil, gNowAlbum, gMotionPage != nil, gMotionPage ? PageHasLabel(gMotionPage, gNowAlbum) : 0, videoDebug, cands];
