@@ -1,4 +1,6 @@
-// MusicPill 1.2.15 - made by nano
+// MusicPill 1.2.16 - made by nano
+// 1.2.16: dark mode switch titles stay (the title segments were being hidden as
+//         if they were backgrounds).
 // 1.2.15: Library title always shows (switch laid out again after narrowing),
 //         glass switch in dark mode too, faster drop animation.
 // 1.2.14: both Apple Music / Library titles show (plain colour per mode), the
@@ -1251,7 +1253,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.15 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.16 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3125,6 +3127,8 @@ static void StyleSegment(UISegmentedControl *seg) {
     if (seg.layer.borderWidth != 0) seg.layer.borderWidth = 0;
     if (!seg.clipsToBounds) seg.clipsToBounds = YES;
     for (UIView *s in seg.subviews) {
+        // UISegment (each title) is itself an image view: never treat it as a background.
+        if ([NSStringFromClass([s class]) isEqualToString:@"UISegment"]) { if (s.alpha != 1) s.alpha = 1; continue; }
         if (![s isKindOfClass:[UIImageView class]]) {
             if (s.backgroundColor && CGColorGetAlpha(s.backgroundColor.CGColor) > 0.01 && ![s isKindOfClass:[UILabel class]]) s.backgroundColor = UIColor.clearColor;
             continue;
