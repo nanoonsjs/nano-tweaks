@@ -1,4 +1,8 @@
-// MusicPill 0.9.3 - made by nano
+// MusicPill 0.9.4 - made by nano
+// 0.9.4: the pill and circles use the same glass as your tab bar (its own
+//        blur effect is copied), and the search circle always does the same
+//        thing: running animations are cleared first, it grows from a dot at
+//        the bar's right end, and quick back-and-forth scrolls are ignored.
 // 0.9.3: closing keeps the player's shape (scales down and folds into the
 //        pill instead of squashing), Music's own swipe-down is switched off
 //        everywhere on the player, and nothing else can close it mid-drag.
@@ -426,7 +430,25 @@ static UIView *InnerContent(UIView *c) {
     return c;
 }
 
-static CGRect gCollapsedPill;   // where the pill sits when collapsed (root coords)
+static CGRect gCollapsedPill;
+
+// The tab bar's own glass (from your tab bar tweak or iOS), so ours matches it.
+static UIVisualEffect *TabGlassEffect(void) {
+    static UIVisualEffect *cached;
+    UITabBar *tb = gLastTabBar;
+    if (tb) {
+        NSMutableArray *stack = [NSMutableArray arrayWithObject:tb];
+        UIVisualEffectView *best = nil; int guard = 0;
+        while (stack.count && guard++ < 300) {
+            UIView *v = stack.firstObject; [stack removeObjectAtIndex:0];
+            if ([v isKindOfClass:[UIVisualEffectView class]] && ((UIVisualEffectView *)v).effect && !v.hidden && v.alpha > 0.01 &&
+                v.bounds.size.width > tb.bounds.size.width * 0.5) { best = (UIVisualEffectView *)v; break; }
+            [stack addObjectsFromArray:v.subviews];
+        }
+        if (best.effect) cached = best.effect;
+    }
+    return cached ?: [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
+}   // where the pill sits when collapsed (root coords)
 static CGAffineTransform PillTransform(UIView *m) {
     CGFloat W = m.bounds.size.width, H = m.bounds.size.height;
     // Collapsed: Music's (invisible) bar sits right under our small pill so taps reach it.
@@ -650,7 +672,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -735,10 +757,10 @@ static UIView *GlassCircle(NSString *ident, UIView *host) {
     UIView *c = [UIView new];
     c.accessibilityIdentifier = ident;
     c.clipsToBounds = NO;
-    UIView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    UIView *g = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
     g.tag = 1; g.userInteractionEnabled = NO; g.clipsToBounds = YES;
     g.layer.cornerCurve = kCACornerCurveContinuous;
-    g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+    g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
     [c addSubview:g];
     UIImageView *iv = [UIImageView new];
     iv.tag = 2; iv.contentMode = UIViewContentModeCenter; iv.userInteractionEnabled = NO;
@@ -751,10 +773,10 @@ static UIView *GlassCircle(NSString *ident, UIView *host) {
 }
 static void RebuildCircleGlass(UIView *c) {
     UIView *old = [c viewWithTag:1];
-    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
     g.tag = 1; g.userInteractionEnabled = NO; g.clipsToBounds = YES;
     g.layer.cornerCurve = kCACornerCurveContinuous;
-    g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+    g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
     g.frame = old ? old.frame : c.bounds; g.layer.cornerRadius = old.layer.cornerRadius;
     [c insertSubview:g atIndex:0];
     [old removeFromSuperview];
@@ -869,7 +891,7 @@ static BOOL OpenPlayer(UIView *mini) {
 @implementation MPMiniPill
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
-    _glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    _glass = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
     _glass.userInteractionEnabled = NO; _glass.clipsToBounds = YES;
     _glass.layer.cornerCurve = kCACornerCurveContinuous;
     _glass.layer.borderWidth = 0.75; _glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
@@ -915,10 +937,10 @@ static BOOL OpenPlayer(UIView *mini) {
 }
 - (void)bumpDir:(NSNumber *)d { [self bump:d.doubleValue]; }
 - (void)rebuildGlass {
-    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
     g.userInteractionEnabled = NO; g.clipsToBounds = YES;
     g.layer.cornerCurve = kCACornerCurveContinuous;
-    g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+    g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
     g.frame = self.bounds; g.layer.cornerRadius = self.bounds.size.height / 2;
     [self insertSubview:g aboveSubview:_glass];
     [_glass removeFromSuperview];
@@ -1059,6 +1081,9 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
     UIView *root = tb.superview;
     UIView *mini = tb ? objc_getAssociatedObject(tb, kMini) : nil;
     if (collapse == gCollapsed) return;
+    static CFTimeInterval lastToggle;
+    if (animated && CACurrentMediaTime() - lastToggle < 0.45) return;   // ignore quick back-and-forth
+    lastToggle = CACurrentMediaTime();
     if (collapse && (!gCollapse || !gRound || !tb.window || tb.hidden || !mini.window || !objc_getAssociatedObject(mini, kStyled))) return;
     UIView *host = CollapseHost(tb);
     UIView *tab = GlassCircle(@"tab", host), *search = GlassCircle(@"search", host);
@@ -1100,11 +1125,12 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
         RebuildCircleGlass(tab); RebuildCircleGlass(search);
         tab.hidden = search.hidden = pill.hidden = NO;
         pill.alpha = 1;
+        for (UIView *v in @[tab, search, ti, si]) [v.layer removeAllAnimations];
         tab.transform = search.transform = CGAffineTransformIdentity;
         LayoutCircle(tab, wide); tab.alpha = 1;
         LayoutCircle(search, rightStart); search.alpha = 1;
-        search.transform = CGAffineTransformMakeScale(0.2, 0.2);
-        ti.alpha = 0;
+        search.transform = CGAffineTransformMakeScale(0.25, 0.25);
+        ti.alpha = 1; ti.transform = CGAffineTransformMakeScale(0.4, 0.4);
         [pill refresh];
         if (pill.hidden || CGRectIsEmpty(pill.frame)) { pill.frame = miniRect; [pill layoutIfNeeded]; }
         // 1. The bar's glass takes over from Music's tab bar, and Music's mini bar hands over to our pill.
@@ -1118,13 +1144,12 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
             LayoutCircle(tab, left);
         } completion:nil];
         wobble(tab, 0.9, 1.12, 0.08);
-        [UIView animateWithDuration:0.22 delay:0.2 options:o animations:^{ ti.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.5 delay:0.12 usingSpringWithDamping:0.6 initialSpringVelocity:0.6 options:o animations:^{ ti.transform = CGAffineTransformIdentity; } completion:nil];
         // 3. Search buds off the right end and rolls into its own circle.
-        [UIView animateWithDuration:0.66 delay:0.04 usingSpringWithDamping:0.62 initialSpringVelocity:0.7 options:o animations:^{
+        [UIView animateWithDuration:0.6 delay:0.02 usingSpringWithDamping:0.66 initialSpringVelocity:0.5 options:o animations:^{
             LayoutCircle(search, right);
             search.transform = CGAffineTransformIdentity;
         } completion:nil];
-        wobble(search, 1.18, 0.88, 0.04);
         // 4. The pill drops into the row and narrows.
         [UIView animateWithDuration:0.64 delay:0.02 usingSpringWithDamping:0.72 initialSpringVelocity:0.4 options:o animations:^{
             pill.compact = YES;
@@ -1135,16 +1160,19 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
     } else {
         CGRect miniHome = miniRect;
         [UIView animateWithDuration:0.16 delay:0.18 options:o animations:^{ tb.alpha = 1; } completion:nil];
-        [UIView animateWithDuration:0.1 delay:0 options:o animations:^{ ti.alpha = 0; } completion:nil];
+        for (UIView *v in @[tab, search]) [v.layer removeAllAnimations];
         [UIView animateWithDuration:0.56 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.4 options:o animations:^{
             LayoutCircle(tab, wide);
         } completion:nil];
         wobble(tab, 1.06, 0.9, 0.0);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.36 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (!gCollapsed) tab.hidden = YES; });
-        [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0.3 options:o animations:^{
+        [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.95 initialSpringVelocity:0.2 options:o animations:^{
             LayoutCircle(search, rightStart);
-            search.transform = CGAffineTransformMakeScale(0.15, 0.15);
-        } completion:^(BOOL d) { if (!gCollapsed) { search.hidden = YES; search.transform = CGAffineTransformIdentity; } }];
+            search.transform = CGAffineTransformMakeScale(0.25, 0.25);
+        } completion:nil];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.34 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!gCollapsed) { search.hidden = YES; search.transform = CGAffineTransformIdentity; }
+        });
         // Our pill rises back up to Music's bar and hands over.
         CGAffineTransform home = PillTransform(mini);
         objc_setAssociatedObject(mini, kApplied, [NSValue valueWithCGAffineTransform:home], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
