@@ -1,4 +1,8 @@
-// MusicPill 1.0.36 - made by nano
+// MusicPill 1.0.37 - made by nano
+// 1.0.37: queue pills stay when scrolling up into history (no flicker back to
+//         Music's), star / ••• placed every frame and hidden until placed,
+//         Library: Edit is a glass checklist circle left of the picture, both
+//         pop away / jelly back on scroll.
 // 1.0.36: queue pills placed right under the song row and the list slid just
 //         enough below them, no glass ever on the player's •••.
 // 1.0.35: queue pills sit under the song row again (list content inset instead
@@ -987,7 +991,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.36 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.37 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2912,6 +2916,97 @@ static __weak UIView *gAccountView;
 #define AVATAR_TAG 0x4D504156
 static __weak UIButton *gAvatarBtn;
 static void Wobble(UIView *v, CGFloat sx, CGFloat sy, CFTimeInterval delay);
+static __weak UIButton *gEditBtn;
+static void LiquidPop(UIView *b, BOOL show, CFTimeInterval delay) {
+    if (!b) return;
+    [b.layer removeAllAnimations];
+    UIViewAnimationOptions o = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
+    if (!show) {
+        // Squash wide, pinch into a drop, vanish upward.
+        [UIView animateKeyframesWithDuration:0.36 delay:delay options:UIViewKeyframeAnimationOptionBeginFromCurrentState | UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
+            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.3 animations:^{ b.transform = CGAffineTransformMakeScale(1.18, 0.82); }];
+            [UIView addKeyframeWithRelativeStartTime:0.3 relativeDuration:0.35 animations:^{ b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -3), 0.7, 0.95); }];
+            [UIView addKeyframeWithRelativeStartTime:0.65 relativeDuration:0.35 animations:^{ b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -8), 0.12, 0.2); b.alpha = 0; }];
+        } completion:nil];
+    } else {
+        // Drop swells back into the circle and wobbles to rest.
+        b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -8), 0.15, 0.25);
+        [UIView animateWithDuration:0.14 delay:delay options:o animations:^{ b.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.62 delay:delay usingSpringWithDamping:0.5 initialSpringVelocity:0.9 options:o animations:^{
+            b.transform = CGAffineTransformIdentity;
+        } completion:nil];
+        Wobble(b, 1.12, 0.88, 0.12 + delay);
+    }
+}
+static BOOL RunAction(UIAction *a, id sender);
+@interface MPEdit : NSObject
++ (instancetype)shared;
+@end
+static __weak UIBarButtonItem *gEditItem;
+@implementation MPEdit
++ (instancetype)shared { static MPEdit *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPEdit new]; }); return t; }
+- (void)tap:(UIButton *)b {
+    UIBarButtonItem *it = gEditItem;
+    Wobble(b, 1.15, 0.85, 0);
+    if (it.target && it.action) { ((void (*)(id, SEL, id))objc_msgSend)(it.target, it.action, it); return; }
+    if (it.primaryAction) { RunAction(it.primaryAction, b); }
+}
+@end
+#define EDIT_TAG 0x4D504544
+static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidden, BOOL isLibrary) {
+    UIButton *eb = (UIButton *)[nb viewWithTag:EDIT_TAG];
+    UIBarButtonItem *item = nil;
+    if (isLibrary) for (UIBarButtonItem *it in [nb.topItem.rightBarButtonItems arrayByAddingObjectsFromArray:nb.topItem.leftBarButtonItems ?: @[]])
+        if ([it.title isEqualToString:@"Edit"] || [it.title isEqualToString:@"Done"] || it.style == UIBarButtonItemStyleDone) { item = it; break; }
+    if (!item) { eb.hidden = YES; return; }
+    gEditItem = item;
+    BOOL editing = [item.title isEqualToString:@"Done"];
+    // Music's "Edit" text goes (its view stays for the system).
+    NSMutableArray *st = [NSMutableArray arrayWithArray:nb.subviews];
+    int g = 0;
+    while (st.count && g++ < 200) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (v.tag == EDIT_TAG || v.tag == AVATAR_TAG) continue;
+        if ([v isKindOfClass:[UILabel class]] && ([((UILabel *)v).text isEqualToString:@"Edit"] || [((UILabel *)v).text isEqualToString:@"Done"])) {
+            UIView *btn = v;
+            for (UIView *p = v.superview; p && p != nb; p = p.superview) { btn = p; if ([p isKindOfClass:[UIControl class]]) break; }
+            if (!btn.layer.mask) btn.layer.mask = [CALayer layer];
+            if (btn.userInteractionEnabled) btn.userInteractionEnabled = NO;
+            continue;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+    CGFloat D = avatarFrame.size.width;
+    if (!eb) {
+        eb = [UIButton buttonWithType:UIButtonTypeCustom];
+        eb.tag = EDIT_TAG;
+        UIView *disc = [UIView new];
+        disc.tag = 1; disc.userInteractionEnabled = NO;
+        disc.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94];
+        disc.layer.borderWidth = 0.75; disc.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+        disc.layer.cornerCurve = kCACornerCurveContinuous;
+        [eb addSubview:disc];
+        eb.tintColor = UIColor.whiteColor;
+        [eb addTarget:[MPEdit shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+        [nb addSubview:eb];
+    }
+    NSString *sym = editing ? @"checkmark" : @"checklist";
+    if (![objc_getAssociatedObject(eb, kNoEffect) isEqual:sym]) {
+        objc_setAssociatedObject(eb, kNoEffect, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIImage *img = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold]] ?: [UIImage systemImageNamed:@"list.bullet"];
+        [UIView transitionWithView:eb duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ [eb setImage:img forState:UIControlStateNormal]; } completion:nil];
+    }
+    UIView *disc = [eb viewWithTag:1];
+    if (!CGRectEqualToRect(disc.frame, CGRectMake(0, 0, D, D))) { disc.frame = CGRectMake(0, 0, D, D); disc.layer.cornerRadius = D / 2; }
+    CGPoint c = CGPointMake(CGRectGetMinX(avatarFrame) - 10 - D / 2, CGRectGetMidY(avatarFrame));
+    if (!CGRectEqualToRect(eb.bounds, CGRectMake(0, 0, D, D)) || !CGPointEqualToPoint(eb.center, c)) { eb.bounds = CGRectMake(0, 0, D, D); eb.center = c; }
+    if (eb.imageView) [eb bringSubviewToFront:eb.imageView];
+    if (nb.subviews.lastObject != eb) [nb bringSubviewToFront:eb];
+    eb.hidden = avatarHidden;
+    UIButton *av = gAvatarBtn;
+    if (av && !eb.layer.animationKeys.count && fabs(eb.alpha - av.alpha) > 0.01 && !av.layer.animationKeys.count) eb.alpha = av.alpha;
+    gEditBtn = eb;
+}
 static void AvatarEval(void) {
     UIButton *b = gAvatarBtn;
     UIScrollView *list = gAvatarList;
@@ -2921,24 +3016,9 @@ static void AvatarEval(void) {
     BOOL shown = !st || st.boolValue;
     if (atTop == shown) return;
     objc_setAssociatedObject(b, &gAvatarList, @(atTop), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [b.layer removeAllAnimations];
-    UIViewAnimationOptions o = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
-    if (!atTop) {
-        // Liquid pop: squash wide, then pinch into a drop and vanish upward.
-        [UIView animateKeyframesWithDuration:0.36 delay:0 options:UIViewKeyframeAnimationOptionBeginFromCurrentState | UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
-            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.3 animations:^{ b.transform = CGAffineTransformMakeScale(1.18, 0.82); }];
-            [UIView addKeyframeWithRelativeStartTime:0.3 relativeDuration:0.35 animations:^{ b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -3), 0.7, 0.95); }];
-            [UIView addKeyframeWithRelativeStartTime:0.65 relativeDuration:0.35 animations:^{ b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -8), 0.12, 0.2); b.alpha = 0; }];
-        } completion:nil];
-    } else {
-        // Drop swells back into the circle and wobbles to rest.
-        b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -8), 0.15, 0.25);
-        [UIView animateWithDuration:0.14 delay:0 options:o animations:^{ b.alpha = 1; } completion:nil];
-        [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.9 options:o animations:^{
-            b.transform = CGAffineTransformIdentity;
-        } completion:nil];
-        Wobble(b, 1.12, 0.88, 0.12);
-    }
+    LiquidPop(b, atTop, 0);
+    UIButton *eb = gEditBtn;
+    if (eb.window && eb.superview == b.superview) LiquidPop(eb, atTop, 0.05);
 }
 static __weak UISegmentedControl *gScopeSeg;
 static __weak UISearchBar *gScopeBar;
@@ -3167,6 +3247,7 @@ static void SearchPage(UINavigationBar *nb) {
         UISearchController *asc = nb.topItem.searchController;
         CGRect fw = [nb convertRect:f toView:nil];
         b.hidden = large.hidden || large.alpha < 0.5 || asc.isActive || CGRectGetMinY(fw) < nb.window.safeAreaInsets.top;
+        @try { LibraryEdit(nb, f, b.hidden, [pt isEqualToString:@"Library"]); } @catch (__unused id e) {}
     }
     if (!isSearch) { gSearchDebug = [NSString stringWithFormat:@"%@ avatar=%d", pt, img != nil]; return; }
     // "Browse Categories" goes, category cards get iOS 26 rounding.
@@ -4707,6 +4788,13 @@ static void QueueTick(UIView *player) {
     UIScrollView *table = nil;
     for (UIView *p = header.superview; p; p = p.superview) if ([p isKindOfClass:[UIScrollView class]]) { table = (UIScrollView *)p; break; }
     UIScrollView *old = gQueueTable;
+    if (!header && old.window && objc_getAssociatedObject(old, kQueueTable)) {
+        // Header scrolled off (history above): keep everything as is, no flicker.
+        HideOriginal(gQShuffle); HideOriginal(gQRepeat); if (gQAuto) HideOriginal(gQAuto);
+        PositionQueueRow(old);
+        RefreshQueueRow();
+        return;
+    }
     if (old && old != table) UnflagQueueTable(old);
     if (!header || !table) { gQueueTable = nil; gQueueDebug = header ? @"no table" : @"no header"; return; }
 
@@ -4855,10 +4943,14 @@ static void FadeBefore(UIView *v, CGFloat stopX) {
 static void PlayerStarSync(void) {
     UIButton *star = gPlayerStar;
     UIView *more = gPlayerMore;
-    if (!star.window || !more.window) return;
+    if (!star.window) return;
+    if (!more.window || star.window != more.window) { star.alpha = 0; return; }
     BOOL show = ViewShowing(more);
     if (star.hidden == show) star.hidden = !show;
     if (!show) return;
+    UIView *dots = GlyphIn(more, 0);
+    if (dots && fabs(dots.transform.a - 1.35) > 0.01) dots.transform = CGAffineTransformMakeScale(1.35, 1.35);
+    if (star.alpha < 1 && !star.layer.animationKeys.count) star.alpha = 1;
     CGPoint mc = GlyphCenter(more, nil);
     CGPoint q = [star.superview convertPoint:CGPointMake(mc.x - 40, mc.y) fromView:nil];
     CGPoint c = CGPointMake(round(q.x), round(q.y));
@@ -4965,6 +5057,7 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
             star.tag = PSTAR_TAG;
             star.tintColor = MusicPink();
             [star addTarget:[MPSongStar shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+            star.alpha = 0;   // shown once placed next to •••
             [host addSubview:star];
             SetStar(star, NO, NO);
             gSongFavKnown = NO;
