@@ -1,4 +1,8 @@
-// MusicPill 0.9.6 - made by nano
+// MusicPill 0.9.7 - made by nano
+// 0.9.7: menus (the ... button) no longer count as "the player is open"
+//        (no fake open animation / pill hiding), and song menus get the iOS 26
+//        look: a top row of Download, Favorite and Share; Love is now Favorite
+//        (star) and Unlove is Undo (crossed-out star).
 // 0.9.6: slow scrolls collapse / expand like iOS 26: tiny per-frame movement
 //        now counts, it triggers after ~40pt of travel in one direction, and
 //        a change asked for during the anti-flicker pause is applied right
@@ -227,8 +231,18 @@ static NSString *MapQueueText(NSString *s) {
     return s;
 }
 
+// Only Music's full player counts (menus and sheets are presented too).
+static BOOL IsPlayerVC(UIViewController *p) {
+    if (!p) return NO;
+    NSString *n = NSStringFromClass([p class]);
+    return [n containsString:@"Player"] || [n containsString:@"NowPlaying"];
+}
+static UIViewController *PresentedPlayer(UIViewController *root) {
+    UIViewController *p = root.presentedViewController;
+    return IsPlayerVC(p) ? p : nil;
+}
 static BOOL PlayerIsUp(UIWindow *w, UIView **playerView) {
-    UIViewController *p = w.rootViewController.presentedViewController;
+    UIViewController *p = PresentedPlayer(w.rootViewController);
     if (!p || p.isBeingDismissed) return NO;
     if (playerView) *playerView = p.view;
     return YES;
@@ -362,6 +376,74 @@ static void FixTabItems(UITabBar *tb) {
     %orig(NO, completion);
     dispatch_async(dispatch_get_main_queue(), ^{ pv.hidden = NO; });
     @try { PlayerClosedOurWay(win, snap, from); } @catch (__unused id e) {}
+}
+%end
+
+#pragma mark - iOS 26 song menus
+
+static NSString *MenuKind(UIMenuElement *e) {
+    if (![e isKindOfClass:[UIAction class]]) return nil;
+    NSString *t = e.title.lowercaseString;
+    if ([t isEqualToString:@"love"] || [t isEqualToString:@"favorite"]) return @"love";
+    if ([t isEqualToString:@"unlove"] || [t isEqualToString:@"undo"] || [t hasPrefix:@"remove from favorites"]) return @"unlove";
+    if ([t isEqualToString:@"download"]) return @"download";
+    if ([t hasPrefix:@"share song"] || [t hasPrefix:@"share album"] || [t hasPrefix:@"share playlist"] || [t isEqualToString:@"share"] || [t hasPrefix:@"share artist"]) return @"share";
+    return nil;
+}
+static UIImage *MenuSym(NSString *n) { return [UIImage systemImageNamed:n withConfiguration:[UIImageSymbolConfiguration configurationWithWeight:UIImageSymbolWeightMedium]]; }
+
+// Rename / re-icon the actions in place; collect the three top-row actions.
+static void RestyleMenu(NSArray *children, NSMutableDictionary *found) {
+    for (UIMenuElement *e in children) {
+        if ([e isKindOfClass:[UIMenu class]]) { RestyleMenu(((UIMenu *)e).children, found); continue; }
+        NSString *k = MenuKind(e);
+        if (!k) continue;
+        UIAction *a = (UIAction *)e;
+        if ([k isEqualToString:@"love"]) { a.title = @"Favorite"; a.image = MenuSym(@"star"); found[@"fav"] = a; }
+        else if ([k isEqualToString:@"unlove"]) { a.title = @"Undo"; a.image = MenuSym(@"star.slash"); a.attributes &= ~UIMenuElementAttributesDestructive; found[@"fav"] = a; }
+        else if ([k isEqualToString:@"download"]) { a.image = MenuSym(@"arrow.down.circle.fill"); found[@"download"] = a; }
+        else if ([k isEqualToString:@"share"]) { a.title = @"Share"; a.image = MenuSym(@"square.and.arrow.up.fill"); if (!found[@"share"]) found[@"share"] = a; }
+    }
+}
+static NSArray *WithoutElements(NSArray *children, NSSet *drop) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (__strong UIMenuElement *e in children) {
+        if ([drop containsObject:e]) continue;
+        if ([e isKindOfClass:[UIMenu class]]) {
+            UIMenu *m = (UIMenu *)e;
+            NSArray *kids = WithoutElements(m.children, drop);
+            if (!kids.count) continue;
+            if (kids.count != m.children.count) e = [m menuByReplacingChildren:kids];
+        }
+        [out addObject:e];
+    }
+    return out;
+}
+#define MP_ROW_ID @"com.user.musicpill.toprow"
+static NSArray *IOS26MenuChildren(NSArray *children, UIMenuOptions options) {
+    NSMutableDictionary *found = [NSMutableDictionary dictionary];
+    RestyleMenu(children, found);
+    if (options & UIMenuOptionsDisplayInline) return children;   // sections: only rename
+    for (UIMenuElement *e in children) if ([e isKindOfClass:[UIMenu class]] && [((UIMenu *)e).identifier isEqualToString:MP_ROW_ID]) return children;
+    NSMutableArray *row = [NSMutableArray array];
+    for (NSString *k in @[@"download", @"fav", @"share"]) if (found[k]) [row addObject:found[k]];
+    if (row.count < 2) return children;
+    if (@available(iOS 16.0, *)) {
+        UIMenu *top = [UIMenu menuWithTitle:@"" image:nil identifier:MP_ROW_ID options:UIMenuOptionsDisplayInline children:row];
+        top.preferredElementSize = UIMenuElementSizeMedium;   // icon over title, side by side
+        return [@[top] arrayByAddingObjectsFromArray:WithoutElements(children, [NSSet setWithArray:row])];
+    }
+    return children;
+}
+
+%hook UIMenu
++ (UIMenu *)menuWithTitle:(NSString *)title image:(UIImage *)image identifier:(UIMenuIdentifier)identifier options:(UIMenuOptions)options children:(NSArray *)children {
+    if (gQueueLook && ![identifier isEqualToString:MP_ROW_ID]) { @try { children = IOS26MenuChildren(children, options); } @catch (__unused id e) {} }
+    return %orig(title, image, identifier, options, children);
+}
+- (UIMenu *)menuByReplacingChildren:(NSArray *)children {
+    if (gQueueLook && ![self.identifier isEqualToString:MP_ROW_ID]) { @try { children = IOS26MenuChildren(children, self.options); } @catch (__unused id e) {} }
+    return %orig(children);
 }
 %end
 
@@ -680,7 +762,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -700,7 +782,7 @@ static void Update(UITabBar *tb) {
     // Full player open: bars back to normal so Music's own animation looks right.
     if (gCollapsed) {
         UIViewController *rv = tb.window.rootViewController;
-        if (rv.presentedViewController) SetCollapsed(NO, NO);
+        if (PresentedPlayer(rv)) SetCollapsed(NO, NO);
         else { UIView *m = objc_getAssociatedObject(tb, kMini); if (m.alpha > 0.01) m.alpha = 0; }
     }
     UIView *root = tb.superview;
@@ -1258,7 +1340,7 @@ static void SyncPill(void) {
     MPMiniPill *pill = nil;
     for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
     UIViewController *rv = tb.window.rootViewController;
-    BOOL playerUp = rv.presentedViewController != nil && !rv.presentedViewController.isBeingDismissed;
+    BOOL playerUp = PresentedPlayer(rv) != nil && !PresentedPlayer(rv).isBeingDismissed;
     BOOL on = gCollapse && gRound && mini.window && objc_getAssociatedObject(mini, kStyled) && !playerUp && !mini.hidden;
     if (!on && playerUp && pill && !pill.hidden && gCollapse && gRound) {
         // Full player opening: Music's bar stays hidden (no old-bar flash);
@@ -1603,7 +1685,7 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
     UITabBar *tb = gLastTabBar;
     if (!tb || self.window != tb.window) return;
     UIViewController *root = self.window.rootViewController;
-    if (root.presentedViewController && !root.presentedViewController.isBeingDismissed) return; // full player
+    if (PresentedPlayer(root) && !PresentedPlayer(root).isBeingDismissed) return; // full player
     PageScrolled(self, dy, offset.y);
 }
 %end
@@ -2555,7 +2637,7 @@ static void StartWatchdog(void) {
         UIWindow *w = tb.window;
         UIView *mini = tb ? objc_getAssociatedObject(tb, kMini) : nil;
         UIViewController *root = w.rootViewController;
-        BOOL playerUp = root.presentedViewController && !root.presentedViewController.isBeingDismissed;
+        BOOL playerUp = PresentedPlayer(root) && !PresentedPlayer(root).isBeingDismissed;
 
         // Keep the pill small.
         if (gRound && mini && mini.window && !mini.hidden && mini.alpha >= 0.01 &&
