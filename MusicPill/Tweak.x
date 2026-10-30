@@ -2905,7 +2905,6 @@ static NSString *gArtistDebug = @"-";
 static BOOL gArtistFav, gArtistFavKnown;
 static CFTimeInterval gArtistFavLock;
 
-static void Unmask(UIView *v) { if (v.layer.mask) v.layer.mask = nil; }
 static void MaskOut(UIView *v) { if (v && !v.layer.mask) v.layer.mask = [CALayer layer]; }
 
 static BOOL HasText(UIView *v, int depth) {
