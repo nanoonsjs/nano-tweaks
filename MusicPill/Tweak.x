@@ -1,4 +1,7 @@
-// MusicPill 1.0.20 - made by nano
+// MusicPill 1.0.21 - made by nano
+// 1.0.21: Apple Music/Library switch has no fill behind it; hiding is a glass
+//         drop that flows up into the search field (which gulps it), and
+//         drops back out and spreads into the switch at the top.
 // 1.0.20: Apple Music/Library switch narrow and centred, hides the moment the
 //         list scrolls (squash + pulled up into the search bar, jelly back
 //         at the top), account picture from a plain image bar button too.
@@ -946,7 +949,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.20 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.21 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2688,7 +2691,7 @@ static void StyleSegment(UISegmentedControl *seg) {
         seg.layer.borderWidth = 0.75; seg.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
         seg.layer.cornerCurve = kCACornerCurveContinuous;
     }
-    if (![seg.backgroundColor isEqual:GlassFill()]) seg.backgroundColor = GlassFill();
+    if (seg.backgroundColor && ![seg.backgroundColor isEqual:UIColor.clearColor]) seg.backgroundColor = UIColor.clearColor;
     // UISegmentedControl resets its corners on layout, so this runs every time.
     if (seg.layer.cornerRadius != h / 2) seg.layer.cornerRadius = h / 2;
     if (!seg.clipsToBounds) seg.clipsToBounds = YES;
@@ -2823,33 +2826,87 @@ static __weak UIView *gAccountView;
 #define AVATAR_TAG 0x4D504156
 static __weak UISegmentedControl *gScopeSeg;
 static __weak UISearchBar *gScopeBar;
+// A drop of glass that flows between the switch and the search field.
+static UIView *GlassBlob(CGRect f) {
+    UIView *b = [[UIView alloc] initWithFrame:f];
+    b.userInteractionEnabled = NO;
+    b.backgroundColor = [UIColor colorWithRed:0.20 green:0.20 blue:0.22 alpha:0.9];
+    b.layer.cornerRadius = MIN(f.size.width, f.size.height) / 2; b.layer.cornerCurve = kCACornerCurveContinuous;
+    b.layer.borderWidth = 1; b.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.28].CGColor;
+    b.layer.shadowColor = UIColor.whiteColor.CGColor; b.layer.shadowOpacity = 0.12; b.layer.shadowRadius = 6; b.layer.shadowOffset = CGSizeZero;
+    // glossy top highlight
+    CAGradientLayer *hl = [CAGradientLayer layer];
+    hl.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.22].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+    hl.locations = @[@0, @0.6];
+    hl.frame = b.bounds; hl.cornerRadius = b.layer.cornerRadius;
+    hl.name = @"hl";
+    [b.layer addSublayer:hl];
+    return b;
+}
+static void BlobTo(UIView *b, CGPoint c, CGSize s) {
+    b.bounds = CGRectMake(0, 0, s.width, s.height);
+    b.center = c;
+    b.layer.cornerRadius = MIN(s.width, s.height) / 2;
+    for (CALayer *l in b.layer.sublayers) if ([l.name isEqualToString:@"hl"]) { l.frame = b.bounds; l.cornerRadius = b.layer.cornerRadius; }
+}
+static void FieldGulp(UISearchBar *sb) {
+    UIView *f = sb.searchTextField;
+    [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ f.transform = CGAffineTransformMakeScale(1.035, 0.9); } completion:^(BOOL d) {
+        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.42 initialSpringVelocity:0.8 options:UIViewAnimationOptionAllowUserInteraction animations:^{ f.transform = CGAffineTransformIdentity; } completion:nil];
+    }];
+}
 static void ScopeEval(BOOL animated) {
     UISegmentedControl *seg = gScopeSeg;
     UIScrollView *list = gScopeList;
     UISearchBar *sb = gScopeBar;
-    if (!seg.window || !list.window) return;
+    UIWindow *w = seg.window;
+    if (!w || !list.window) return;
     BOOL atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 2;
     NSNumber *state = objc_getAssociatedObject(seg, &gScopeSeg);
     BOOL shown = !state || state.boolValue;
     if (atTop == shown) return;
     objc_setAssociatedObject(seg, &gScopeSeg, @(atTop), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    // Where the search field is, relative to the switch: it shrinks up into it.
-    CGPoint fc = [sb.searchTextField convertPoint:CGPointMake(CGRectGetMidX(sb.searchTextField.bounds), CGRectGetMidY(sb.searchTextField.bounds)) toView:seg.superview];
-    CGFloat dy = fc.y - seg.center.y;
-    CGAffineTransform gone = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy * 0.85), 0.35, 0.18);
-    UIViewAnimationOptions o = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
+    if (!CGAffineTransformIsIdentity(seg.transform)) seg.transform = CGAffineTransformIdentity;
+
+    static __weak UIView *live;
+    [live.layer removeAllAnimations]; [live removeFromSuperview];
+    CGRect sf = [seg convertRect:seg.bounds toView:w];
+    UISearchTextField *tf = sb.searchTextField;
+    CGPoint fc = [tf convertPoint:CGPointMake(CGRectGetMidX(tf.bounds), CGRectGetMidY(tf.bounds)) toView:w];
+    CGPoint sc = CGPointMake(CGRectGetMidX(sf), CGRectGetMidY(sf));
+    CGFloat H = sf.size.height, Wd = sf.size.width;
+    if (!animated) { seg.alpha = atTop ? 1 : 0; return; }
+
     if (!atTop) {
-        // Squash, then get pulled up into the search bar.
-        [UIView animateKeyframesWithDuration:0.38 delay:0 options:UIViewKeyframeAnimationOptionBeginFromCurrentState | UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
-            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.3 animations:^{ seg.transform = CGAffineTransformMakeScale(1.04, 0.82); }];
-            [UIView addKeyframeWithRelativeStartTime:0.3 relativeDuration:0.7 animations:^{ seg.transform = gone; seg.alpha = 0; }];
-        } completion:nil];
+        // The switch turns into a drop of glass that gets pulled up into the search field.
+        UIView *b = GlassBlob(sf);
+        [w addSubview:b];
+        live = b;
+        seg.alpha = 0;
+        [UIView animateKeyframesWithDuration:0.5 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
+            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.25 animations:^{ BlobTo(b, CGPointMake(sc.x, sc.y - 2), CGSizeMake(Wd * 0.62, H * 0.92)); }];
+            [UIView addKeyframeWithRelativeStartTime:0.25 relativeDuration:0.3 animations:^{ BlobTo(b, CGPointMake(sc.x, (sc.y + fc.y) / 2 + 4), CGSizeMake(H * 1.1, H * 1.25)); }];
+            [UIView addKeyframeWithRelativeStartTime:0.55 relativeDuration:0.25 animations:^{ BlobTo(b, CGPointMake(fc.x, fc.y + 6), CGSizeMake(H * 0.7, H * 0.9)); }];
+            [UIView addKeyframeWithRelativeStartTime:0.8 relativeDuration:0.2 animations:^{ BlobTo(b, fc, CGSizeMake(H * 1.6, 4)); b.alpha = 0; }];
+        } completion:^(BOOL d) { [b removeFromSuperview]; }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.38 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ FieldGulp(sb); });
     } else {
-        // Drops back out of the search bar with a jelly bounce.
-        if (!animated) { seg.transform = CGAffineTransformIdentity; seg.alpha = 1; return; }
-        [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.9 options:o animations:^{
-            seg.transform = CGAffineTransformIdentity; seg.alpha = 1;
-        } completion:nil];
+        // A drop falls out of the search field and spreads back into the switch.
+        UIView *b = GlassBlob(CGRectMake(fc.x - H * 0.8, fc.y - 2, H * 1.6, 4));
+        b.alpha = 0;
+        [w addSubview:b];
+        live = b;
+        FieldGulp(sb);
+        [UIView animateKeyframesWithDuration:0.42 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
+            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.25 animations:^{ BlobTo(b, CGPointMake(fc.x, fc.y + 8), CGSizeMake(H * 0.7, H * 0.9)); b.alpha = 1; }];
+            [UIView addKeyframeWithRelativeStartTime:0.25 relativeDuration:0.35 animations:^{ BlobTo(b, CGPointMake(sc.x, (sc.y + fc.y) / 2 + 6), CGSizeMake(H * 1.05, H * 1.3)); }];
+            [UIView addKeyframeWithRelativeStartTime:0.6 relativeDuration:0.4 animations:^{ BlobTo(b, CGPointMake(sc.x, sc.y + 2), CGSizeMake(Wd * 0.9, H * 1.08)); }];
+        } completion:^(BOOL d) {
+            [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.6 options:0 animations:^{
+                BlobTo(b, sc, CGSizeMake(Wd, H));
+            } completion:nil];
+            [UIView animateWithDuration:0.22 delay:0.1 options:0 animations:^{ seg.alpha = 1; b.alpha = 0; } completion:^(BOOL f) { [b removeFromSuperview]; }];
+        }];
     }
 }
 static void ScopeAutoHide(UISearchBar *sb, UINavigationBar *nb) {
