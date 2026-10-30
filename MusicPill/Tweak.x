@@ -1,4 +1,8 @@
-// MusicPill 0.9.5 - made by nano
+// MusicPill 0.9.6 - made by nano
+// 0.9.6: slow scrolls collapse / expand like iOS 26: tiny per-frame movement
+//        now counts, it triggers after ~40pt of travel in one direction, and
+//        a change asked for during the anti-flicker pause is applied right
+//        after it instead of being dropped.
 // 0.9.5: 3-second hidden cooldown on opening the player (after it opens or
 //        closes, the pill ignores taps), jelly on the two glass circles, and
 //        the left circle takes you to the tab it shows (Library, Home...).
@@ -676,7 +680,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1092,7 +1096,20 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
     UIView *mini = tb ? objc_getAssociatedObject(tb, kMini) : nil;
     if (collapse == gCollapsed) return;
     static CFTimeInterval lastToggle;
-    if (animated && CACurrentMediaTime() - lastToggle < 0.45) return;   // ignore quick back-and-forth
+    static BOOL pending; static BOOL pendingWant;
+    CFTimeInterval since = CACurrentMediaTime() - lastToggle;
+    if (animated && since < 0.45) {
+        // Too soon after the last change: apply it once the pause is over.
+        pendingWant = collapse;
+        if (!pending) {
+            pending = YES;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((0.47 - since) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                pending = NO;
+                SetCollapsed(pendingWant, YES);
+            });
+        }
+        return;
+    }
     lastToggle = CACurrentMediaTime();
     if (collapse && (!gCollapse || !gRound || !tb.window || tb.hidden || !mini.window || !objc_getAssociatedObject(mini, kStyled))) return;
     UIView *host = CollapseHost(tb);
@@ -1546,8 +1563,8 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
     if (gCollapse) {
         // iOS 26: scrolling down collapses the bars, scrolling back up (or reaching the top) opens them.
         if (y <= -sv.adjustedContentInset.top + 4) { SetCollapsed(NO, YES); return; }
-        if (acc > 28) SetCollapsed(YES, YES);
-        else if (acc < -28) SetCollapsed(NO, YES);
+        if (acc > 40) SetCollapsed(YES, YES);
+        else if (acc < -40) SetCollapsed(NO, YES);
         return;
     }
     // dy < 0: finger moving down (page moves back toward the top) -> bigger.
@@ -1582,7 +1599,7 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
     if (!(self.isTracking || self.isDecelerating)) return;
     if (self.bounds.size.height < 300) return;
     CGFloat dy = offset.y - old.y, dx = offset.x - old.x;
-    if (fabs(dy) < 0.5 || fabs(dx) > fabs(dy)) return;
+    if (dy == 0 || (fabs(dx) > fabs(dy) && fabs(dx) > 0.5)) return;
     UITabBar *tb = gLastTabBar;
     if (!tb || self.window != tb.window) return;
     UIViewController *root = self.window.rootViewController;
