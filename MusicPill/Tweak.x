@@ -1,4 +1,6 @@
-// MusicPill 1.0.25 - made by nano
+// MusicPill 1.0.26 - made by nano
+// 1.0.26: account picture back on Search (a wrong check hid it), and also on
+//         Library, Radio and Browse.
 // 1.0.25: switch back to its rounded look (no stretching; plain dark selected
 //         pill, no gray rim), account picture hidden while searching.
 // 1.0.24: selected Apple Music/Library pill fills its half (no gray rim),
@@ -960,7 +962,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.25 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.26 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3033,17 +3035,34 @@ static void SearchPage(UINavigationBar *nb) {
     UIView *large = nil;
     for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"LargeTitle"]) large = s;
     UIView *av = [nb viewWithTag:AVATAR_TAG];
-    if (!isSearch) { av.hidden = YES; return; }
-    // Title a little higher.
+    // The account picture goes on the main page of Search, Library, Radio and Browse.
+    NSString *pt = nb.topItem.title;
+    UIResponder *nr = nb;
+    while (nr && ![nr isKindOfClass:[UINavigationController class]]) nr = nr.nextResponder;
+    UINavigationController *nav = (UINavigationController *)nr;
+    BOOL avatarPage = pt && [@[@"Search", @"Library", @"Radio", @"Browse"] containsObject:pt] && nav.viewControllers.count <= 1;
+    if (!avatarPage) { av.hidden = YES; return; }
+    // The page's list (the picture fades as soon as it scrolls).
+    {
+        NSMutableArray *q = [NSMutableArray arrayWithObject:nav.topViewController.view ?: nb];
+        int gq = 0;
+        UIScrollView *found = nil;
+        while (q.count && gq++ < 300 && !found) {
+            UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+            if ([v isKindOfClass:[UIScrollView class]] && v.bounds.size.height > 300 && !v.hidden) { found = (UIScrollView *)v; break; }
+            [q addObjectsFromArray:v.subviews];
+        }
+        if (found && gAvatarList != found) gAvatarList = found;
+    }
     UILabel *title = nil;
     NSMutableArray *st = [NSMutableArray arrayWithObject:large ?: nb];
     int gd = 0;
     while (st.count && gd++ < 60) {
         UIView *v = st.lastObject; [st removeLastObject];
-        if ([v isKindOfClass:[UILabel class]] && [((UILabel *)v).text isEqualToString:@"Search"]) { title = (UILabel *)v; break; }
+        if ([v isKindOfClass:[UILabel class]] && [((UILabel *)v).text isEqualToString:pt]) { title = (UILabel *)v; break; }
         [st addObjectsFromArray:v.subviews];
     }
-    if (title && fabs(title.transform.ty + 10) > 0.5) title.transform = CGAffineTransformMakeTranslation(0, -10);
+    if (isSearch && title && fabs(title.transform.ty + 10) > 0.5) title.transform = CGAffineTransformMakeTranslation(0, -10);   // Search title a little higher
     // Account picture on the right.
     UIBarButtonItem *it = nil;
     UIView *accView = AccountView(nb.window, &it);
@@ -3101,8 +3120,10 @@ static void SearchPage(UINavigationBar *nb) {
 
         gAvatarBtn = b;
         UISearchController *asc = nb.topItem.searchController;
-        b.hidden = large.hidden || large.alpha < 0.5 || asc.isActive || CGRectGetMinY(f) < nb.window.safeAreaInsets.top;
+        CGRect fw = [nb convertRect:f toView:nil];
+        b.hidden = large.hidden || large.alpha < 0.5 || asc.isActive || CGRectGetMinY(fw) < nb.window.safeAreaInsets.top;
     }
+    if (!isSearch) { gSearchDebug = [NSString stringWithFormat:@"%@ avatar=%d", pt, img != nil]; return; }
     // "Browse Categories" goes, category cards get iOS 26 rounding.
     UIResponder *r = nb;
     while (r && ![r isKindOfClass:[UINavigationController class]]) r = r.nextResponder;
@@ -3117,7 +3138,6 @@ static void SearchPage(UINavigationBar *nb) {
                 if ([((UILabel *)v).text isEqualToString:@"Browse Categories"]) MaskOut(v);
                 continue;
             }
-            if ([v isKindOfClass:[UICollectionView class]] && v.bounds.size.height > 300 && !gAvatarList) gAvatarList = (UIScrollView *)v;
             if ([v isKindOfClass:[UICollectionViewCell class]] && v.bounds.size.width > 120 && v.bounds.size.height > 80) {
                 UIView *cv = ((UICollectionViewCell *)v).contentView;
                 if (cv.layer.cornerRadius != 22) { cv.layer.cornerRadius = 22; cv.layer.cornerCurve = kCACornerCurveContinuous; cv.clipsToBounds = YES; }
