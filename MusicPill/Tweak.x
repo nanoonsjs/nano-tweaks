@@ -1,4 +1,6 @@
-// MusicPill 1.0.38 - made by nano
+// MusicPill 1.0.39 - made by nano
+// 1.0.39: Library glass Edit always shows (Music's Edit found by position, only
+//         ours takes taps), nothing opens when tapping the bar with Not Playing.
 // 1.0.38: queue History visible again (pills step aside while it's open),
 //         Library glass Edit shows before editing too (Apple's untitled item).
 // 1.0.37: queue pills stay when scrolling up into history (no flicker back to
@@ -993,7 +995,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.38 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.39 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1407,6 +1409,7 @@ static BOOL OpenPlayer(UIView *mini) {
     for (NSNumber *d in @[@0.15, @0.5]) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self refresh]; });
 }
 - (void)open {
+    if ([self.title.text isEqualToString:@"Not Playing"]) { [self bump:0]; return; }
     UITabBar *tb = gLastTabBar;
     UIView *mini = tb ? objc_getAssociatedObject(tb, kMini) : nil;
     if (!OpenPlayer(mini)) SetCollapsedFwd(NO);
@@ -2941,6 +2944,8 @@ static void LiquidPop(UIView *b, BOOL show, CFTimeInterval delay) {
     }
 }
 static BOOL RunAction(UIAction *a, id sender);
+static __weak UIControl *gEditCtl;
+static void Forward(UIControl *c);
 @interface MPEdit : NSObject
 + (instancetype)shared;
 @end
@@ -2948,8 +2953,10 @@ static __weak UIBarButtonItem *gEditItem;
 @implementation MPEdit
 + (instancetype)shared { static MPEdit *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPEdit new]; }); return t; }
 - (void)tap:(UIButton *)b {
-    UIBarButtonItem *it = gEditItem;
     Wobble(b, 1.15, 0.85, 0);
+    UIControl *c = gEditCtl;
+    if (c) { Forward(c); return; }
+    UIBarButtonItem *it = gEditItem;
     if (it.target && it.action) { ((void (*)(id, SEL, id))objc_msgSend)(it.target, it.action, it); return; }
     if (it.primaryAction) { RunAction(it.primaryAction, b); }
 }
@@ -2958,30 +2965,31 @@ static __weak UIBarButtonItem *gEditItem;
 static char kEditSym;
 static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidden, BOOL isLibrary) {
     UIButton *eb = (UIButton *)[nb viewWithTag:EDIT_TAG];
-    UIBarButtonItem *item = nil;
-    if (isLibrary) for (UIBarButtonItem *it in [nb.topItem.rightBarButtonItems arrayByAddingObjectsFromArray:nb.topItem.leftBarButtonItems ?: @[]])
-        if ([it.title isEqualToString:@"Edit"] || [it.title isEqualToString:@"Done"] || it.style == UIBarButtonItemStyleDone) { item = it; break; }
-    // Apple's system Edit item has no title: take the plain (non-custom) right item.
-    if (!item && isLibrary) for (UIBarButtonItem *it in nb.topItem.rightBarButtonItems) if (!it.customView) { item = it; break; }
-    if (!item) { eb.hidden = YES; return; }
-    gEditItem = item;
-    __block BOOL editing = [item.title isEqualToString:@"Done"] || item.style == UIBarButtonItemStyleDone;
-    // Music's "Edit" text goes (its view stays for the system).
+    if (!isLibrary) { eb.hidden = YES; return; }
+    // Music's Edit / Done: the bar button on the right of the small top row.
+    UIControl *ctl = nil;
+    __block BOOL editing = NO;
     NSMutableArray *st = [NSMutableArray arrayWithArray:nb.subviews];
     int g = 0;
-    while (st.count && g++ < 200) {
+    while (st.count && g++ < 300) {
         UIView *v = st.lastObject; [st removeLastObject];
-        if (v.tag == EDIT_TAG || v.tag == AVATAR_TAG) continue;
-        if ([v isKindOfClass:[UILabel class]] && ([((UILabel *)v).text isEqualToString:@"Edit"] || [((UILabel *)v).text isEqualToString:@"Done"])) {
-            if ([((UILabel *)v).text isEqualToString:@"Done"]) editing = YES;
-            UIView *btn = v;
-            for (UIView *p = v.superview; p && p != nb; p = p.superview) { btn = p; if ([p isKindOfClass:[UIControl class]]) break; }
-            if (!btn.layer.mask) btn.layer.mask = [CALayer layer];
-            if (btn.userInteractionEnabled) btn.userInteractionEnabled = NO;
+        if (v.tag == EDIT_TAG || v.tag == AVATAR_TAG || [NSStringFromClass([v class]) containsString:@"LargeTitle"]) continue;
+        if ([v isKindOfClass:[UIControl class]]) {
+            CGRect f = [v convertRect:v.bounds toView:nb];
+            if (CGRectGetMidX(f) > nb.bounds.size.width * 0.6 && f.size.width < 120) {
+                ctl = (UIControl *)v;
+                NSMutableArray *s2 = [NSMutableArray arrayWithObject:v];
+                int g2 = 0;
+                while (s2.count && g2++ < 30) { UIView *x = s2.lastObject; [s2 removeLastObject]; if ([x isKindOfClass:[UILabel class]] && [((UILabel *)x).text isEqualToString:@"Done"]) editing = YES; [s2 addObjectsFromArray:x.subviews]; }
+            }
             continue;
         }
         [st addObjectsFromArray:v.subviews];
     }
+    if (!ctl) { eb.hidden = YES; return; }
+    gEditCtl = ctl;
+    if (!ctl.layer.mask) ctl.layer.mask = [CALayer layer];
+    if (ctl.userInteractionEnabled) ctl.userInteractionEnabled = NO;   // only ours takes taps
     CGFloat D = avatarFrame.size.width;
     if (!eb) {
         eb = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -4927,6 +4935,30 @@ static void PlayerDebug(UIView *player, UIWindow *w) {
 }
 
 static void MotionTick(UIWindow *w);
+#define BLOCK_TAG 0x4D50424B
+static void NotPlayingBlock(UIView *mini) {
+    MPMiniPill *p = gPillObj;
+    BOOL idle = [p.title.text isEqualToString:@"Not Playing"];
+    UIView *blk = [mini viewWithTag:BLOCK_TAG];
+    if (!idle) { [blk removeFromSuperview]; return; }
+    CGFloat stopX = mini.bounds.size.width;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:mini];
+    int g = 0;
+    while (st.count && g++ < 200) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (v.tag == BLOCK_TAG) continue;
+        if ([v isKindOfClass:[UIControl class]] && v.bounds.size.width < 80 && !v.hidden) {
+            CGFloat x = [v convertPoint:CGPointZero toView:mini].x;
+            if (x > mini.bounds.size.width * 0.4) stopX = MIN(stopX, x);
+            continue;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+    if (!blk) { blk = [UIView new]; blk.tag = BLOCK_TAG; blk.backgroundColor = UIColor.clearColor; blk.userInteractionEnabled = YES; [mini addSubview:blk]; }
+    CGRect f = CGRectMake(0, 0, MAX(0, stopX - 4), mini.bounds.size.height);
+    if (!CGRectEqualToRect(blk.frame, f)) blk.frame = f;
+    if (mini.subviews.lastObject != blk) [mini bringSubviewToFront:blk];
+}
 
 // ---- Full player, iOS 26 details ----
 static UIColor *MusicPink(void) { return [UIColor colorWithRed:0.98 green:0.24 blue:0.37 alpha:1]; }
@@ -5146,6 +5178,8 @@ static void StartWatchdog(void) {
                 ApplyPillTransform(mini, YES);
             } @catch (__unused id e) {}
         }
+        // Nothing playing: taps on the bar (outside its buttons) do nothing.
+        if (mini && mini.window) { @try { NotPlayingBlock(mini); } @catch (__unused id e) {} }
         // Scrolling title.
         if (mini && !playerUp) { @try { MarqueeTick(mini); } @catch (__unused id e) {} }
         // Album/playlist buttons and glass top buttons.
