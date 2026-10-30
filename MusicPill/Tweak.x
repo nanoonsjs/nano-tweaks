@@ -1,4 +1,6 @@
-// MusicPill 1.0.10 - made by nano
+// MusicPill 1.0.11 - made by nano
+// 1.0.11: artist look only on Music's artist header (never the player/lyrics);
+//         artist name falls back to the page title when it isn't a label.
 // 1.0.10: artist name = the big label level with the play button (not "Similar
 //         Artists"), header hidden the moment its play button exists, star disc
 //         fixed (was a big square), Music's own circles cut away on moved icons.
@@ -890,7 +892,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.10 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.11 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2942,7 +2944,8 @@ static void HideTopDownload(UIView *dl) {
 static __weak UIView *gArtistPlay;
 static __weak UIView *gArtistPage;   // play found (even before the name)
 static __weak UIView *gArtistStar;   // Music's own favorite star (top right)
-static __weak UILabel *gArtistName;
+static __weak UIView *gArtistName;
+static NSString *gArtistNameText;
 static NSString *gArtistDebug = @"-";
 static NSString *gAddDebug = @"";
 static BOOL gArtistFav, gArtistFavKnown;
@@ -2967,6 +2970,7 @@ static BOOL LooksLikeArtistPlay(UIView *b) {
     UIWindow *w = b.window;
     gArtistWhy = nil;
     if (!w || b.hidden) return NO;
+    if (![NSStringFromClass([b class]) containsString:@"HeaderPlayButton"]) return NO;
     CGRect f = [b convertRect:b.bounds toView:nil];
     CGFloat W = w.bounds.size.width;
     if (f.size.width < 24 || f.size.width > 72 || f.size.height < 24 || f.size.height > 72) return NO;
@@ -3010,6 +3014,40 @@ static UILabel *ArtistNameNear(UIView *play) {
         [stack addObjectsFromArray:v.subviews];
     }
     gNameDebug = dbg;
+    return best;
+}
+
+static NSString *PageTitleOf(UIView *v) {
+    UIResponder *r = v;
+    while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
+    for (UIViewController *vc = (UIViewController *)r; vc; vc = vc.parentViewController) {
+        if ([vc isKindOfClass:[UINavigationController class]] || [vc isKindOfClass:[UITabBarController class]]) break;
+        NSString *s = vc.navigationItem.title ?: vc.title;
+        if (s.length) return s;
+    }
+    return nil;
+}
+// The name may be drawn by a non-label view: the widest text-like view level
+// with the play button, to the left of it.
+static UIView *NameViewNear(UIView *play, NSMutableString *dbg) {
+    CGRect pf = [play convertRect:play.bounds toView:nil];
+    CGFloat W = play.window.bounds.size.width;
+    UIView *a = play;
+    for (int i = 0; i < 4 && a.superview; i++) a = a.superview;
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:a];
+    UIView *best = nil;
+    int guard = 0;
+    while (stack.count && guard++ < 400) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v == play || v.tag == ARTIST_TAG || v.hidden) continue;
+        CGRect f = [v convertRect:v.bounds toView:nil];
+        BOOL level = fabs(CGRectGetMidY(f) - CGRectGetMidY(pf)) < 40 && CGRectGetMaxX(f) <= CGRectGetMinX(pf) + 4;
+        if (level && f.size.height >= 20 && f.size.height <= 80 && f.size.width >= 40 && f.size.width <= W * 0.8 && ![v isKindOfClass:[UIImageView class]] && v.subviews.count <= 2) {
+            if (dbg.length < 80) [dbg appendFormat:@"%@ ", NSStringFromClass([v class])];
+            if (!best || f.size.width > best.bounds.size.width) best = v;
+        }
+        [stack addObjectsFromArray:v.subviews];
+    }
     return best;
 }
 
@@ -3106,8 +3144,21 @@ static void ArtistTick(UIView *play) {
         NSNumber *t0 = objc_getAssociatedObject(play, &gAddDebug);
         if (!t0 || CACurrentMediaTime() - t0.doubleValue <= 1.5) MaskOut(play);   // hidden before it's drawn
     }
-    UILabel *name = gArtistName;
-    if (!name || !name.window || ![name isDescendantOfView:play.window]) name = ArtistNameNear(play);
+    UIView *name = gArtistName;
+    NSString *nameText = gArtistNameText;
+    if (!name || !name.window || ![name isDescendantOfView:play.window]) {
+        UILabel *l = ArtistNameNear(play);
+        if (l) { name = l; nameText = l.text; }
+        else {
+            nameText = PageTitleOf(play);
+            NSMutableString *nd = [NSMutableString string];
+            name = nameText ? NameViewNear(play, nd) : nil;
+            gNameDebug = [gNameDebug stringByAppendingFormat:@" title=%@ view=%@", nameText, nd];
+            if (!name && nameText) name = play;   // no separate view: just use the title
+        }
+    }
+    if ([name isKindOfClass:[UILabel class]] && ((UILabel *)name).text.length) nameText = ((UILabel *)name).text;
+    if (!nameText.length) name = nil;
     gArtistPage = play;
     if (!name) {
         // Hidden early; if it turns out there's no artist name here, show it again.
@@ -3115,8 +3166,9 @@ static void ArtistTick(UIView *play) {
         if (!t0) objc_setAssociatedObject(play, &gAddDebug, @(CACurrentMediaTime()), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         else if (CACurrentMediaTime() - t0.doubleValue > 1.5 && play.layer.mask) play.layer.mask = nil; gArtistDebug = [NSString stringWithFormat:@"play=%@ (no name) near: %@", gArtistWhy ?: NSStringFromClass([play class]), gNameDebug]; return; }
     UIView *container = CommonParent(play, name);
+    while (container.superview && container.bounds.size.width < play.window.bounds.size.width * 0.9) container = container.superview;
     if (!container) return;
-    gArtistPlay = play; gArtistName = name;
+    gArtistPlay = play; gArtistName = name; gArtistNameText = nameText;
     MaskOut(play); MaskOut(name);
 
     MPPassHost *ov = nil;
@@ -3163,7 +3215,7 @@ static void ArtistTick(UIView *play) {
         [ov viewWithTag:4].frame = CGRectMake(W / 2 + 91 - SD / 2, rowY - SD / 2, SD, SD);
     }
     UILabel *l = (UILabel *)[ov viewWithTag:1];
-    if (![l.text isEqualToString:name.text]) l.text = name.text;
+    if (![l.text isEqualToString:nameText]) l.text = nameText;
     UIButton *pb = (UIButton *)[ov viewWithTag:3];
     UIView *g = GlyphIn(play, 0);
     BOOL pausing = [g isKindOfClass:[UIImageView class]] && [((UIImageView *)g).image.description containsString:@"pause"];
@@ -3183,7 +3235,7 @@ static void ArtistTick(UIView *play) {
         }
     }
     if (gArtistFavKnown && CACurrentMediaTime() > gArtistFavLock) SetStar((UIButton *)[ov viewWithTag:4], gArtistFav, NO);
-    gArtistDebug = [NSString stringWithFormat:@"ok name='%@' fav=%d/%d%@", name.text, gArtistFavKnown, gArtistFav, gAddDebug];
+    gArtistDebug = [NSString stringWithFormat:@"ok name='%@' (%@) fav=%d/%d%@", nameText, NSStringFromClass([name class]), gArtistFavKnown, gArtistFav, gAddDebug];
 }
 
 // Latest release: a rounded card, and a round + instead of "+ Add".
