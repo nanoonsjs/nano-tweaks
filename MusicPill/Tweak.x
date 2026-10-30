@@ -1,4 +1,6 @@
-// MusicPill 1.0.40 - made by nano
+// MusicPill 1.0.41 - made by nano
+// 1.0.41: no frame of the player after swipe-down close, Music's Edit/Done is
+//         hidden inside the bar's layout pass (no flash when tapping Edit).
 // 1.0.40: closing the player animates into the bar when it's expanded too (it
 //         vanished in one frame), a paused song after launch isn't "Not Playing".
 // 1.0.39: Library glass Edit always shows (Music's Edit found by position, only
@@ -505,8 +507,12 @@ static void FixTabItems(UITabBar *tb) {
     pv.transform = CGAffineTransformIdentity;
     pv.layer.cornerRadius = 0;
     [CATransaction commit];
-    %orig(NO, completion);
-    dispatch_async(dispatch_get_main_queue(), ^{ pv.hidden = NO; });
+    pv.alpha = 0;
+    %orig(NO, ^{
+        // Unhidden only once it's gone (an async unhide showed it for a frame).
+        pv.hidden = NO; pv.alpha = 1;
+        if (completion) completion();
+    });
     @try { PlayerClosedOurWay(win, snap, from); } @catch (__unused id e) {}
 }
 %end
@@ -997,7 +1003,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.40 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.41 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2022,7 +2028,14 @@ static void StyleSearchBar(UISearchBar *sb);
 }
 %end
 
+static UIControl *HideMusicEdit(UINavigationBar *nb, BOOL *editingOut);
+#define EDIT_TAG_FWD 0x4D504544
 %hook UINavigationBar
+- (void)layoutSubviews {
+    %orig;
+    // Library: Music's Edit/Done is swapped on tap; hide the new one before it's drawn.
+    if ([self viewWithTag:EDIT_TAG_FWD] && ![self viewWithTag:EDIT_TAG_FWD].hidden) { @try { HideMusicEdit(self, NULL); } @catch (__unused id e) {} }
+}
 // White top icons; Music sets its red tint per page, which flashed red.
 - (void)setTintColor:(UIColor *)color { %orig(gNavGlass ? UIColor.whiteColor : color); }
 %end
@@ -2959,6 +2972,7 @@ static void LiquidPop(UIView *b, BOOL show, CFTimeInterval delay) {
 static BOOL RunAction(UIAction *a, id sender);
 static __weak UIControl *gEditCtl;
 static void Forward(UIControl *c);
+static UIControl *HideMusicEdit(UINavigationBar *nb, BOOL *editingOut);
 @interface MPEdit : NSObject
 + (instancetype)shared;
 @end
@@ -2968,7 +2982,15 @@ static __weak UIBarButtonItem *gEditItem;
 - (void)tap:(UIButton *)b {
     Wobble(b, 1.15, 0.85, 0);
     UIControl *c = gEditCtl;
-    if (c) { Forward(c); return; }
+    if (c) {
+        Forward(c);
+        UINavigationBar *nb = (UINavigationBar *)b.superview;
+        if ([nb isKindOfClass:[UINavigationBar class]]) {
+            HideMusicEdit(nb, NULL);
+            dispatch_async(dispatch_get_main_queue(), ^{ HideMusicEdit(nb, NULL); });
+        }
+        return;
+    }
     UIBarButtonItem *it = gEditItem;
     if (it.target && it.action) { ((void (*)(id, SEL, id))objc_msgSend)(it.target, it.action, it); return; }
     if (it.primaryAction) { RunAction(it.primaryAction, b); }
@@ -2976,12 +2998,9 @@ static __weak UIBarButtonItem *gEditItem;
 @end
 #define EDIT_TAG 0x4D504544
 static char kEditSym;
-static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidden, BOOL isLibrary) {
-    UIButton *eb = (UIButton *)[nb viewWithTag:EDIT_TAG];
-    if (!isLibrary) { eb.hidden = YES; return; }
-    // Music's Edit / Done: the bar button on the right of the small top row.
+static UIControl *HideMusicEdit(UINavigationBar *nb, BOOL *editingOut) {
     UIControl *ctl = nil;
-    __block BOOL editing = NO;
+    BOOL editing = NO;
     NSMutableArray *st = [NSMutableArray arrayWithArray:nb.subviews];
     int g = 0;
     while (st.count && g++ < 300) {
@@ -2991,6 +3010,8 @@ static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidd
             CGRect f = [v convertRect:v.bounds toView:nb];
             if (CGRectGetMidX(f) > nb.bounds.size.width * 0.6 && f.size.width < 120) {
                 ctl = (UIControl *)v;
+                if (!ctl.layer.mask) ctl.layer.mask = [CALayer layer];
+                if (ctl.userInteractionEnabled) ctl.userInteractionEnabled = NO;
                 NSMutableArray *s2 = [NSMutableArray arrayWithObject:v];
                 int g2 = 0;
                 while (s2.count && g2++ < 30) { UIView *x = s2.lastObject; [s2 removeLastObject]; if ([x isKindOfClass:[UILabel class]] && [((UILabel *)x).text isEqualToString:@"Done"]) editing = YES; [s2 addObjectsFromArray:x.subviews]; }
@@ -2999,10 +3020,16 @@ static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidd
         }
         [st addObjectsFromArray:v.subviews];
     }
+    if (editingOut) *editingOut = editing;
+    return ctl;
+}
+static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidden, BOOL isLibrary) {
+    UIButton *eb = (UIButton *)[nb viewWithTag:EDIT_TAG];
+    if (!isLibrary) { eb.hidden = YES; return; }
+    BOOL editing = NO;
+    UIControl *ctl = HideMusicEdit(nb, &editing);
     if (!ctl) { eb.hidden = YES; return; }
     gEditCtl = ctl;
-    if (!ctl.layer.mask) ctl.layer.mask = [CALayer layer];
-    if (ctl.userInteractionEnabled) ctl.userInteractionEnabled = NO;   // only ours takes taps
     CGFloat D = avatarFrame.size.width;
     if (!eb) {
         eb = [UIButton buttonWithType:UIButtonTypeCustom];
