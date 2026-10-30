@@ -1,4 +1,8 @@
-// MusicPill 0.9.8 - made by nano
+// MusicPill 0.9.9 - made by nano
+// 0.9.9: the top-row tile fix now runs on every view class of the menu (the
+//        tiles aren't collection cells), bigger icons with the title centered
+//        under them; the "Loved" / "Unloved" pop-up says "Favorited" /
+//        "Unfavorited" with a star.
 // 0.9.8: the menu's top-row tiles are laid out by us (icon centered on top,
 //        title centered under it, sized to fit), and menu text uses the
 //        iOS 26 look (17pt regular, tiles 15pt).
@@ -231,6 +235,8 @@ static NSString *MapQueueText(NSString *s) {
     if (!gQueueLook || ![s isKindOfClass:[NSString class]]) return s;
     if ([s isEqualToString:@"Playing Next"]) return @"Continue Playing";
     if ([s isEqualToString:@"Autoplaying similar music"]) return @"AutoPlaying similar music";
+    if ([s isEqualToString:@"Loved"]) return @"Favorited";
+    if ([s isEqualToString:@"Unloved"]) return @"Unfavorited";
     return s;
 }
 
@@ -442,8 +448,7 @@ static NSArray *IOS26MenuChildren(NSArray *children, UIMenuOptions options) {
 // Menu cells (UIKit's context menu list): fix the top-row tiles and fonts.
 static void FixMenuCell(UIView *cell) {
     if (!gQueueLook) return;
-    UIView *list = cell.superview;
-    if (!list || list.bounds.size.width < 50) return;
+    if (!cell.window) return;
     NSMutableArray *imgs = [NSMutableArray array], *labels = [NSMutableArray array];
     NSMutableArray *stack = [NSMutableArray arrayWithArray:cell.subviews];
     while (stack.count) {
@@ -453,7 +458,8 @@ static void FixMenuCell(UIView *cell) {
         else if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) [labels addObject:v];
         [stack addObjectsFromArray:v.subviews];
     }
-    BOOL tile = cell.bounds.size.width < list.bounds.size.width * 0.45;
+    CGFloat winW = cell.window.bounds.size.width ?: UIScreen.mainScreen.bounds.size.width;
+    BOOL tile = cell.bounds.size.width < winW * 0.36 && cell.bounds.size.width > 40 && cell.bounds.size.height < 110 && imgs.count == 1 && labels.count == 1;
     if (tile && imgs.count && labels.count) {
         UIImageView *iv = imgs.firstObject; UILabel *l = labels.firstObject;
         CGSize S = cell.bounds.size;
@@ -461,7 +467,7 @@ static void FixMenuCell(UIView *cell) {
         if (![l.font isEqual:f]) l.font = f;
         l.textAlignment = NSTextAlignmentCenter;
         l.adjustsFontSizeToFitWidth = YES; l.minimumScaleFactor = 0.75; l.numberOfLines = 1;
-        CGFloat ih = 26, gap = 8, lh = ceil(f.lineHeight);
+        CGFloat ih = 30, gap = 6, lh = ceil(f.lineHeight);
         CGFloat top = MAX(6, (S.height - ih - gap - lh) / 2);
         CGPoint ic = [iv.superview convertPoint:CGPointMake(S.width / 2, top + ih / 2) fromView:cell];
         iv.contentMode = UIViewContentModeCenter;
@@ -469,9 +475,10 @@ static void FixMenuCell(UIView *cell) {
         iv.center = ic;
         CGRect lr = [l.superview convertRect:CGRectMake(4, top + ih + gap, S.width - 8, lh) fromView:cell];
         l.frame = lr;
-        iv.preferredSymbolConfiguration = [UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightMedium];
+        iv.preferredSymbolConfiguration = [UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium];
         return;
     }
+    if (![NSStringFromClass([cell class]) containsString:@"Cell"]) return;
     // Ordinary rows: iOS 26 font (regular 17).
     for (UILabel *l in labels) {
         if (l.font.pointSize >= 15 && l.font.pointSize <= 20) {
@@ -481,17 +488,38 @@ static void FixMenuCell(UIView *cell) {
     }
 }
 
-%hook UICollectionViewCell
-- (void)layoutSubviews {
-    %orig;
-    static Class menuList; static dispatch_once_t once;
-    dispatch_once(&once, ^{ menuList = NSClassFromString(@"_UIContextMenuListView"); });
-    NSString *n = NSStringFromClass([self class]);
-    if ([n containsString:@"ContextMenu"] || (menuList && [self.superview.superview isKindOfClass:menuList])) {
-        @try { FixMenuCell(self); } @catch (__unused id e) {}
-    }
+// The menu's views are private UIKit classes: hook layoutSubviews on every
+// _UIContextMenu* view class so the tiles are fixed whatever they're called.
+static NSMutableDictionary *gMenuLayoutIMPs;
+static void MenuLayoutHook(UIView *self, SEL _cmd) {
+    IMP orig = NULL;
+    for (Class c = object_getClass(self); c && !orig; c = class_getSuperclass(c)) orig = [gMenuLayoutIMPs[NSStringFromClass(c)] pointerValue];
+    if (orig) ((void (*)(id, SEL))orig)(self, _cmd);
+    @try { FixMenuCell(self); } @catch (__unused id e) {}
 }
-%end
+static void HookMenuClasses(void) {
+    gMenuLayoutIMPs = [NSMutableDictionary dictionary];
+    unsigned int n = 0;
+    Class *all = objc_copyClassList(&n);
+    SEL sel = @selector(layoutSubviews);
+    for (unsigned int i = 0; i < n; i++) {
+        const char *name = class_getName(all[i]);
+        if (strncmp(name, "_UIContextMenu", 14) != 0) continue;
+        Class c = all[i];
+        BOOL isView = NO;
+        for (Class s = class_getSuperclass(c); s; s = class_getSuperclass(s)) if (s == [UIView class]) { isView = YES; break; }
+        if (!isView) continue;
+        // only classes that implement layoutSubviews themselves
+        unsigned int mc = 0; Method *ms = class_copyMethodList(c, &mc); BOOL own = NO;
+        for (unsigned int j = 0; j < mc; j++) if (method_getName(ms[j]) == sel) { own = YES; break; }
+        free(ms);
+        if (!own) continue;
+        IMP old = NULL;
+        MSHookMessageEx(c, sel, (IMP)MenuLayoutHook, &old);
+        if (old) gMenuLayoutIMPs[@(name)] = [NSValue valueWithPointer:(const void *)old];
+    }
+    free(all);
+}
 
 %hook UIMenu
 + (UIMenu *)menuWithTitle:(NSString *)title image:(UIImage *)image identifier:(UIMenuIdentifier)identifier options:(UIMenuOptions)options children:(NSArray *)children {
@@ -819,7 +847,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.8 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.9 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2232,6 +2260,29 @@ static BOOL IsHeaderTitle(NSString *s) {
 - (void)setText:(NSString *)text {
     NSString *mapped = MapQueueText(text);
     %orig(mapped);
+    if (mapped != text && ([mapped isEqualToString:@"Favorited"] || [mapped isEqualToString:@"Unfavorited"])) {
+        __weak UILabel *weak = self;
+        BOOL fav = [mapped isEqualToString:@"Favorited"];
+        void (^swap)(void) = ^{
+            UILabel *me = weak; UIView *box = me.superview.superview ?: me.superview;
+            NSMutableArray *stack = [NSMutableArray arrayWithObject:box ?: [UIView new]];
+            int guard = 0;
+            while (stack.count && guard++ < 60) {
+                UIView *v = stack.lastObject; [stack removeLastObject];
+                if ([v isKindOfClass:[UIImageView class]] && v != (id)me) {
+                    UIImageView *iv = (UIImageView *)v;
+                    NSString *want = fav ? @"star.fill" : @"star";
+                    if (![iv.accessibilityIdentifier isEqualToString:want]) {
+                        iv.accessibilityIdentifier = want;
+                        iv.image = [UIImage systemImageNamed:want withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:MAX(13, iv.bounds.size.height * 0.75) weight:UIImageSymbolWeightSemibold]];
+                    }
+                }
+                [stack addObjectsFromArray:v.subviews];
+            }
+        };
+        swap();
+        dispatch_async(dispatch_get_main_queue(), swap);
+    }
     if (gAlbum && IsHeaderTitle(mapped) && self.window) { @try { PreHide(self); } @catch (__unused id e) {} }
 }
 - (void)setAttributedText:(NSAttributedString *)text {
@@ -2732,5 +2783,6 @@ static void StartWatchdog(void) {
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     %init;
+    HookMenuClasses();
     dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); });
 }
