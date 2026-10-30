@@ -1,4 +1,9 @@
-// MusicPill 1.0.3 - made by nano
+// MusicPill 1.0.4 - made by nano
+// 1.0.4: ••• glyph shows (Music's blur inside it is turned off, not masked),
+//        share + ••• share one glass capsule, share builds the ••• menu and runs
+//        its Share action, the row circle draws the download state itself
+//        (arrow, live progress ring, checkmark), top download fully hidden,
+//        P3 red detected.
 // 1.0.3: album top bar: the glass sits behind the button (the ... icon shows),
 //        Music's download button stays in the row circle through every state
 //        (arrow, progress, checkmark), a share circle replaces it top right,
@@ -864,7 +869,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2115,6 +2120,82 @@ static void TearDownRow(void) {
     gPortalLive = NO;
 }
 
+static UIView *GlyphIn(UIView *v, int depth);
+
+// The row's right circle draws Music's download state itself: arrow, a live
+// progress ring (copied from Music's ring), then the checkmark.
+static NSString *gDLState = @"-";
+static CAShapeLayer *FindRing(CALayer *l, int depth) {
+    if (depth > 8) return nil;
+    CAShapeLayer *best = nil;
+    for (CALayer *s in l.sublayers) {
+        if ([s isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)s).path && !s.hidden && ((CAShapeLayer *)s).strokeColor && ((CAShapeLayer *)s).lineWidth > 0) {
+            CAShapeLayer *sh = (CAShapeLayer *)s;
+            if (!best || sh.strokeEnd < best.strokeEnd) best = sh;
+        }
+        CAShapeLayer *d = FindRing(s, depth + 1);
+        if (d && (!best || d.strokeEnd < best.strokeEnd)) best = d;
+    }
+    return best;
+}
+static void MirrorDownload(UIButton *bDL, UIView *slot, CGFloat h) {
+    NSString *d = nil;
+    UIView *g = GlyphIn(slot, 0);
+    if ([g isKindOfClass:[UIImageView class]]) d = ((UIImageView *)g).image.description.lowercaseString;
+    CAShapeLayer *src = FindRing(slot.layer, 0);
+    NSString *state;
+    if ([d containsString:@"checkmark"]) state = @"done";
+    else if ([d containsString:@"arrow.down"] || [d containsString:@"icloud"]) state = src && src.strokeEnd > 0.001 && src.strokeEnd < 0.999 ? @"progress" : @"idle";
+    else state = @"progress";   // stop square or no glyph: downloading
+    CGFloat p = src ? ((CAShapeLayer *)(src.presentationLayer ?: src)).strokeEnd : -1;
+    gDLState = [NSString stringWithFormat:@"%@ p=%.2f glyph=%@", state, p, d ? [d substringFromIndex:MIN(d.length, [d rangeOfString:@"symbol("].location == NSNotFound ? 0 : [d rangeOfString:@"symbol("].location)] : @"none"];
+    if (gDLState.length > 70) gDLState = [gDLState substringToIndex:70];
+
+    NSString *sym = [state isEqualToString:@"done"] ? @"checkmark" : [state isEqualToString:@"progress"] ? @"stop.fill" : @"arrow.down";
+    CGFloat pt = [state isEqualToString:@"progress"] ? 11 : 18;
+    if (![objc_getAssociatedObject(bDL, @selector(MirrorDownload)) isEqual:sym]) {
+        objc_setAssociatedObject(bDL, @selector(MirrorDownload), sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIButtonConfiguration *cfg = bDL.configuration;
+        cfg.image = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:pt weight:[state isEqualToString:@"progress"] ? UIImageSymbolWeightBlack : UIImageSymbolWeightSemibold]];
+        bDL.configuration = cfg;
+    }
+    CAShapeLayer *track = nil, *ring = nil;
+    for (CALayer *l in bDL.layer.sublayers) {
+        if ([l.name isEqualToString:@"mp.track"]) track = (CAShapeLayer *)l;
+        if ([l.name isEqualToString:@"mp.ring"]) ring = (CAShapeLayer *)l;
+    }
+    BOOL prog = [state isEqualToString:@"progress"];
+    if (prog && !ring) {
+        track = [CAShapeLayer layer]; track.name = @"mp.track";
+        ring = [CAShapeLayer layer]; ring.name = @"mp.ring";
+        for (CAShapeLayer *x in @[track, ring]) { x.fillColor = UIColor.clearColor.CGColor; x.lineWidth = 2.5; x.lineCap = kCALineCapRound; [bDL.layer addSublayer:x]; }
+        track.strokeColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
+        ring.strokeColor = UIColor.whiteColor.CGColor;
+    }
+    track.hidden = ring.hidden = !prog;
+    if (!prog) { [ring removeAnimationForKey:@"spin"]; return; }
+    CGRect rr = CGRectMake(h / 2 - 12, h / 2 - 12, 24, 24);
+    if (!CGRectEqualToRect(ring.frame, rr)) {
+        UIBezierPath *bp = [UIBezierPath bezierPathWithArcCenter:CGPointMake(12, 12) radius:11 startAngle:-M_PI_2 endAngle:M_PI * 1.5 clockwise:YES];
+        track.frame = rr; ring.frame = rr; track.path = bp.CGPath; ring.path = bp.CGPath;
+    }
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if (p >= 0.001 && p < 0.999) {
+        [ring removeAnimationForKey:@"spin"];
+        ring.transform = CATransform3DIdentity;
+        ring.strokeEnd = p;
+    } else {
+        // Waiting / unknown progress: spinning arc.
+        ring.strokeEnd = 0.25;
+        if (![ring animationForKey:@"spin"]) {
+            CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+            a.fromValue = @0; a.toValue = @(M_PI * 2); a.duration = 0.9; a.repeatCount = HUGE_VALF;
+            [ring addAnimation:a forKey:@"spin"];
+        }
+    }
+    [CATransaction commit];
+}
+
 static void AlbumTick(UIWindow *w) {
     if (!w) return;
     if (!gAlbum) { TearDownRow(); gAlbumDebug = @"off"; return; }
@@ -2193,39 +2274,15 @@ static void AlbumTick(UIWindow *w) {
     if (!CGRectEqualToRect(bDL.frame, fd)) bDL.frame = fd;
     bShuffle.layer.cornerRadius = h / 2;
     bDL.layer.cornerRadius = h / 2;
-    UIView *portal = nil;
-    for (UIView *s in bDL.subviews) if (s.tag == PORTAL_TAG) portal = s;
-    if (portal) {
-        id src = nil;
-        @try { src = [portal valueForKey:@"sourceView"]; } @catch (__unused id e) {}
-        if (src != slot || !showDL) { [portal removeFromSuperview]; portal = nil; }
-    }
-    if (showDL && !portal) {
-        Class P = NSClassFromString(@"_UIPortalView");
-        if (P && [P instancesRespondToSelector:@selector(initWithSourceView:)]) {
-            @try {
-                portal = [(UIView *)[P alloc] initWithSourceView:slot];
-                [portal setValue:@YES forKey:@"hidesSourceView"];
-                @try { [portal setValue:@NO forKey:@"matchesPosition"]; } @catch (__unused id e) {}
-                @try { [portal setValue:@NO forKey:@"matchesTransform"]; } @catch (__unused id e) {}
-                portal.tag = PORTAL_TAG;
-                portal.userInteractionEnabled = NO;
-                [bDL addSubview:portal];
-            } @catch (__unused id e) { portal = nil; }
-        }
-    }
-    if (portal) {
-        CGSize ss = slot.bounds.size;
-        CGRect pf2 = CGRectMake(round((h - ss.width) / 2), round((h - ss.height) / 2), ss.width, ss.height);
-        if (!CGRectEqualToRect(portal.frame, pf2)) portal.frame = pf2;
-    }
-    gPortalLive = portal != nil;
-    bDL.hidden = !gPortalLive;
+    for (UIView *s in [bDL.subviews copy]) if (s.tag == PORTAL_TAG) [s removeFromSuperview];
+    if (showDL) MirrorDownload(bDL, slot, h);
+    gPortalLive = showDL;
+    bDL.hidden = !showDL;
 
     HideOriginal(play);
     HideOriginal(shuffle);
     ShowPreHidden(play, shuffle);
-    gAlbumDebug = [NSString stringWithFormat:@"row ok play=%@ slot=%@ portal=%d", NSStringFromClass([play class]), slot ? NSStringFromClass([slot class]) : @"none", gPortalLive];
+    gAlbumDebug = [NSString stringWithFormat:@"row ok slot=%@ dl=%@", slot ? NSStringFromClass([slot class]) : @"none", gDLState];
 }
 
 #pragma mark - instant album triggers
@@ -2331,7 +2388,8 @@ static BOOL IsMusicRed(UIColor *c) {
     if (!c) return NO;
     c = [c resolvedColorWithTraitCollection:[UITraitCollection traitCollectionWithUserInterfaceStyle:UIUserInterfaceStyleDark]];
     if (![c getRed:&r green:&g blue:&b alpha:&a] || a < 0.5) return NO;
-    return r > 0.8 && g < 0.4 && b > 0.1 && b < 0.55;
+    // Music's red is Display P3, so in sRGB terms blue can be below 0.
+    return r > 0.75 && r - g > 0.35 && r - b > 0.3 && g < 0.55;
 }
 static BOOL InBars(UIView *v) {
     for (UIView *p = v.superview; p; p = p.superview) if ([p isKindOfClass:[UITabBar class]] || p.tag == COLLAPSE_TAG) return YES;
@@ -2561,10 +2619,37 @@ static const void *kFloatGlass = &kFloatGlass;
 }
 @end
 
-static void GlassCircleFor(UIControl *c, CGFloat D) {
-    if (!c || !c.superview) return;
-    UIView *host = c.superview;
-    UIView *g = objc_getAssociatedObject(c, kFloatGlass);
+static void AttachJelly(UIView *c, UIView *glass) {
+    objc_setAssociatedObject(c, kFloatGlass, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (objc_getAssociatedObject(c, kSwipeAdded)) return;
+    objc_setAssociatedObject(c, kSwipeAdded, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPFloatJelly shared] action:@selector(press:)];
+    lp.minimumPressDuration = 0; lp.cancelsTouchesInView = NO; lp.delaysTouchesEnded = NO;
+    lp.delegate = [MPFloatJelly shared];
+    [c addGestureRecognizer:lp];
+}
+
+// Music's own gray circle on a top button goes away; the glyph stays (white).
+static const void *kNoEffect = &kNoEffect;
+static void StripMusicCircle(UIView *c) {
+    ClearCircles(c, 0);
+    if (c.backgroundColor && CGColorGetAlpha(c.backgroundColor.CGColor) > 0.01) { objc_setAssociatedObject(c, kClearedBG, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); c.backgroundColor = UIColor.clearColor; }
+    NSMutableArray *stack = [NSMutableArray arrayWithArray:c.subviews];
+    int guard = 0;
+    while (stack.count && guard++ < 200) {
+        UIView *s = stack.lastObject; [stack removeLastObject];
+        if ([s isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *ev = (UIVisualEffectView *)s;
+            if (ev.layer.mask) ev.layer.mask = nil;       // 1.0.3 masked it, which hid the glyph inside
+            if (ev.effect) { ev.effect = nil; objc_setAssociatedObject(ev, kNoEffect, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+        }
+        [stack addObjectsFromArray:s.subviews];
+    }
+    if (![c.tintColor isEqual:UIColor.whiteColor]) c.tintColor = UIColor.whiteColor;
+}
+
+static UIView *FloatGlassIn(id owner, UIView *host, UIView *below, const void *key) {
+    UIView *g = objc_getAssociatedObject(owner, key);
     if (!g || g.superview != host) {
         [g removeFromSuperview];
         UIVisualEffectView *e = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
@@ -2573,61 +2658,109 @@ static void GlassCircleFor(UIControl *c, CGFloat D) {
         e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
         e.tag = FLOATGLASS_TAG;
         g = e;
-        objc_setAssociatedObject(c, kFloatGlass, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        if (!objc_getAssociatedObject(c, kSwipeAdded)) {
-            objc_setAssociatedObject(c, kSwipeAdded, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPFloatJelly shared] action:@selector(press:)];
-            lp.minimumPressDuration = 0; lp.cancelsTouchesInView = NO; lp.delaysTouchesEnded = NO;
-            lp.delegate = [MPFloatJelly shared];
-            [c addGestureRecognizer:lp];
-        }
+        objc_setAssociatedObject(owner, key, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    if ([host.subviews indexOfObject:g] == NSNotFound || [host.subviews indexOfObject:g] > [host.subviews indexOfObject:c]) [host insertSubview:g belowSubview:c];
-    // Music's own gray circle goes away.
-    ClearCircles(c, 0);
-    if (c.backgroundColor && CGColorGetAlpha(c.backgroundColor.CGColor) > 0.01) { objc_setAssociatedObject(c, kClearedBG, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); c.backgroundColor = UIColor.clearColor; }
-    for (UIView *s in c.subviews) if ([s isKindOfClass:[UIVisualEffectView class]] && !s.layer.mask) s.layer.mask = [CALayer layer];
+    NSUInteger gi = [host.subviews indexOfObject:g], bi = [host.subviews indexOfObject:below];
+    if (bi != NSNotFound && (gi == NSNotFound || gi > bi)) [host insertSubview:g belowSubview:below];
+    return g;
+}
+
+static CGPoint GlyphCenter(UIView *c, UIView *host) {
     UIView *glyph = GlyphIn(c, 0);
-    CGPoint ctr = glyph ? [glyph.superview convertPoint:glyph.center toView:host] : c.center;
-    if (CGAffineTransformIsIdentity(g.transform)) {
-        CGRect f = CGRectMake(round(ctr.x - D / 2), round(ctr.y - D / 2), D, D);
-        if (!CGRectEqualToRect(g.frame, f)) g.frame = f;
-    }
-    if (g.layer.cornerRadius != D / 2) g.layer.cornerRadius = D / 2;
+    return glyph ? [glyph.superview convertPoint:glyph.center toView:host] : [c.superview convertPoint:c.center toView:host];
+}
+
+static void SetGlassFrame(UIView *g, CGRect f) {
+    if (CGAffineTransformIsIdentity(g.transform) && !CGRectEqualToRect(g.frame, f)) g.frame = f;
+    if (g.layer.cornerRadius != f.size.height / 2) g.layer.cornerRadius = f.size.height / 2;
+}
+
+static const void *kBackGlass = &kBackGlass, *kPairGlass = &kPairGlass;
+static void GlassCircleFor(UIControl *c, CGFloat D) {
+    if (!c || !c.superview) return;
+    UIView *host = c.superview;
+    UIView *g = FloatGlassIn(c, host, c, kBackGlass);
+    AttachJelly(c, g);
+    StripMusicCircle(c);
+    CGPoint ctr = GlyphCenter(c, host);
+    SetGlassFrame(g, CGRectMake(round(ctr.x - D / 2), round(ctr.y - D / 2), D, D));
     g.hidden = c.hidden || c.alpha < 0.01;
 }
 
-// Share circle that takes the download button's place top right.
+// Share + ••• share one glass capsule, like iOS 26.
 static __weak UIView *gMoreBtn;
+static UIAction *FindShareAction(NSArray *kids) {
+    for (UIMenuElement *e in kids) {
+        if ([e isKindOfClass:[UIMenu class]]) { UIAction *a = FindShareAction(((UIMenu *)e).children); if (a) return a; }
+        else if ([e isKindOfClass:[UIAction class]]) {
+            NSString *l = e.title.lowercaseString;
+            if ([l hasPrefix:@"share"] && ![l containsString:@"lyric"] && ![l containsString:@"shareplay"] && ![l containsString:@"playlist"]) return (UIAction *)e;
+        }
+    }
+    return nil;
+}
+static UIContextMenuInteraction *MenuInteractionNear(UIView *v) {
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:v];
+    int guard = 0;
+    while (stack.count && guard++ < 60) {
+        UIView *s = stack.lastObject; [stack removeLastObject];
+        for (id i in s.interactions) if ([i isKindOfClass:[UIContextMenuInteraction class]]) return i;
+        [stack addObjectsFromArray:s.subviews];
+    }
+    for (UIView *p = v.superview; p && guard++ < 70; p = p.superview)
+        for (id i in p.interactions) if ([i isKindOfClass:[UIContextMenuInteraction class]] && p.bounds.size.width < 80) return i;
+    return nil;
+}
+static NSString *gShareDebug = @"-";
 @interface MPShare : NSObject
 + (instancetype)shared;
 - (void)tap;
 @end
-static UIAction *FindShareAction(NSArray *kids) {
-    for (UIMenuElement *e in kids) {
-        if ([e isKindOfClass:[UIMenu class]]) { UIAction *a = FindShareAction(((UIMenu *)e).children); if (a) return a; }
-        else if ([e isKindOfClass:[UIAction class]] && [e.title.lowercaseString hasPrefix:@"share"] && ![e.title.lowercaseString containsString:@"lyric"] && ![e.title.lowercaseString containsString:@"shareplay"]) return (UIAction *)e;
-    }
-    return nil;
-}
 @implementation MPShare
 + (instancetype)shared { static MPShare *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPShare new]; }); return t; }
 - (void)tap {
     UIView *more = gMoreBtn;
+    if (!more) { gShareDebug = @"no more btn"; return; }
     UIMenu *menu = nil;
-    @try { menu = [more valueForKey:@"menu"]; } @catch (__unused id e) {}
+    if ([more isKindOfClass:[UIButton class]]) menu = ((UIButton *)more).menu;
+    UIContextMenuInteraction *mi = MenuInteractionNear(more);
+    if (!menu && mi && [mi.delegate respondsToSelector:@selector(contextMenuInteraction:configurationForMenuAtLocation:)]) {
+        @try {
+            CGPoint loc = [more convertPoint:CGPointMake(CGRectGetMidX(more.bounds), CGRectGetMidY(more.bounds)) toView:mi.view];
+            UIContextMenuConfiguration *cfg = [mi.delegate contextMenuInteraction:mi configurationForMenuAtLocation:loc];
+            UIContextMenuActionProvider prov = nil;
+            @try { prov = [cfg valueForKey:@"actionProvider"]; } @catch (__unused id e) {}
+            if (prov) menu = prov(@[]);
+        } @catch (__unused id e) {}
+    }
     UIAction *a = FindShareAction(menu.children);
-    SEL perf = NSSelectorFromString(@"performWithSender:target:");
-    if (a && [a respondsToSelector:perf]) { ((void (*)(id, SEL, id, id))objc_msgSend)(a, perf, more, nil); return; }
-    // Fallback: open the ... menu (Share is in it).
-    if ([more isKindOfClass:[UIControl class]]) [(UIControl *)more sendActionsForControlEvents:UIControlEventTouchUpInside];
+    gShareDebug = [NSString stringWithFormat:@"menu=%lu mi=%d share=%@", (unsigned long)menu.children.count, mi != nil, a.title];
+    if (a) {
+        SEL perf = NSSelectorFromString(@"performWithSender:target:");
+        @try {
+            if ([a respondsToSelector:perf]) { ((void (*)(id, SEL, id, id))objc_msgSend)(a, perf, more, nil); return; }
+            void (^h)(UIAction *) = [a valueForKey:@"handler"];
+            if (h) { h(a); return; }
+        } @catch (__unused id e) {}
+    }
+    // Fallback: open the ••• menu (Share is in it).
+    SEL pres = NSSelectorFromString(@"_presentMenuAtLocation:");
+    if (mi && [mi respondsToSelector:pres]) {
+        CGPoint loc = [more convertPoint:CGPointMake(CGRectGetMidX(more.bounds), CGRectGetMidY(more.bounds)) toView:mi.view];
+        ((void (*)(id, SEL, CGPoint))objc_msgSend)(mi, pres, loc);
+    } else if ([more isKindOfClass:[UIControl class]]) [(UIControl *)more sendActionsForControlEvents:UIControlEventTouchUpInside];
 }
 @end
-static void PlaceShareCircle(UIView *dl) {
+static void PlaceSharePair(UIView *more) {
     static __weak UIButton *btn;
     UIButton *b = btn;
-    if (!dl || !dl.superview || !gRowParent) { b.hidden = YES; return; }
-    UIView *host = dl.superview;
+    static __weak UIView *pair;
+    if (!more || !more.superview) { b.hidden = YES; pair.hidden = YES; return; }
+    UIView *host = more.superview;
+    // The single circle from outside albums goes away; the capsule replaces it.
+    [(UIView *)objc_getAssociatedObject(more, kBackGlass) setHidden:YES];
+    UIView *g = FloatGlassIn(more, host, more, kPairGlass);
+    pair = g;
     if (!b || b.superview != host) {
         [b removeFromSuperview];
         b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -2637,16 +2770,28 @@ static void PlaceShareCircle(UIView *dl) {
         [host addSubview:b];
         btn = b;
     }
-    b.hidden = NO;
-    CGRect f = CGRectMake(CGRectGetMidX(dl.frame) - 22, CGRectGetMidY(dl.frame) - 22, 44, 44);
-    if (!CGRectEqualToRect(b.frame, f)) b.frame = f;
-    [host bringSubviewToFront:b];
-    GlassCircleFor((UIControl *)b, 44);
+    AttachJelly(b, g);
+    AttachJelly(more, g);
+    StripMusicCircle(more);
+    CGPoint c = GlyphCenter(more, host);
+    CGFloat H = 44, half = 50;
+    b.hidden = NO; g.hidden = NO;
+    CGRect bf = CGRectMake(round(c.x - half - H / 2), round(c.y - H / 2), H, H);
+    if (!CGRectEqualToRect(b.frame, bf)) b.frame = bf;
+    if ([host.subviews indexOfObject:b] < [host.subviews indexOfObject:g]) [host insertSubview:b aboveSubview:g];
+    SetGlassFrame(g, CGRectMake(round(c.x - half - H / 2 - 4), round(c.y - H / 2), half + H + 8, H));
+}
+
+// Music's top download button is hidden for good (still tappable from our row).
+static void HideTopDownload(UIView *dl) {
+    if (dl && !dl.layer.mask) dl.layer.mask = [CALayer layer];
 }
 
 static BOOL IsMusicRed(UIColor *c);
 // Album page: red labels / buttons (artist name, "Show Complete Album") -> white.
+static NSString *gRedDebug = @"-";
 static void RedToWhite(UIView *rowParent) {
+    __block int fixed = 0;
     UIView *root = rowParent;
     for (UIView *p = rowParent; p; p = p.superview) if ([p isKindOfClass:[UIScrollView class]]) { root = p; break; }
     NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
@@ -2656,7 +2801,12 @@ static void RedToWhite(UIView *rowParent) {
         if (v.hidden) continue;
         if ([v isKindOfClass:[UILabel class]]) {
             UILabel *l = (UILabel *)v;
-            if (IsMusicRed(l.textColor)) l.textColor = UIColor.whiteColor;
+            if ([l.text containsString:@"Complete"]) {
+                CGFloat r = 0, g = 0, b = 0, a = 0;
+                [[l.textColor resolvedColorWithTraitCollection:l.traitCollection] getRed:&r green:&g blue:&b alpha:&a];
+                gRedDebug = [NSString stringWithFormat:@"%@ rgb=%.2f,%.2f,%.2f %@", NSStringFromClass([l class]), r, g, b, NSStringFromClass([l.superview class])];
+            }
+            if (IsMusicRed(l.textColor)) { l.textColor = UIColor.whiteColor; fixed++; }
             NSAttributedString *as = l.attributedText;
             if (as.length) {
                 __block BOOL red = NO;
@@ -2719,18 +2869,19 @@ static void FloatTick(UIWindow *w) {
         else if ([d containsString:@"chevron.left"] || [d containsString:@"chevron.backward"] || (x < W / 3 && !back)) back = holder;
         else if (x > W / 2) dl = holder;   // download in any state: arrow, progress (stop), checkmark
     }
-    if ([back isKindOfClass:[UIControl class]] || back) GlassCircleFor((UIControl *)back, 44);
-    if (more) GlassCircleFor((UIControl *)more, 44);
+    if (back) GlassCircleFor((UIControl *)back, 44);
     // Mid-download Music swaps in a progress view with no image; keep the last one we caught.
     if (!dl && gSlotView && gSlotView.window == w) {
         CGRect sf = [gSlotView convertRect:gSlotView.bounds toView:nil];
         if (CGRectGetMidY(sf) < band && CGRectGetMidX(sf) > W / 2) dl = gSlotView;
     }
     gMoreBtn = more;
-    if (dl && gRowParent && gRowParent.window == w) { gSlotView = dl; PlaceShareCircle(dl); }
-    else PlaceShareCircle(nil);
+    BOOL album = gRowParent && gRowParent.window == w;
+    if (dl && album) { gSlotView = dl; HideTopDownload(dl); }
+    PlaceSharePair(album ? more : nil);
+    if (!album && more) GlassCircleFor((UIControl *)more, 44);
     if (gRowParent && gRowParent.window == w) RedToWhite(gRowParent);
-    gFloatDebug = [NSString stringWithFormat:@"%lu icons back=%@ more=%@ dl=%@ | %@", (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
+    gFloatDebug = [NSString stringWithFormat:@"share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
 }
 
 // Music's top buttons (Swift SymbolButton): when the download one changes state
