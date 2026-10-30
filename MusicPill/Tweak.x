@@ -1,4 +1,5 @@
-// MusicPill 1.0.42 - made by nano
+// MusicPill 1.0.43 - made by nano
+// 1.0.43: Library's Edit/Done text made clear at the source (no flash at all).
 // 1.0.42: closing always lands at the bottom pill (a stale frame sent it up).
 // 1.0.41: no frame of the player after swipe-down close, Music's Edit/Done is
 //         hidden inside the bar's layout pass (no flash when tapping Edit).
@@ -477,9 +478,27 @@ static void FixTabItems(UITabBar *tb) {
 }
 %end
 
+// Library's Edit / Done text is invisible at the source (its colour), so no
+// swap or animation can ever show it; our glass button stands in for it.
+static void InvisibleBarItem(UIBarButtonItem *it) {
+    if (!it || it.customView) return;
+    NSDictionary *clear = @{NSForegroundColorAttributeName: UIColor.clearColor};
+    UIControlState states[4] = { UIControlStateNormal, UIControlStateHighlighted, UIControlStateDisabled, UIControlStateSelected };
+    for (int i = 0; i < 4; i++) [it setTitleTextAttributes:clear forState:states[i]];
+    it.tintColor = UIColor.clearColor;
+}
+static void InvisibleLibraryEdit(UINavigationItem *ni) {
+    if (![ni.title isEqualToString:@"Library"]) return;
+    for (UIBarButtonItem *it in ni.rightBarButtonItems) InvisibleBarItem(it);
+}
 %hook UINavigationItem
 - (void)setTitle:(NSString *)title { %orig(IsListenNow(title) ? @"Home" : title); }
+- (void)setRightBarButtonItems:(NSArray *)items animated:(BOOL)animated { %orig; @try { InvisibleLibraryEdit(self); } @catch (__unused id e) {} }
+- (void)setRightBarButtonItem:(UIBarButtonItem *)item animated:(BOOL)animated { %orig; @try { InvisibleLibraryEdit(self); } @catch (__unused id e) {} }
+- (void)setRightBarButtonItems:(NSArray *)items { %orig; @try { InvisibleLibraryEdit(self); } @catch (__unused id e) {} }
+- (void)setRightBarButtonItem:(UIBarButtonItem *)item { %orig; @try { InvisibleLibraryEdit(self); } @catch (__unused id e) {} }
 %end
+
 
 %hook UIViewController
 - (void)setTitle:(NSString *)title { %orig(IsListenNow(title) ? @"Home" : title); }
@@ -1004,7 +1023,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.42 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.43 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2053,7 +2072,16 @@ static UIControl *HideMusicEdit(UINavigationBar *nb, BOOL *editingOut);
 %end
 
 %hook UIBarButtonItem
-- (void)setTintColor:(UIColor *)color { %orig(gNavGlass ? UIColor.whiteColor : color); }
+- (void)setTintColor:(UIColor *)color {
+    if ([color isEqual:UIColor.clearColor]) { %orig; return; }   // Library's invisible Edit
+    if ([self.tintColor isEqual:UIColor.clearColor]) return;
+    %orig(gNavGlass ? UIColor.whiteColor : color);
+}
+- (void)setTitle:(NSString *)title {
+    %orig;
+    // editButtonItem flips Edit <-> Done on the same item: keep it invisible.
+    if ([self.tintColor isEqual:UIColor.clearColor]) { @try { InvisibleBarItem(self); } @catch (__unused id e) {} }
+}
 %end
 
 %hook UITabBar
@@ -3010,6 +3038,7 @@ static __weak UIBarButtonItem *gEditItem;
 @end
 #define EDIT_TAG 0x4D504544
 static char kEditSym;
+static void InvisibleBarItem(UIBarButtonItem *it);
 static UIControl *HideMusicEdit(UINavigationBar *nb, BOOL *editingOut) {
     UIControl *ctl = nil;
     BOOL editing = NO;
@@ -3038,6 +3067,7 @@ static UIControl *HideMusicEdit(UINavigationBar *nb, BOOL *editingOut) {
 static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidden, BOOL isLibrary) {
     UIButton *eb = (UIButton *)[nb viewWithTag:EDIT_TAG];
     if (!isLibrary) { eb.hidden = YES; return; }
+    for (UIBarButtonItem *it in nb.topItem.rightBarButtonItems) if (!it.customView && ![it.tintColor isEqual:UIColor.clearColor]) InvisibleBarItem(it);
     BOOL editing = NO;
     UIControl *ctl = HideMusicEdit(nb, &editing);
     if (!ctl) { eb.hidden = YES; return; }
