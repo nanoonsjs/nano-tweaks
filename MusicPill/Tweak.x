@@ -1,4 +1,6 @@
-// MusicPill 1.2.7 - made by nano
+// MusicPill 1.2.8 - made by nano
+// 1.2.8: follows Increase Contrast: off = white star, Music's own artist colour,
+//         see-through queue pill row; on = pink accents, black row (as before).
 // 1.2.7: hooks on Music's own button classes retry until they exist (cold start
 //         after a reboot).
 // 1.2.6: animated cover stops when the next song is from another album (song
@@ -1207,7 +1209,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.8 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5212,6 +5214,11 @@ static void PositionQueueRow(UIScrollView *list) {
     if (!CGRectEqualToRect(row.frame, rf)) row.frame = rf;
     if ([host.subviews indexOfObject:row] < [host.subviews indexOfObject:list]) [host insertSubview:row aboveSubview:list];
     if (list.hidden || list.alpha < 0.05) row.hidden = YES;
+    {
+        // Increase Contrast: solid black behind the pills; otherwise see-through.
+        UIColor *want = HighContrast() ? UIColor.blackColor : UIColor.clearColor;
+        if (![row.backgroundColor isEqual:want]) row.backgroundColor = want;
+    }
     LayoutPillButtons(row);
 
     // Slide the list so its first header ("Continue Playing") starts below the pills.
@@ -5305,6 +5312,7 @@ static void QueueTick(UIView *player) {
         // Solid background so the list never shows through behind the pills.
         UIColor *bg = table.backgroundColor;
         row.backgroundColor = (bg && CGColorGetAlpha(bg.CGColor) > 0.9) ? bg : UIColor.blackColor;
+        row.accessibilityHint = @"mp.queuerow";
         for (int i = 0; i < 3; i++) {
             UIButton *b = [UIButton buttonWithConfiguration:[UIButtonConfiguration filledButtonConfiguration] primaryAction:nil];
             b.tag = 11 + i;
@@ -5424,6 +5432,10 @@ static void NotPlayingBlock(UIView *mini) {
 
 // ---- Full player, iOS 26 details ----
 static UIColor *MusicPink(void) { return [UIColor colorWithRed:0.98 green:0.24 blue:0.37 alpha:1]; }
+// Music's player looks different with Increase Contrast: pink accents there;
+// otherwise iOS 26's plain look (white star, Music's own artist colour).
+static BOOL HighContrast(void) { return UIAccessibilityDarkerSystemColorsEnabled(); }
+static UIColor *StarColor(void) { return HighContrast() ? MusicPink() : UIColor.whiteColor; }
 #define PSTAR_TAG 0x4D505354
 #define LOSSGLASS_TAG 0x4D504C47
 static __weak UIView *gPlayerMore;
@@ -5530,15 +5542,21 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
         }
         if ([v isKindOfClass:[UIButton class]] && [NSStringFromClass([v.superview class]) containsString:@"Marquee"] && ViewShowing(v)) {
             objc_setAssociatedObject(((UIButton *)v).titleLabel, kKeepRed, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            if (![[(UIButton *)v titleColorForState:UIControlStateNormal] isEqual:MusicPink()]) [(UIButton *)v setTitleColor:MusicPink() forState:UIControlStateNormal];
+            if (HighContrast()) { if (![[(UIButton *)v titleColorForState:UIControlStateNormal] isEqual:MusicPink()]) [(UIButton *)v setTitleColor:MusicPink() forState:UIControlStateNormal]; }
+            else if ([[(UIButton *)v titleColorForState:UIControlStateNormal] isEqual:MusicPink()]) [(UIButton *)v setTitleColor:nil forState:UIControlStateNormal];
         }
         [st addObjectsFromArray:v.subviews];
     }
     // Artist name in Music's pink, like iOS 26.
     if (artist) {
         objc_setAssociatedObject(artist.titleLabel, kKeepRed, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        if (![[artist titleColorForState:UIControlStateNormal] isEqual:MusicPink()]) [artist setTitleColor:MusicPink() forState:UIControlStateNormal];
-        if (![artist.titleLabel.textColor isEqual:MusicPink()]) artist.titleLabel.textColor = MusicPink();
+        if (HighContrast()) {
+            if (![[artist titleColorForState:UIControlStateNormal] isEqual:MusicPink()]) [artist setTitleColor:MusicPink() forState:UIControlStateNormal];
+            if (![artist.titleLabel.textColor isEqual:MusicPink()]) artist.titleLabel.textColor = MusicPink();
+        } else {
+            objc_setAssociatedObject(artist.titleLabel, kKeepRed, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if ([[artist titleColorForState:UIControlStateNormal] isEqual:MusicPink()]) [artist setTitleColor:nil forState:UIControlStateNormal];
+        }
     }
     // ••• without its circle; a favourite star just left of it.
     if (more) {
@@ -5555,7 +5573,7 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
             if (mb.configuration && mb.configuration.background.backgroundColor && ![mb.configuration.background.backgroundColor isEqual:UIColor.clearColor]) {
                 UIButtonConfiguration *c = mb.configuration; c.background.backgroundColor = UIColor.clearColor; mb.configuration = c;
             }
-            if (mb.tintColor && ![mb.tintColor isEqual:MusicPink()]) mb.tintColor = MusicPink();
+            if (HighContrast() && mb.tintColor && ![mb.tintColor isEqual:MusicPink()]) mb.tintColor = MusicPink();
         }
         UIView *dots = GlyphIn(more, 0);
         if (dots && fabs(dots.transform.a - 1.35) > 0.01) dots.transform = CGAffineTransformMakeScale(1.35, 1.35);
@@ -5572,7 +5590,7 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
             for (UIView *o in [player.subviews copy]) if (o.tag == PSTAR_TAG) [o removeFromSuperview];
             star = [UIButton buttonWithType:UIButtonTypeCustom];
             star.tag = PSTAR_TAG;
-            star.tintColor = MusicPink();
+            star.tintColor = StarColor();
             [star addTarget:[MPSongStar shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
             star.alpha = 0;   // shown once placed next to •••
             [host addSubview:star];
@@ -5584,6 +5602,7 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
         if (!CGRectEqualToRect(star.frame, sf)) star.frame = sf;
         if (host.subviews.lastObject != star) [host bringSubviewToFront:star];
         gPlayerStar = star;
+        if (![star.tintColor isEqual:StarColor()]) star.tintColor = StarColor();
         static NSString *lastSong;
         if (gNowTitle && ![gNowTitle isEqualToString:lastSong]) {
             lastSong = gNowTitle;
