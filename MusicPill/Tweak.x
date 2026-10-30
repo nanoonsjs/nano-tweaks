@@ -1,4 +1,8 @@
-// MusicPill 1.0.16 - made by nano
+// MusicPill 1.0.17 - made by nano
+// 1.0.17: artist header fade runs solid black past the photo (no light line),
+//         softer status blur, Search page: capsule glass search field, title a
+//         bit higher, account picture on the right, no "Browse Categories",
+//         rounder category cards.
 // 1.0.16: artist header lives in the page's header cell and is removed when the
 //         page goes away (it stayed on Search after going back).
 // 1.0.15: favorite state read right (star.circle.fill), Music's hidden play no
@@ -931,7 +935,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.16 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.17 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1895,6 +1899,14 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
 }
 %end
 
+static void StyleSearchBar(UISearchBar *sb);
+%hook UISearchBar
+- (void)didMoveToWindow {
+    %orig;
+    if (self.window) { @try { StyleSearchBar(self); } @catch (__unused id e) {} }
+}
+%end
+
 %hook UINavigationBar
 // White top icons; Music sets its red tint per page, which flashed red.
 - (void)setTintColor:(UIColor *)color { %orig(gNavGlass ? UIColor.whiteColor : color); }
@@ -2623,9 +2635,136 @@ static UIView *GlassBelow(UIView *glyph) {
     return g;
 }
 
+static void MaskOut(UIView *v);
+// ---- Search page, iOS 26 look ----
+static NSString *gSearchDebug = @"-";
+// A taller capsule search field (the background image sets its height).
+static void StyleSearchBar(UISearchBar *sb) {
+    static const void *kStyled = &kStyled;
+    if (objc_getAssociatedObject(sb, kStyled)) return;
+    objc_setAssociatedObject(sb, kStyled, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGFloat H = 46;
+    UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(H + 2, H)];
+    UIImage *img = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        UIBezierPath *p = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0.5, 0.5, H + 1, H - 1) cornerRadius:(H - 1) / 2];
+        [[UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94] setFill]; [p fill];
+        [[UIColor colorWithWhite:1 alpha:0.16] setStroke]; p.lineWidth = 0.75; [p stroke];
+    }];
+    img = [img resizableImageWithCapInsets:UIEdgeInsetsMake(H / 2 - 1, H / 2, H / 2 - 1, H / 2)];
+    [sb setSearchFieldBackgroundImage:img forState:UIControlStateNormal];
+    sb.searchTextField.backgroundColor = UIColor.clearColor;
+    sb.searchTextField.font = [UIFont systemFontOfSize:18];
+    sb.searchTextPositionAdjustment = UIOffsetMake(4, 0);
+    [sb setPositionAdjustment:UIOffsetMake(6, 0) forSearchBarIcon:UISearchBarIconSearch];
+}
+
+// Music's account picture (from the Listen Now / Home bar) for the Search title.
+static UIBarButtonItem *AccountItem(UIWindow *w) {
+    UIViewController *root = w.rootViewController;
+    NSMutableArray *vcs = [NSMutableArray array];
+    UITabBarController *tbc = nil;
+    for (UIViewController *v = root; v; v = v.childViewControllers.firstObject) { if ([v isKindOfClass:[UITabBarController class]]) { tbc = (UITabBarController *)v; break; } if (!v.childViewControllers.count) break; }
+    for (UIViewController *v in tbc.viewControllers) {
+        if ([v isKindOfClass:[UINavigationController class]]) [vcs addObjectsFromArray:((UINavigationController *)v).viewControllers];
+        else [vcs addObject:v];
+    }
+    for (UIViewController *v in vcs) {
+        for (UIBarButtonItem *it in v.navigationItem.rightBarButtonItems) {
+            if (it.customView || it.image) return it;
+        }
+    }
+    return nil;
+}
+static UIImage *ImageInView(UIView *v) {
+    if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image && v.bounds.size.width >= 16) return ((UIImageView *)v).image;
+    if ([v isKindOfClass:[UIButton class]] && [(UIButton *)v currentImage]) return [(UIButton *)v currentImage];
+    for (UIView *s in v.subviews) { UIImage *i = ImageInView(s); if (i) return i; }
+    return nil;
+}
+@interface MPAvatar : NSObject
++ (instancetype)shared;
+@end
+static __weak UIBarButtonItem *gAccountItem;
+@implementation MPAvatar
++ (instancetype)shared { static MPAvatar *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPAvatar new]; }); return t; }
+- (void)tap:(UIButton *)b {
+    UIBarButtonItem *it = gAccountItem;
+    UIView *cv = it.customView;
+    UIControl *c = [cv isKindOfClass:[UIControl class]] ? (UIControl *)cv : FirstControl(cv, 0);
+    if (c) { Forward(c); return; }
+    if (it.target && it.action) { ((void (*)(id, SEL, id))objc_msgSend)(it.target, it.action, it); }
+}
+@end
+#define AVATAR_TAG 0x4D504156
+static void SearchPage(UINavigationBar *nb) {
+    BOOL isSearch = [nb.topItem.title isEqualToString:@"Search"];
+    UIView *large = nil;
+    for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"LargeTitle"]) large = s;
+    UIView *av = [large viewWithTag:AVATAR_TAG];
+    if (!isSearch) { av.hidden = YES; return; }
+    // Title a little higher.
+    UILabel *title = nil;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:large ?: nb];
+    int gd = 0;
+    while (st.count && gd++ < 60) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if ([v isKindOfClass:[UILabel class]] && [((UILabel *)v).text isEqualToString:@"Search"]) { title = (UILabel *)v; break; }
+        [st addObjectsFromArray:v.subviews];
+    }
+    if (title && fabs(title.transform.ty + 10) > 0.5) title.transform = CGAffineTransformMakeTranslation(0, -10);
+    // Account picture on the right.
+    UIBarButtonItem *it = AccountItem(nb.window);
+    gAccountItem = it;
+    UIImage *img = it.customView ? ImageInView(it.customView) : it.image;
+    if (large && img) {
+        UIButton *b = (UIButton *)av;
+        if (!b) {
+            b = [UIButton buttonWithType:UIButtonTypeCustom];
+            b.tag = AVATAR_TAG;
+            b.clipsToBounds = YES;
+            b.layer.borderWidth = 1.5; b.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.25].CGColor;
+            b.imageView.contentMode = UIViewContentModeScaleAspectFill;
+            [b addTarget:[MPAvatar shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+            [large addSubview:b];
+        }
+        if ([b imageForState:UIControlStateNormal] != img) [b setImage:img forState:UIControlStateNormal];
+        CGFloat D = 46;
+        CGFloat cy = title ? CGRectGetMidY([title convertRect:title.bounds toView:large]) : large.bounds.size.height / 2;
+        CGRect f = CGRectMake(large.bounds.size.width - 18 - D, round(cy - D / 2), D, D);
+        if (!CGRectEqualToRect(b.frame, f)) { b.frame = f; b.layer.cornerRadius = D / 2; }
+        b.hidden = NO;
+    }
+    // "Browse Categories" goes, category cards get iOS 26 rounding.
+    UIResponder *r = nb;
+    while (r && ![r isKindOfClass:[UINavigationController class]]) r = r.nextResponder;
+    UIView *page = ((UINavigationController *)r).topViewController.view;
+    int cards = 0;
+    if (page) {
+        NSMutableArray *s2 = [NSMutableArray arrayWithObject:page];
+        int g2 = 0;
+        while (s2.count && g2++ < 2500) {
+            UIView *v = s2.lastObject; [s2 removeLastObject];
+            if ([v isKindOfClass:[UILabel class]]) {
+                if ([((UILabel *)v).text isEqualToString:@"Browse Categories"]) MaskOut(v);
+                continue;
+            }
+            if ([v isKindOfClass:[UICollectionViewCell class]] && v.bounds.size.width > 120 && v.bounds.size.height > 80) {
+                UIView *cv = ((UICollectionViewCell *)v).contentView;
+                if (cv.layer.cornerRadius != 22) { cv.layer.cornerRadius = 22; cv.layer.cornerCurve = kCACornerCurveContinuous; cv.clipsToBounds = YES; }
+                for (UIView *s in cv.subviews) if (s.layer.cornerRadius > 0 && s.layer.cornerRadius < 22) { s.layer.cornerRadius = 22; s.layer.cornerCurve = kCACornerCurveContinuous; }
+                cards++;
+                continue;
+            }
+            [s2 addObjectsFromArray:v.subviews];
+        }
+    }
+    gSearchDebug = [NSString stringWithFormat:@"title=%d avatar=%d(%@) cards=%d", title != nil, img != nil, it ? NSStringFromClass([it.customView class]) : @"none", cards];
+}
+
 static void NavTick(UINavigationBar *nb) {
     if (!nb || !nb.window) return;
     if (!gNavGlass) { RemoveGlass(nb, 0); gNavDebug = @"off"; return; }
+    @try { SearchPage(nb); } @catch (__unused id e) {}
     if (![nb.tintColor isEqual:UIColor.whiteColor]) nb.tintColor = UIColor.whiteColor;
     // No gray bar background and no small centered title (e.g. "Library") when
     // scrolled; the big title in the page stays.
@@ -3305,8 +3444,8 @@ static void ArtistTick(UIView *play) {
         ov.tag = ARTIST_TAG;
         CAGradientLayer *gl = [CAGradientLayer layer];
         gl.name = @"mp.fade";
-        gl.colors = @[(id)[UIColor colorWithWhite:0 alpha:0].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.92].CGColor];
-        gl.locations = @[@0, @0.45, @1];
+        gl.colors = @[(id)[UIColor colorWithWhite:0 alpha:0].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor, (id)[UIColor colorWithWhite:0 alpha:1].CGColor];
+        gl.locations = @[@0, @(0.45 * OH / (OH + 24)), @(OH / (OH + 24))];
         [ov.layer addSublayer:gl];
         UILabel *l = [UILabel new];
         l.tag = 1; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.whiteColor;
@@ -3333,7 +3472,8 @@ static void ArtistTick(UIView *play) {
     if (container.subviews.lastObject != ov) [container bringSubviewToFront:ov];
     CGRect pf = [play convertRect:play.bounds toView:container], lf = [name convertRect:name.bounds toView:container];
     CGFloat bottom = MAX(CGRectGetMaxY(pf), CGRectGetMaxY(lf)) + 12, W = container.bounds.size.width;
-    CGRect of = CGRectMake(0, bottom - OH, W, OH);
+    CGRect of = CGRectMake(0, bottom - OH, W, OH + 24);   // 24pt of black past the photo's edge
+    if (container.clipsToBounds) container.clipsToBounds = NO;
     if (!CGRectEqualToRect(ov.frame, of)) {
         ov.frame = of;
         for (CALayer *l in ov.layer.sublayers) if ([l.name isEqualToString:@"mp.fade"]) { [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = ov.bounds; [CATransaction commit]; }
@@ -3651,6 +3791,7 @@ static void StatusBlur(UIWindow *w) {
         [w addSubview:v];
     }
     v.hidden = NO;
+    if (v.alpha != 0.7) v.alpha = 0.7;
     CGRect f = CGRectMake(0, 0, w.bounds.size.width, H);
     if (!CGRectEqualToRect(v.frame, f)) { v.frame = f; v.layer.mask.frame = v.bounds; }
     UIView *dbg = [w viewWithTag:DEBUG_TAG];
@@ -3717,7 +3858,7 @@ static void FloatTick(UIWindow *w) {
     if (artist && more && more != favMore) { favMore = more; @try { RefreshArtistFav(); } @catch (__unused id e) {} }
     if (!album && !artist && more) GlassCircleFor((UIControl *)more, TOPBTN);
     if (gRowParent && gRowParent.window == w) RedToWhite(gRowParent);
-    gFloatDebug = [NSString stringWithFormat:@"artist: %@ | share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gArtistDebug, gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
+    gFloatDebug = [NSString stringWithFormat:@"search: %@ | artist: %@ | share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gSearchDebug, gArtistDebug, gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
 }
 
 // Music's top buttons (Swift SymbolButton): when the download one changes state
