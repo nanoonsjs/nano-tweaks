@@ -1,4 +1,7 @@
-// MusicPill 0.9.9 - made by nano
+// MusicPill 1.0.0 - made by nano
+// 1.0.0: the Favorited / Unfavorited pop-up is the small iOS 26 one: a glass
+//        capsule above the pill with a small star (filled) or crossed-out
+//        star and the word, instead of Music's big square.
 // 0.9.9: the top-row tile fix now runs on every view class of the menu (the
 //        tiles aren't collection cells), bigger icons with the title centered
 //        under them; the "Loved" / "Unloved" pop-up says "Favorited" /
@@ -847,7 +850,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.9 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2256,32 +2259,67 @@ static BOOL IsHeaderTitle(NSString *s) {
     return [s isKindOfClass:[NSString class]] && ([s isEqualToString:@"Play"] || [s isEqualToString:@"Shuffle"]);
 }
 
+// iOS 26 style pop-up: Music's big square HUD is hidden, a small glass capsule
+// with a star and the word shows above the pill instead.
+static void ShowFavToast(UILabel *label, BOOL fav) {
+    UIWindow *w = label.window ?: gLastTabBar.window;
+    if (!w) return;
+    // Hide Music's HUD box (the label's biggest ancestor smaller than the screen).
+    UIView *box = nil;
+    for (UIView *p = label.superview; p && p != w; p = p.superview) {
+        if (p.bounds.size.width < w.bounds.size.width * 0.9 && p.bounds.size.height < w.bounds.size.height * 0.7) box = p;
+        else break;
+    }
+    if (box) { box.layer.mask = [CALayer layer]; }
+    static CFTimeInterval last; static NSString *lastKind;
+    NSString *kind = fav ? @"f" : @"u";
+    if (CACurrentMediaTime() - last < 0.6 && [kind isEqualToString:lastKind]) return;
+    last = CACurrentMediaTime(); lastKind = kind;
+    static __weak UIView *current;
+    [current removeFromSuperview];
+    UIView *cap = [UIView new];
+    cap.userInteractionEnabled = NO;
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    g.clipsToBounds = YES; g.layer.cornerCurve = kCACornerCurveContinuous;
+    [cap addSubview:g];
+    UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:fav ? @"star.fill" : @"star.slash"
+                                                    withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]];
+    iv.tintColor = UIColor.whiteColor; iv.contentMode = UIViewContentModeCenter;
+    [cap addSubview:iv];
+    UILabel *l = [UILabel new];
+    l.text = fav ? @"Favorited" : @"Unfavorited";
+    l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    l.textColor = UIColor.whiteColor;
+    [cap addSubview:l];
+    CGFloat lw = ceil([l.text sizeWithAttributes:@{NSFontAttributeName: l.font}].width);
+    CGFloat H = 50, W = 22 + 24 + 12 + lw + 26;
+    // Just above the pill / bars.
+    CGFloat bottom = w.bounds.size.height - w.safeAreaInsets.bottom - 150;
+    UIView *host = [gLastTabBar.superview viewWithTag:COLLAPSE_TAG];
+    for (UIView *v in host.subviews) if ([v isKindOfClass:NSClassFromString(@"MPMiniPill")] && !v.hidden) bottom = [v convertRect:v.bounds toView:w].origin.y - 14;
+    cap.frame = CGRectMake(round((w.bounds.size.width - W) / 2), bottom - H, W, H);
+    g.frame = cap.bounds; g.layer.cornerRadius = H / 2;
+    iv.frame = CGRectMake(22, 0, 24, H);
+    l.frame = CGRectMake(22 + 24 + 12, 0, lw, H);
+    [w addSubview:cap];
+    current = cap;
+    cap.alpha = 0; cap.transform = CGAffineTransformMakeScale(0.85, 0.85);
+    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0.5 options:0 animations:^{
+        cap.alpha = 1; cap.transform = CGAffineTransformIdentity;
+    } completion:nil];
+    [UIView animateWithDuration:0.3 delay:1.6 options:0 animations:^{
+        cap.alpha = 0; cap.transform = CGAffineTransformMakeScale(0.9, 0.9);
+    } completion:^(BOOL d) { [cap removeFromSuperview]; }];
+}
+
 %hook UILabel
 - (void)setText:(NSString *)text {
     NSString *mapped = MapQueueText(text);
     %orig(mapped);
     if (mapped != text && ([mapped isEqualToString:@"Favorited"] || [mapped isEqualToString:@"Unfavorited"])) {
-        __weak UILabel *weak = self;
         BOOL fav = [mapped isEqualToString:@"Favorited"];
-        void (^swap)(void) = ^{
-            UILabel *me = weak; UIView *box = me.superview.superview ?: me.superview;
-            NSMutableArray *stack = [NSMutableArray arrayWithObject:box ?: [UIView new]];
-            int guard = 0;
-            while (stack.count && guard++ < 60) {
-                UIView *v = stack.lastObject; [stack removeLastObject];
-                if ([v isKindOfClass:[UIImageView class]] && v != (id)me) {
-                    UIImageView *iv = (UIImageView *)v;
-                    NSString *want = fav ? @"star.fill" : @"star";
-                    if (![iv.accessibilityIdentifier isEqualToString:want]) {
-                        iv.accessibilityIdentifier = want;
-                        iv.image = [UIImage systemImageNamed:want withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:MAX(13, iv.bounds.size.height * 0.75) weight:UIImageSymbolWeightSemibold]];
-                    }
-                }
-                [stack addObjectsFromArray:v.subviews];
-            }
-        };
-        swap();
-        dispatch_async(dispatch_get_main_queue(), swap);
+        __weak UILabel *weak = self;
+        dispatch_async(dispatch_get_main_queue(), ^{ @try { ShowFavToast(weak, fav); } @catch (__unused id e) {} });
     }
     if (gAlbum && IsHeaderTitle(mapped) && self.window) { @try { PreHide(self); } @catch (__unused id e) {} }
 }
