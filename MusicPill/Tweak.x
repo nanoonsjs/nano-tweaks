@@ -1,4 +1,7 @@
-// MusicPill 0.9.2 - made by nano
+// MusicPill 0.9.3 - made by nano
+// 0.9.3: closing keeps the player's shape (scales down and folds into the
+//        pill instead of squashing), Music's own swipe-down is switched off
+//        everywhere on the player, and nothing else can close it mid-drag.
 // 0.9.2: no flash of the full player when a swipe-down closes it (the player
 //        is hidden before its size is reset, not after).
 // 0.9.1: swipe-down to close follows your finger (the player slides, shrinks
@@ -126,6 +129,7 @@ static NSString *gDismissDebug = @"-";
 static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from);
 static void MaybeInstallDrag(UIViewController *vc);
 static CGFloat gCloseVelocity;   // finger speed when a drag closes the player
+static BOOL gDragging, gOurClose;
 static void SetUnclipped(UIView *mini, UIView *root, BOOL on);
 static __weak id gPillObj;
 static NSString *gCollapseDebug = @"-";
@@ -332,6 +336,8 @@ static void FixTabItems(UITabBar *tb) {
                   ([cn containsString:@"Player"] || [cn containsString:@"NowPlaying"]);
     if (animated && root.presentedViewController == presented) gDismissDebug = cn;
     if (!player || !gCollapse || !gRound || !gLastTabBar || gLastTabBar.window != win) { %orig; return; }
+    if (gDragging && !gOurClose) return;   // mid-drag: only our drag may close it
+    gOurClose = NO;
     UIView *snap = [presented.view snapshotViewAfterScreenUpdates:NO];
     CGRect from = [presented.view convertRect:presented.view.bounds toView:win];
     // Hide it before undoing the drag's shrink, so it never flashes full size.
@@ -644,7 +650,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1277,27 +1283,31 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
     if (!snap || !pill || pill.hidden) return;
     CGRect to = [pill convertRect:pill.bounds toView:win];
+    // The player keeps its shape: it scales down to the pill's width and folds
+    // its height into the pill while gliding there.
     UIView *wrap = [[UIView alloc] initWithFrame:from];
     wrap.userInteractionEnabled = NO;
     wrap.clipsToBounds = YES;
-    wrap.layer.cornerRadius = 38;
+    wrap.layer.cornerRadius = 40;
     wrap.layer.cornerCurve = kCACornerCurveContinuous;
+    wrap.backgroundColor = [UIColor colorWithWhite:0.12 alpha:1];
     snap.frame = wrap.bounds;
-    snap.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    snap.contentMode = UIViewContentModeTop;
+    snap.autoresizingMask = UIViewAutoresizingNone;
     [wrap addSubview:snap];
     [win addSubview:wrap];
-
-    // Carry the finger's speed into the glide so it feels continuous.
+    CGFloat s = to.size.width / MAX(1, from.size.width);
+    CGFloat hInner = to.size.height / MAX(0.01, s);
     CGFloat dist = MAX(1, CGRectGetMidY(to) - CGRectGetMidY(from));
-    CGFloat v0 = MAX(0, MIN(6, gCloseVelocity / dist));
+    CGFloat v0 = MAX(0, MIN(4, gCloseVelocity / dist));
     gCloseVelocity = 0;
-    wrap.layer.cornerRadius = from.size.width < win.bounds.size.width - 1 ? 38 : 38;
-    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:v0 options:0 animations:^{
-        wrap.frame = to;
-        wrap.layer.cornerRadius = to.size.height / 2;
+    [UIView animateWithDuration:0.48 delay:0 usingSpringWithDamping:0.88 initialSpringVelocity:v0 options:0 animations:^{
+        wrap.bounds = CGRectMake(0, 0, from.size.width, hInner);
+        wrap.center = CGPointMake(CGRectGetMidX(to), CGRectGetMidY(to));
+        wrap.transform = CGAffineTransformMakeScale(s, s);
+        wrap.layer.cornerRadius = hInner / 2;
     } completion:nil];
-    [UIView animateWithDuration:0.22 delay:0.16 options:0 animations:^{ snap.alpha = 0; } completion:^(BOOL d) { [wrap removeFromSuperview]; }];
+    [UIView animateWithDuration:0.2 delay:0.1 options:0 animations:^{ snap.alpha = 0; } completion:nil];
+    [UIView animateWithDuration:0.14 delay:0.34 options:0 animations:^{ wrap.alpha = 0; } completion:^(BOOL d) { [wrap removeFromSuperview]; }];
     // The pill gives a little liquid bounce as the player lands in it.
     CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
     k.values = @[@0.92, @0.92, @1.05, @0.98, @1]; k.keyTimes = @[@0, @0.4, @0.65, @0.85, @1]; k.duration = 0.75;
@@ -1333,6 +1343,7 @@ static UIScrollView *ScrollUnder(UIView *v) {
     CGFloat H = MAX(1, v.bounds.size.height);
     CGFloat p = MIN(1, ty / H);
     if (g.state == UIGestureRecognizerStateBegan) {
+        gDragging = YES;
         v.layer.cornerCurve = kCACornerCurveContinuous;
         v.layer.masksToBounds = YES;
     }
@@ -1343,11 +1354,14 @@ static UIScrollView *ScrollUnder(UIView *v) {
         v.layer.cornerRadius = 12 + 40 * MIN(1, p * 3);
         return;
     }
+    gDragging = NO;
     CGFloat vy = [g velocityInView:v.superview].y;
     BOOL close = g.state == UIGestureRecognizerStateEnded && (ty > H * 0.22 || vy > 900) && vy > -200;
     if (close && vc) {
         gCloseVelocity = MAX(0, vy);
+        gOurClose = YES;
         [vc dismissViewControllerAnimated:YES completion:nil];
+        gOurClose = NO;
     } else {
         [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{
             v.transform = CGAffineTransformIdentity;
@@ -1372,6 +1386,18 @@ static void MaybeInstallDrag(UIViewController *vc) {
     for (UIView *p = v; p && p != win; p = p.superview)
         for (UIGestureRecognizer *g in p.gestureRecognizers)
             if ([g isKindOfClass:[UIPanGestureRecognizer class]] && ![p isKindOfClass:[UIScrollView class]]) g.enabled = NO;
+    NSMutableArray *stack = [NSMutableArray arrayWithArray:v.subviews];
+    int guard = 0;
+    while (stack.count && guard++ < 3000) {
+        UIView *s = stack.lastObject; [stack removeLastObject];
+        NSString *sn = NSStringFromClass([s class]);
+        BOOL keep = [s isKindOfClass:[UIScrollView class]] || [s isKindOfClass:[UISlider class]] || [s isKindOfClass:[UIControl class]] ||
+                    [sn containsString:@"Slider"] || [sn containsString:@"TimeControl"] || [sn containsString:@"Volume"] || [sn containsString:@"Scrub"];
+        if (!keep)
+            for (UIGestureRecognizer *g in s.gestureRecognizers)
+                if ([g isKindOfClass:[UIPanGestureRecognizer class]] && g.view == s) g.enabled = NO;
+        [stack addObjectsFromArray:s.subviews];
+    }
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:[MPPlayerDrag shared] action:@selector(pan:)];
     pan.delegate = [MPPlayerDrag shared];
     pan.maximumNumberOfTouches = 1;
