@@ -1,4 +1,6 @@
-// MusicPill 1.0.35 - made by nano
+// MusicPill 1.0.36 - made by nano
+// 1.0.36: queue pills placed right under the song row and the list slid just
+//         enough below them, no glass ever on the player's •••.
 // 1.0.35: queue pills sit under the song row again (list content inset instead
 //         of moving the list), Lossless glass only while the badge shows.
 // 1.0.34: player star closer to •••, ••• as big as the star, title/artist fade
@@ -985,7 +987,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.35 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.36 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1896,6 +1898,8 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
     else if (acc > 12) SetPillExpanded(NO);
 }
 
+static char gQueueShiftKey;
+static __weak UIView *gPlayerMoreQ;
 static const void *kNarrowSeg = &kNarrowSeg;
 #define SEG_W 236.0
 %hook UISegmentedControl
@@ -1919,12 +1923,13 @@ static void AvatarEval(void);
 - (void)setContentInset:(UIEdgeInsets)inset {
     // Queue list is slid down 54pt; add 54pt at the bottom so the last song
     // can still scroll fully into view above the trimmed edge.
-    if (objc_getAssociatedObject(self, kQueueTable)) inset.top += QUEUE_EXTRA;   // room under the pill row
+    if (objc_getAssociatedObject(self, kQueueTable)) inset.bottom += QUEUE_EXTRA;   // last song still reachable above the trimmed edge
     %orig(inset);
 }
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)event {
-    // Touch area follows what's visible: the pill band on top, nothing in the
-    // trimmed 54pt at the bottom (so the play controls stay tappable).
+    // Queue list: no touches in its trimmed bottom (play controls stay tappable).
+    NSNumber *sh = objc_getAssociatedObject(self, kQueueTable) ? objc_getAssociatedObject(self, &gQueueShiftKey) : nil;
+    if (sh && p.y >= self.bounds.origin.y + self.bounds.size.height - sh.doubleValue) return NO;
     return %orig;
 }
 - (void)setContentOffset:(CGPoint)offset {
@@ -4377,6 +4382,7 @@ static void MotionTick(UIWindow *w) {
 
 static void FloatTick(UIWindow *w) {
     @try { MotionTick(w); } @catch (__unused id e) {}
+    if (PlayerIsUp(w, NULL)) return;   // the player's ••• is not a page button
     if (!w || !gNavGlass) return;
     CGFloat top = w.safeAreaInsets.top, band = top + 80, W = w.bounds.size.width;
     // Icons in the top band (any view), then the small square-ish view holding each.
@@ -4640,19 +4646,47 @@ static CGAffineTransform QueueShift(void) { return CGAffineTransformMakeTranslat
 static void PositionQueueRow(UIScrollView *list) {
     UIView *row = QueueRowOf(list);
     UIView *host = list.superview;
-    if (!row || !host) return;
-    // The pill row sits on top of the list's first 54pt, under the song title row,
-    // and the list's content starts below it (inset). No moving the list itself.
+    UIWindow *w = list.window;
+    if (!row || !host || !w) return;
     if (row.superview != host) { [row removeFromSuperview]; [host addSubview:row]; }
-    if (!CGAffineTransformIsIdentity(list.transform) && CGAffineTransformEqualToTransform(list.transform, QueueShift())) list.transform = CGAffineTransformIdentity;
-    if (list.layer.mask && !list.layer.mask.name) list.layer.mask = nil;
-    CGRect lf = list.frame;
-    CGRect f = CGRectMake(lf.origin.x, lf.origin.y, lf.size.width, QUEUE_EXTRA);
-    if (!CGRectEqualToRect(row.frame, f)) row.frame = f;
+    // Pills go right under the song row (the ••• sits in that row), like iOS 26.
+    UIView *more = gPlayerMoreQ;
+    CGFloat anchor;
+    if (more.window == w) anchor = [more convertPoint:CGPointMake(0, more.bounds.size.height / 2) toView:nil].y + 36;
+    else anchor = [list convertPoint:CGPointMake(0, list.bounds.origin.y) toView:nil].y + 50;
+    CGRect rw = CGRectMake(0, anchor, w.bounds.size.width, QUEUE_EXTRA);
+    CGRect rf = [host convertRect:rw fromView:nil];
+    rf.origin.x = list.frame.origin.x; rf.size.width = list.frame.size.width;
+    if (!CGRectEqualToRect(row.frame, rf)) row.frame = rf;
     if ([host.subviews indexOfObject:row] < [host.subviews indexOfObject:list]) [host insertSubview:row aboveSubview:list];
     row.hidden = list.hidden || list.alpha < 0.05;
     row.alpha = list.alpha;
     LayoutPillButtons(row);
+
+    // Slide the list so its first header ("Continue Playing") starts below the pills.
+    NSNumber *shN = objc_getAssociatedObject(list, &gQueueShiftKey);
+    UIView *hdr = gQueueHeader;
+    BOOL atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 1;
+    if (!shN && hdr.window == w && atTop) {
+        CGFloat hTop = [hdr convertPoint:CGPointZero toView:nil].y - list.transform.ty;
+        CGFloat need = MAX(0, MIN(90, (anchor + QUEUE_EXTRA + 6) - (hTop - 10)));
+        shN = @(round(need));
+        objc_setAssociatedObject(list, &gQueueShiftKey, shN, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGFloat sh = shN.doubleValue;
+    if (fabs(list.transform.ty - sh) > 0.5) list.transform = CGAffineTransformMakeTranslation(0, sh);
+    if (list.clipsToBounds) list.clipsToBounds = NO;
+    // Visible: from below the pills down to the list's own (unshifted) bottom.
+    CGRect b = list.bounds;
+    CGFloat topIn = [list convertPoint:CGPointMake(0, anchor + QUEUE_EXTRA) fromView:nil].y;
+    topIn = MAX(b.origin.y, topIn);
+    CGFloat bottomIn = b.origin.y + b.size.height - sh;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    CALayer *mask = list.layer.mask;
+    if (!mask || ![mask.name isEqualToString:@"mp.queue"]) { mask = [CALayer layer]; mask.name = @"mp.queue"; mask.backgroundColor = UIColor.blackColor.CGColor; list.layer.mask = mask; }
+    CGRect mf = CGRectMake(b.origin.x, topIn, b.size.width, MAX(0, bottomIn - topIn));
+    if (!CGRectEqualToRect(mask.frame, mf)) mask.frame = mf;
+    [CATransaction commit];
 }
 
 static void UnflagQueueTable(UIScrollView *list) {
@@ -4660,8 +4694,9 @@ static void UnflagQueueTable(UIScrollView *list) {
     [QueueRowOf(list) removeFromSuperview];
     objc_setAssociatedObject(list, kQueueRowObj, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(list, kQueueTable, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    UIEdgeInsets i = list.contentInset; i.top -= QUEUE_EXTRA; list.contentInset = i;
-    if (CGAffineTransformEqualToTransform(list.transform, QueueShift())) list.transform = CGAffineTransformIdentity;
+    UIEdgeInsets i = list.contentInset; i.bottom -= QUEUE_EXTRA; list.contentInset = i;
+    list.transform = CGAffineTransformIdentity;
+    objc_setAssociatedObject(list, &gQueueShiftKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     list.layer.mask = nil;
     NSNumber *clip = objc_getAssociatedObject(list, kQueuePad);
     if (clip) list.clipsToBounds = clip.boolValue;
@@ -4706,7 +4741,7 @@ static void QueueTick(UIView *player) {
     if (!objc_getAssociatedObject(table, kQueueTable)) {
         objc_setAssociatedObject(table, kQueuePad, @(table.clipsToBounds), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(table, kQueueTable, @"shift", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        table.contentInset = table.contentInset;   // through the hook: +54 at the top
+        table.contentInset = table.contentInset;   // through the hook: +54 at the bottom
         UIView *row = [UIView new];
         row.tag = QUEUEROW_TAG;
         // Solid background so the list never shows through behind the pills.
@@ -4899,8 +4934,14 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
     }
     // ••• without its circle; a favourite star just left of it.
     if (more) {
-        gPlayerMore = more;
+        gPlayerMore = more; gPlayerMoreQ = more;
         StripMusicCircle(more);
+        const void *keys[4] = { kFloatGlass, kBackGlass, kPairGlass, kShareBtn };
+        for (int ki = 0; ki < 4; ki++) {
+            UIView *gl = objc_getAssociatedObject(more, keys[ki]);
+            if (gl) { [gl removeFromSuperview]; objc_setAssociatedObject(more, keys[ki], nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+        }
+        for (UIView *s in more.superview.subviews) if (s.tag == FLOATGLASS_TAG) s.hidden = YES;
         if ([more isKindOfClass:[UIButton class]]) {
             UIButton *mb = (UIButton *)more;
             if (mb.configuration && mb.configuration.background.backgroundColor && ![mb.configuration.background.backgroundColor isEqual:UIColor.clearColor]) {
