@@ -1857,10 +1857,6 @@ static const void *kNarrowSeg = &kNarrowSeg;
 static void ScopeEval(BOOL animated);
 static __weak UIScrollView *gScopeList;
 %hook UIScrollView
-- (void)setContentOffset:(CGPoint)o {
-    %orig;
-    if (self == gScopeList) { @try { ScopeEval(YES); } @catch (__unused id e) {} }
-}
 - (void)setContentInset:(UIEdgeInsets)inset {
     // Queue list is slid down 54pt; add 54pt at the bottom so the last song
     // can still scroll fully into view above the trimmed edge.
@@ -1880,6 +1876,7 @@ static __weak UIScrollView *gScopeList;
 - (void)setContentOffset:(CGPoint)offset {
     CGPoint old = self.contentOffset;
     %orig;
+    if (self == gScopeList) { @try { ScopeEval(YES); } @catch (__unused id e) {} }
     if (objc_getAssociatedObject(self, kQueueTable)) { @try { PositionQueueRow(self); } @catch (__unused id e) {} }
     if (!gRound) return;
     // Only the user scrolling a full page: not side-scrolling rows, not small views.
