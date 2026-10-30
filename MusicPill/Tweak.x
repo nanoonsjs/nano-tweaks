@@ -1,4 +1,7 @@
-// MusicPill 1.0.23 - made by nano
+// MusicPill 1.0.24 - made by nano
+// 1.0.24: selected Apple Music/Library pill fills its half (no gray rim),
+//         account picture remembered for launch and hidden the moment the
+//         Search page scrolls.
 // 1.0.23: account picture fully visible and a fixed size, Apple Music/Library
 //         switch has no outline and bounces when switched.
 // 1.0.22: switch animation only while searching; it's now the bottom bar's real
@@ -955,7 +958,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.23 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.24 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1878,6 +1881,8 @@ static const void *kNarrowSeg = &kNarrowSeg;
 
 static void ScopeEval(BOOL animated);
 static __weak UIScrollView *gScopeList;
+static __weak UIScrollView *gAvatarList;
+static void AvatarEval(void);
 %hook UIScrollView
 - (void)setContentInset:(UIEdgeInsets)inset {
     // Queue list is slid down 54pt; add 54pt at the bottom so the last song
@@ -1899,6 +1904,7 @@ static __weak UIScrollView *gScopeList;
     CGPoint old = self.contentOffset;
     %orig;
     if (self == gScopeList) { @try { ScopeEval(YES); } @catch (__unused id e) {} }
+    if (self == gAvatarList) { @try { AvatarEval(); } @catch (__unused id e) {} }
     if (objc_getAssociatedObject(self, kQueueTable)) { @try { PositionQueueRow(self); } @catch (__unused id e) {} }
     if (!gRound) return;
     // Only the user scrolling a full page: not side-scrolling rows, not small views.
@@ -2732,13 +2738,23 @@ static void StyleSegment(UISegmentedControl *seg) {
     if (seg.layer.cornerRadius != h / 2) seg.layer.cornerRadius = h / 2;
     if (seg.layer.borderWidth != 0) seg.layer.borderWidth = 0;
     if (!seg.clipsToBounds) seg.clipsToBounds = YES;
+    CGFloat segW = seg.numberOfSegments ? seg.bounds.size.width / seg.numberOfSegments : 0;
     for (UIView *s in seg.subviews) {
-        if (![s isKindOfClass:[UIImageView class]]) continue;
+        if (![s isKindOfClass:[UIImageView class]]) {
+            if (s.backgroundColor && CGColorGetAlpha(s.backgroundColor.CGColor) > 0.01 && ![s isKindOfClass:[UILabel class]]) s.backgroundColor = UIColor.clearColor;
+            continue;
+        }
         CGRect f = s.frame;
         if (f.size.width <= 2) { if (!s.hidden) s.hidden = YES; continue; }                       // dividers
         if (f.size.width >= seg.bounds.size.width - 4) { if (s.alpha != 0) s.alpha = 0; continue; } // Apple's gray background
-        if (f.size.height > 10 && s.layer.cornerRadius != f.size.height / 2) {                   // selected pill
-            s.layer.cornerRadius = f.size.height / 2; s.layer.cornerCurve = kCACornerCurveContinuous; s.clipsToBounds = YES;
+        if (f.size.height > 10) {                                                                // selected pill
+            CGFloat bh = s.bounds.size.height, bw = s.bounds.size.width;
+            if (s.layer.cornerRadius != bh / 2) { s.layer.cornerRadius = bh / 2; s.layer.cornerCurve = kCACornerCurveContinuous; s.clipsToBounds = YES; }
+            // Fill the whole half (UIKit insets it, which left a gray rim).
+            if (bw > 0 && bh > 0 && segW > 0 && ![s.layer animationForKeyPath:@"wx"]) {
+                CGAffineTransform want = CGAffineTransformMakeScale(segW / bw, h / bh);
+                if (!CGAffineTransformEqualToTransform(s.transform, want)) s.transform = want;
+            }
         }
     }
     for (NSUInteger i = 0; i < seg.numberOfSegments; i++)
@@ -2861,6 +2877,19 @@ static __weak UIView *gAccountView;
 }
 @end
 #define AVATAR_TAG 0x4D504156
+static __weak UIButton *gAvatarBtn;
+static void AvatarEval(void) {
+    UIButton *b = gAvatarBtn;
+    UIScrollView *list = gAvatarList;
+    if (!b || !list.window) return;
+    BOOL atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 4;
+    CGFloat want = atTop ? 1 : 0;
+    if (b.alpha == want || objc_getAssociatedObject(b, &gAvatarBtn)) return;
+    objc_setAssociatedObject(b, &gAvatarBtn, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        b.alpha = want; b.transform = atTop ? CGAffineTransformIdentity : CGAffineTransformMakeScale(0.8, 0.8);
+    } completion:^(BOOL d) { objc_setAssociatedObject(b, &gAvatarBtn, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); AvatarEval(); }];
+}
 static __weak UISegmentedControl *gScopeSeg;
 static __weak UISearchBar *gScopeBar;
 static __weak UISearchController *gScopeSC;
@@ -3017,6 +3046,33 @@ static void SearchPage(UINavigationBar *nb) {
     UIView *accView = AccountView(nb.window, &it);
     gAccountItem = it; gAccountView = accView;
     UIImage *img = accView ? ImageInView(accView) : it.image;
+    NSString *cache = [NSTemporaryDirectory() stringByAppendingPathComponent:@"musicpill_avatar.png"];
+    static UIImage *cached;
+    if (img) {
+        // Remember it, so it's there right away next launch (Home's page isn't loaded yet then).
+        if (img != cached) { cached = img; [UIImagePNGRepresentation(img) writeToFile:cache atomically:YES]; }
+    } else {
+        if (!cached) cached = [UIImage imageWithContentsOfFile:cache];
+        img = cached;
+        static BOOL triedLoad;
+        if (!triedLoad) {
+            triedLoad = YES;
+            // Load Home's first page once so Music makes its account button (needed for taps).
+            UIViewController *root = nb.window.rootViewController;
+            NSMutableArray *q = [NSMutableArray arrayWithObject:root];
+            int gq = 0;
+            while (q.count && gq++ < 50) {
+                UIViewController *v = q.firstObject; [q removeObjectAtIndex:0];
+                if ([v isKindOfClass:[UITabBarController class]]) {
+                    UIViewController *first = ((UITabBarController *)v).viewControllers.firstObject;
+                    if ([first isKindOfClass:[UINavigationController class]]) first = ((UINavigationController *)first).viewControllers.firstObject;
+                    @try { [first loadViewIfNeeded]; } @catch (__unused id e) {}
+                    break;
+                }
+                [q addObjectsFromArray:v.childViewControllers];
+            }
+        }
+    }
     if (large && img) {
         // Lives in the bar itself: the big-title strip cut off its top half.
         UIButton *b = (UIButton *)[nb viewWithTag:AVATAR_TAG];
@@ -3036,9 +3092,11 @@ static void SearchPage(UINavigationBar *nb) {
         CGRect tf = title ? [title convertRect:title.bounds toView:nb] : [large convertRect:large.bounds toView:nb];
         CGFloat cy = round(CGRectGetMinY(tf) + MIN(tf.size.height, 41) / 2);
         CGRect f = CGRectMake(nb.bounds.size.width - 18 - D, round(cy - D / 2), D, D);
-        if (!CGRectEqualToRect(b.frame, f)) { b.frame = f; b.layer.cornerRadius = D / 2; }
-        if (!CGAffineTransformIsIdentity(b.transform)) b.transform = CGAffineTransformIdentity;
-        b.alpha = large.alpha;
+        if (!CGRectEqualToRect(b.bounds, CGRectMake(0, 0, D, D)) || !CGPointEqualToPoint(b.center, CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f)))) {
+            b.bounds = CGRectMake(0, 0, D, D); b.center = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f)); b.layer.cornerRadius = D / 2;
+        }
+
+        gAvatarBtn = b;
         b.hidden = large.hidden;
     }
     // "Browse Categories" goes, category cards get iOS 26 rounding.
@@ -3055,6 +3113,7 @@ static void SearchPage(UINavigationBar *nb) {
                 if ([((UILabel *)v).text isEqualToString:@"Browse Categories"]) MaskOut(v);
                 continue;
             }
+            if ([v isKindOfClass:[UICollectionView class]] && v.bounds.size.height > 300 && !gAvatarList) gAvatarList = (UIScrollView *)v;
             if ([v isKindOfClass:[UICollectionViewCell class]] && v.bounds.size.width > 120 && v.bounds.size.height > 80) {
                 UIView *cv = ((UICollectionViewCell *)v).contentView;
                 if (cv.layer.cornerRadius != 22) { cv.layer.cornerRadius = 22; cv.layer.cornerCurve = kCACornerCurveContinuous; cv.clipsToBounds = YES; }
