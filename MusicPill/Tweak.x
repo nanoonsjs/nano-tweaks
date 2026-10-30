@@ -1,4 +1,6 @@
-// MusicPill 1.2.8 - made by nano
+// MusicPill 1.2.9 - made by nano
+// 1.2.9: Player Colors setting (Automatic / Pink / White); light mode: clear
+//         frosted glass with dark icons, readable text, light status blur.
 // 1.2.8: follows Increase Contrast: off = white star, Music's own artist colour,
 //         see-through queue pill row; on = pink accents, black row (as before).
 // 1.2.7: hooks on Music's own button classes retry until they exist (cold start
@@ -273,6 +275,13 @@
 #import <objc/message.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <AVFoundation/AVFoundation.h>
+// Light mode: clear frosted glass with dark icons; dark mode: dark glass, white icons.
+static UIColor *Dyn(UIColor *light, UIColor *dark) {
+    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) { return tc.userInterfaceStyle == UIUserInterfaceStyleDark ? dark : light; }];
+}
+static UIColor *GlassIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackColor, UIColor.whiteColor); return c; }
+static UIColor *GlassIconDim(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:0 alpha:0.55], [UIColor colorWithWhite:1 alpha:0.62]); return c; }
+static UIColor *GlassFillDyn(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:1 alpha:0.72], GlassFillDyn()); return c; }
 static UIView *GlyphIn(UIView *v, int depth);
 
 // UIKit's private live-mirror view: draws another view's current contents
@@ -368,6 +377,7 @@ static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
     return v ? [v boolValue] : def;
 }
 
+static int gPlayerStyle = 0;   // 0 = follow Increase Contrast, 1 = pink accents, 2 = standard (white)
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSString *src = nil;
@@ -382,6 +392,9 @@ static void LoadPrefs(void) {
     gNavGlass = PrefBool(file, @"navglass", YES);
     gQueueLook = PrefBool(file, @"queuelook", YES);
     gCollapse = PrefBool(file, @"collapse", YES);
+    id ps = file[@"playerstyle"];
+    if (!ps) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("playerstyle"), DOM); if (cf) ps = (__bridge_transfer id)cf; }
+    gPlayerStyle = [ps respondsToSelector:@selector(intValue)] ? [ps intValue] : 0;
 }
 
 static void Update(UITabBar *tb);
@@ -1209,7 +1222,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.8 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.9 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1459,23 +1472,23 @@ static NSString *MusicBarTitle(UIView *mini);
     _titleBox = [UIView new]; _titleBox.clipsToBounds = YES; _titleBox.userInteractionEnabled = NO;
     [self addSubview:_titleBox];
     _titleStrip = [UIView new]; [_titleBox addSubview:_titleStrip];
-    _title = [UILabel new]; _title.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; _title.textColor = UIColor.whiteColor;
+    _title = [UILabel new]; _title.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; _title.textColor = GlassIcon();
     [_titleStrip addSubview:_title];
     _title2 = [UILabel new]; _title2.font = _title.font; _title2.textColor = _title.textColor; _title2.hidden = YES;
     [_titleStrip addSubview:_title2];
     _fade = [CAGradientLayer layer];
     _fade.startPoint = CGPointMake(0, 0.5); _fade.endPoint = CGPointMake(1, 0.5);
-    _artist = [UILabel new]; _artist.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular]; _artist.textColor = [UIColor colorWithWhite:1 alpha:0.62];
+    _artist = [UILabel new]; _artist.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular]; _artist.textColor = GlassIconDim();
     [self addSubview:_artist];
     _badge = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"e.square.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightMedium]]];
-    _badge.tintColor = [UIColor colorWithWhite:1 alpha:0.62]; _badge.contentMode = UIViewContentModeCenter;
+    _badge.tintColor = GlassIconDim(); _badge.contentMode = UIViewContentModeCenter;
     [self addSubview:_badge];
     _play = [UIButton buttonWithType:UIButtonTypeSystem];
-    _play.tintColor = UIColor.whiteColor;
+    _play.tintColor = GlassIcon();
     [_play addTarget:self action:@selector(togglePlay) forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:_play];
     _next = [UIButton buttonWithType:UIButtonTypeSystem];
-    _next.tintColor = UIColor.whiteColor;
+    _next.tintColor = GlassIcon();
     [_next setImage:[UIImage systemImageNamed:@"forward.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
     [_next addTarget:self action:@selector(skipNext) forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:_next];
@@ -1683,8 +1696,8 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
     ti.image = SelectedTabImage(tb); ti.tintColor = tb.tintColor ?: UIColor.systemPinkColor;
     si.image = [UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]];
     BOOL onSearch = IsSearchItem(tb, tb.selectedItem);
-    si.tintColor = onSearch ? (tb.tintColor ?: UIColor.systemPinkColor) : UIColor.whiteColor;
-    if (onSearch) ti.tintColor = UIColor.whiteColor;
+    si.tintColor = onSearch ? (tb.tintColor ?: UIColor.systemPinkColor) : GlassIcon();
+    if (onSearch) ti.tintColor = GlassIcon();
     gCollapsed = collapse;
     UIViewAnimationOptions o = UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState;
     // Liquid squish: stretch along the motion, then settle with a little wobble.
@@ -2254,14 +2267,14 @@ static UIControl *HideMusicEdit(UINavigationBar *nb, BOOL *editingOut);
     if ([self viewWithTag:EDIT_TAG_FWD] && ![self viewWithTag:EDIT_TAG_FWD].hidden) { @try { HideMusicEdit(self, NULL); } @catch (__unused id e) {} }
 }
 // White top icons; Music sets its red tint per page, which flashed red.
-- (void)setTintColor:(UIColor *)color { %orig(gNavGlass ? UIColor.whiteColor : color); }
+- (void)setTintColor:(UIColor *)color { %orig(gNavGlass ? GlassIcon() : color); }
 %end
 
 %hook UIBarButtonItem
 - (void)setTintColor:(UIColor *)color {
     if ([color isEqual:UIColor.clearColor]) { %orig; return; }   // Library's invisible Edit
     if ([self.tintColor isEqual:UIColor.clearColor]) return;
-    %orig(gNavGlass ? UIColor.whiteColor : color);
+    %orig(gNavGlass ? GlassIcon() : color);
 }
 - (void)setTitle:(NSString *)title {
     %orig;
@@ -2858,15 +2871,15 @@ static BOOL InBars(UIView *v) {
 %hook UILabel
 - (void)tintColorDidChange {
     %orig;
-    if (gAlbum && IsMusicRed(self.textColor) && !InBars(self) && !objc_getAssociatedObject(self, kKeepRed)) self.textColor = UIColor.whiteColor;
+    if (gAlbum && IsMusicRed(self.textColor) && !InBars(self) && !objc_getAssociatedObject(self, kKeepRed)) self.textColor = UIColor.labelColor;
 }
 - (void)didMoveToSuperview {
     %orig;
-    if (gAlbum && self.superview && IsMusicRed(self.textColor) && !InBars(self) && !objc_getAssociatedObject(self, kKeepRed)) self.textColor = UIColor.whiteColor;
+    if (gAlbum && self.superview && IsMusicRed(self.textColor) && !InBars(self) && !objc_getAssociatedObject(self, kKeepRed)) self.textColor = UIColor.labelColor;
 }
 - (void)setTextColor:(UIColor *)c {
     // iOS 26: the artist name and "Show Complete Album" are white, not red.
-    if (gAlbum && IsMusicRed(c) && !InBars(self) && !objc_getAssociatedObject(self, kKeepRed)) { %orig(UIColor.whiteColor); return; }
+    if (gAlbum && IsMusicRed(c) && !InBars(self) && !objc_getAssociatedObject(self, kKeepRed)) { %orig(UIColor.labelColor); return; }
     %orig;
 }
 - (void)setText:(NSString *)text {
@@ -2883,7 +2896,7 @@ static BOOL InBars(UIView *v) {
     if (gAlbum && text.length && !InBars(self)) {
         __block NSMutableAttributedString *m = nil;
         [text enumerateAttribute:NSForegroundColorAttributeName inRange:NSMakeRange(0, text.length) options:0 usingBlock:^(id val, NSRange r, BOOL *stop) {
-            if ([val isKindOfClass:[UIColor class]] && IsMusicRed(val)) { if (!m) m = [text mutableCopy]; [m addAttribute:NSForegroundColorAttributeName value:UIColor.whiteColor range:r]; }
+            if ([val isKindOfClass:[UIColor class]] && IsMusicRed(val)) { if (!m) m = [text mutableCopy]; [m addAttribute:NSForegroundColorAttributeName value:UIColor.labelColor range:r]; }
         }];
         if (m) text = m;
     }
@@ -2993,7 +3006,7 @@ static void MaskOut(UIView *v);
 // ---- Search page, iOS 26 look ----
 static NSString *gSearchDebug = @"-";
 // A taller capsule search field (the background image sets its height).
-static UIColor *GlassFill(void) { return [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94]; }
+static UIColor *GlassFill(void) { return GlassFillDyn(); }
 #define XDISC_TAG 0x4D505844
 static void Wobble(UIView *v, CGFloat sx, CGFloat sy, CFTimeInterval delay);
 @interface MPSegBounce : NSObject
@@ -3018,10 +3031,10 @@ static void StyleSegment(UISegmentedControl *seg) {
         objc_setAssociatedObject(seg, @selector(StyleSegment:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(seg, kNarrowSeg, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         seg.frame = seg.frame;   // apply the narrow width now
-        NSDictionary *ta = @{NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: [UIFont systemFontOfSize:15 weight:UIFontWeightMedium]};
+        NSDictionary *ta = @{NSForegroundColorAttributeName: GlassIcon(), NSFontAttributeName: [UIFont systemFontOfSize:15 weight:UIFontWeightMedium]};
         [seg setTitleTextAttributes:ta forState:UIControlStateNormal];
         [seg setTitleTextAttributes:ta forState:UIControlStateSelected];
-        seg.selectedSegmentTintColor = [UIColor colorWithWhite:0 alpha:0.8];
+        seg.selectedSegmentTintColor = Dyn([UIColor colorWithWhite:1 alpha:0.95], [UIColor colorWithWhite:0 alpha:0.8]);
         seg.layer.borderWidth = 0;
         [seg addTarget:[MPSegBounce shared] action:@selector(changed:) forControlEvents:UIControlEventValueChanged];
         seg.layer.cornerCurve = kCACornerCurveContinuous;
@@ -3083,7 +3096,7 @@ static void StyleSearchBar(UISearchBar *sb) {
             if ([cancel currentTitle].length) [cancel setTitle:@"" forState:UIControlStateNormal];
             if (![cancel imageForState:UIControlStateNormal])
                 [cancel setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
-            cancel.tintColor = UIColor.whiteColor;
+            cancel.tintColor = GlassIcon();
             UIView *disc = [cancel viewWithTag:XDISC_TAG];
             if (!disc) {
                 disc = [UIView new];
@@ -3264,11 +3277,11 @@ static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidd
         eb.tag = EDIT_TAG;
         UIView *disc = [UIView new];
         disc.tag = 1; disc.userInteractionEnabled = NO;
-        disc.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94];
+        disc.backgroundColor = GlassFillDyn();
         disc.layer.borderWidth = 0.75; disc.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
         disc.layer.cornerCurve = kCACornerCurveContinuous;
         [eb addSubview:disc];
-        eb.tintColor = UIColor.whiteColor;
+        eb.tintColor = GlassIcon();
         [eb addTarget:[MPEdit shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
         [nb addSubview:eb];
     }
@@ -3595,7 +3608,7 @@ static void NavTick(UINavigationBar *nb) {
     if (!nb || !nb.window) return;
     if (!gNavGlass) { RemoveGlass(nb, 0); gNavDebug = @"off"; return; }
     @try { SearchPage(nb); } @catch (__unused id e) {}
-    if (![nb.tintColor isEqual:UIColor.whiteColor]) nb.tintColor = UIColor.whiteColor;
+    if (nb.tintColor != GlassIcon()) nb.tintColor = GlassIcon();
     // No gray bar background and no small centered title (e.g. "Library") when
     // scrolled; the big title in the page stays.
     for (UIView *s in nb.subviews) {
@@ -3728,7 +3741,7 @@ static void StripMusicCircle(UIView *c) {
         }
         [stack addObjectsFromArray:s.subviews];
     }
-    if (!objc_getAssociatedObject(c, kNoEffect)) { objc_setAssociatedObject(c, kNoEffect, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); c.tintColor = UIColor.whiteColor; }
+    if (!objc_getAssociatedObject(c, kNoEffect)) { objc_setAssociatedObject(c, kNoEffect, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); c.tintColor = GlassIcon(); }
 }
 
 static UIView *FloatGlassIn(id owner, UIView *host, UIView *below, const void *key) {
@@ -3737,7 +3750,7 @@ static UIView *FloatGlassIn(id owner, UIView *host, UIView *below, const void *k
         [g removeFromSuperview];
         // Same look whatever scrolls under it (a blur turned smeary over artwork).
         UIView *e = [UIView new];
-        e.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94];
+        e.backgroundColor = GlassFillDyn();
         e.userInteractionEnabled = NO; e.clipsToBounds = YES;
         e.layer.cornerCurve = kCACornerCurveContinuous;
         e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
@@ -3939,7 +3952,7 @@ static void PlaceSharePair(UIView *more) {
     if (!b || b.superview != bigHost) {
         [b removeFromSuperview];
         b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.tintColor = UIColor.whiteColor; b.tag = SHARE_TAG;
+        b.tintColor = GlassIcon(); b.tag = SHARE_TAG;
         [b setImage:[UIImage systemImageNamed:@"square.and.arrow.up" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
         [b addTarget:[MPShare shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
         objc_setAssociatedObject(more, kShareBtn, b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -4080,7 +4093,7 @@ static UIView *NameViewNear(UIView *play, NSMutableString *dbg) {
 
 static UIView *GlassDisc(CGFloat D) {
     UIView *e = [UIView new];
-    e.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94];
+    e.backgroundColor = GlassFillDyn();
     e.userInteractionEnabled = NO; e.clipsToBounds = YES;
     e.frame = CGRectMake(0, 0, D, D); e.layer.cornerRadius = D / 2;
     e.layer.cornerCurve = kCACornerCurveContinuous;
@@ -4464,7 +4477,7 @@ static void ArtistAddTick(UIView *root) {
             }
             if (!plus) {
                 plus = [UIButton buttonWithType:UIButtonTypeCustom];
-                plus.tag = PLUS_TAG; plus.tintColor = UIColor.whiteColor;
+                plus.tag = PLUS_TAG; plus.tintColor = GlassIcon();
                 UIView *disc = GlassDisc(44);
                 [plus addSubview:disc];
                 [plus addTarget:[MPArtistAdd shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
@@ -4534,7 +4547,7 @@ static void RedToWhite(UIView *rowParent) {
 
     UIView *root = rowParent;
     for (UIView *p = rowParent; p; p = p.superview) if ([p isKindOfClass:[UIScrollView class]]) { root = p; break; }
-    if (!objc_getAssociatedObject(root, kNoEffect)) { objc_setAssociatedObject(root, kNoEffect, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); root.tintColor = UIColor.whiteColor; }
+    if (!objc_getAssociatedObject(root, kNoEffect)) { objc_setAssociatedObject(root, kNoEffect, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); root.tintColor = UIColor.labelColor; }
     int labels = 0;
     NSMutableString *redOther = [NSMutableString string];
     NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
@@ -4550,14 +4563,14 @@ static void RedToWhite(UIView *rowParent) {
                 [[l.textColor resolvedColorWithTraitCollection:l.traitCollection] getRed:&r green:&g blue:&b alpha:&a];
                 gRedDebug = [NSString stringWithFormat:@"%@ rgb=%.2f,%.2f,%.2f %@", NSStringFromClass([l class]), r, g, b, NSStringFromClass([l.superview class])];
             }
-            if (IsMusicRed(l.textColor)) l.textColor = UIColor.whiteColor;
+            if (IsMusicRed(l.textColor)) l.textColor = UIColor.labelColor;
             NSAttributedString *as = l.attributedText;
             if (as.length) {
                 __block BOOL red = NO;
                 [as enumerateAttribute:NSForegroundColorAttributeName inRange:NSMakeRange(0, as.length) options:0 usingBlock:^(id val, NSRange rg, BOOL *stop) { if ([val isKindOfClass:[UIColor class]] && IsMusicRed(val)) { red = YES; *stop = YES; } }];
                 if (red) {
                     NSMutableAttributedString *m = [as mutableCopy];
-                    [m addAttribute:NSForegroundColorAttributeName value:UIColor.whiteColor range:NSMakeRange(0, m.length)];
+                    [m addAttribute:NSForegroundColorAttributeName value:UIColor.labelColor range:NSMakeRange(0, m.length)];
                     l.attributedText = m;
                 }
             }
@@ -4565,11 +4578,11 @@ static void RedToWhite(UIView *rowParent) {
         }
         if ([v isKindOfClass:[UIButton class]]) {
             UIButton *bt = (UIButton *)v;
-            if (IsMusicRed(bt.tintColor) && bt.titleLabel.text.length) bt.tintColor = UIColor.whiteColor;
-            if (IsMusicRed([bt titleColorForState:UIControlStateNormal])) [bt setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+            if (IsMusicRed(bt.tintColor) && bt.titleLabel.text.length) bt.tintColor = UIColor.labelColor;
+            if (IsMusicRed([bt titleColorForState:UIControlStateNormal])) [bt setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
             UIButtonConfiguration *cfg = nil;
             if ([bt respondsToSelector:@selector(configuration)]) cfg = bt.configuration;
-            if (cfg && IsMusicRed(cfg.baseForegroundColor)) { cfg.baseForegroundColor = UIColor.whiteColor; bt.configuration = cfg; }
+            if (cfg && IsMusicRed(cfg.baseForegroundColor)) { cfg.baseForegroundColor = UIColor.labelColor; bt.configuration = cfg; }
         }
         if (redOther.length < 120 && ![v isKindOfClass:[UIImageView class]] && IsMusicRed(v.tintColor) && v.subviews.count == 0) [redOther appendFormat:@"%@ ", NSStringFromClass([v class])];
         [stack addObjectsFromArray:v.subviews];
@@ -4624,7 +4637,7 @@ static void PlaceBack(UIView *back, UIWindow *w) {
         disc.layer.borderWidth = 0.75; disc.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
         [b addSubview:disc];
         UIImageView *ch = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.backward" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]]];
-        ch.tintColor = UIColor.whiteColor; ch.contentMode = UIViewContentModeCenter;
+        ch.tintColor = GlassIcon(); ch.contentMode = UIViewContentModeCenter;
         ch.frame = CGRectMake(-1, 0, TOPBTN, TOPBTN); ch.userInteractionEnabled = NO;
         [b addSubview:ch];
         objc_setAssociatedObject(b, kOurBack, back, OBJC_ASSOCIATION_ASSIGN);
@@ -4654,7 +4667,7 @@ static void StatusBlur(UIWindow *w) {
     if (!show) { v.hidden = YES; return; }
     CGFloat H = w.safeAreaInsets.top + 14;
     if (!v) {
-        v = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+        v = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterial]];
         v.tag = STATUSBLUR_TAG; v.userInteractionEnabled = NO;
         CAGradientLayer *m = [CAGradientLayer layer];
         m.colors = @[(id)UIColor.blackColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.clearColor.CGColor];
@@ -5434,7 +5447,11 @@ static void NotPlayingBlock(UIView *mini) {
 static UIColor *MusicPink(void) { return [UIColor colorWithRed:0.98 green:0.24 blue:0.37 alpha:1]; }
 // Music's player looks different with Increase Contrast: pink accents there;
 // otherwise iOS 26's plain look (white star, Music's own artist colour).
-static BOOL HighContrast(void) { return UIAccessibilityDarkerSystemColorsEnabled(); }
+static BOOL HighContrast(void) {
+    if (gPlayerStyle == 1) return YES;
+    if (gPlayerStyle == 2) return NO;
+    return UIAccessibilityDarkerSystemColorsEnabled();
+}
 static UIColor *StarColor(void) { return HighContrast() ? MusicPink() : UIColor.whiteColor; }
 #define PSTAR_TAG 0x4D505354
 #define LOSSGLASS_TAG 0x4D504C47
