@@ -1,4 +1,6 @@
-// MusicPill 1.2.10 - made by nano
+// MusicPill 1.2.11 - made by nano
+// 1.2.11: fixes the crash on launch in 1.2.9/1.2.10 (the light/dark glass colour
+//         called itself forever).
 // 1.2.10: fixes 1.2.9 freezing / closing Music (light-mode colours were re-set
 //         in a loop).
 // 1.2.9: Player Colors setting (Automatic / Pink / White); light mode: clear
@@ -284,7 +286,7 @@ static UIColor *Dyn(UIColor *light, UIColor *dark) {
 static UIColor *GlassIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackColor, UIColor.whiteColor); return c; }
 static UIColor *GlassIconDim(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:0 alpha:0.55], [UIColor colorWithWhite:1 alpha:0.62]); return c; }
 static BOOL HighContrast(void);
-static UIColor *GlassFillDyn(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:1 alpha:0.72], GlassFillDyn()); return c; }
+static UIColor *GlassFillDyn(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:1 alpha:0.72], [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94]); return c; }
 static UIView *GlyphIn(UIView *v, int depth);
 
 // UIKit's private live-mirror view: draws another view's current contents
@@ -1225,7 +1227,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.10 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.11 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
