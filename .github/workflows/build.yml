@@ -61,5 +61,11 @@ jobs:
           if ! gh release create "$tag" out/*.deb \
             --title "Build ${{ github.run_number }}" \
             --notes "Built with Xcode on GitHub Actions. Tap a .deb, then open it in Sileo or Filza." > rel.log 2>&1; then
-            cat rel.log; sed 's/^/::error::/' rel.log | head -10; exit 1
+            cat rel.log; sed 's/^/::warning::/' rel.log | head -5
+            # GitHub releases failing: keep the debs on the "builds" branch instead.
+            git config user.name "build bot"; git config user.email "bot@users.noreply.github.com"
+            rm -rf /tmp/b && mkdir -p /tmp/b && cp out/*.deb /tmp/b/
+            git checkout --orphan builds-tmp && git rm -rfq . && cp /tmp/b/*.deb . && git add *.deb
+            git commit -qm "debs from build ${{ github.run_number }}" && git push -f origin builds-tmp:builds
+            echo "::warning::debs pushed to the builds branch"
           fi
