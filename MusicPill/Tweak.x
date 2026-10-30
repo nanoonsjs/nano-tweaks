@@ -1,4 +1,6 @@
-// MusicPill 1.0.47 - made by nano
+// MusicPill 1.0.48 - made by nano
+// 1.0.48: the account picture was taken for an album's download button and
+//         hidden for good; our own buttons are skipped and un-hidden now.
 // 1.0.47: account picture drawn by its own image view (UIKit cleared the
 //         button's image after other pages), kept in front, debug line.
 // 1.0.46: account picture / Edit come back after returning from an album.
@@ -1187,7 +1189,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.47 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.48 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3265,6 +3267,8 @@ static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidd
     eb.hidden = avatarHidden;
     UIButton *av = gAvatarBtn;
     if (av && !eb.layer.animationKeys.count && fabs(eb.alpha - av.alpha) > 0.01 && !av.layer.animationKeys.count) eb.alpha = av.alpha;
+    if (eb.layer.mask) eb.layer.mask = nil;
+    if (!eb.userInteractionEnabled) eb.userInteractionEnabled = YES;
     gEditBtn = eb;
 }
 static void AvatarEval(void) {
@@ -3520,6 +3524,9 @@ static void SearchPage(UINavigationBar *nb) {
             b.bounds = CGRectMake(0, 0, D, D); b.center = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f)); b.layer.cornerRadius = D / 2;
         }
         if (!CGRectEqualToRect(pic.frame, b.bounds)) pic.frame = b.bounds;
+        // Undo anything that took it for one of Music's buttons (it got masked out).
+        if (b.layer.mask) b.layer.mask = nil;
+        if (!b.userInteractionEnabled) b.userInteractionEnabled = YES;
         if (pic.hidden || pic.alpha < 1) { pic.hidden = NO; pic.alpha = 1; }
         if (nb.subviews.lastObject != b && b.superview == nb) [nb bringSubviewToFront:b];
 
@@ -4759,7 +4766,7 @@ static void FloatTick(UIWindow *w) {
     int guard = 0;
     while (stack.count && guard++ < 8000) {
         UIView *v = stack.lastObject; [stack removeLastObject];
-        if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG || v.tag == NAVGLASS_TAG || v.tag == SHARE_TAG || v.tag == FLOATGLASS_TAG) continue;
+        if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG || v.tag == NAVGLASS_TAG || v.tag == SHARE_TAG || v.tag == FLOATGLASS_TAG || v.tag == 0x4D504156 || v.tag == 0x4D504544 || v.tag == BACK_TAG) continue;
         CGRect f = [v convertRect:v.bounds toView:nil];
         if (f.origin.y > band || CGRectGetMaxY(f) < top - 20) continue;
         if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image && f.size.width <= 40 && f.size.height <= 40 && CGRectGetMidY(f) < band && CGRectGetMidY(f) > top - 10) {
