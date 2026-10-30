@@ -1,4 +1,7 @@
-// MusicPill 0.9.7 - made by nano
+// MusicPill 0.9.8 - made by nano
+// 0.9.8: the menu's top-row tiles are laid out by us (icon centered on top,
+//        title centered under it, sized to fit), and menu text uses the
+//        iOS 26 look (17pt regular, tiles 15pt).
 // 0.9.7: menus (the ... button) no longer count as "the player is open"
 //        (no fake open animation / pill hiding), and song menus get the iOS 26
 //        look: a top row of Download, Favorite and Share; Love is now Favorite
@@ -436,6 +439,60 @@ static NSArray *IOS26MenuChildren(NSArray *children, UIMenuOptions options) {
     return children;
 }
 
+// Menu cells (UIKit's context menu list): fix the top-row tiles and fonts.
+static void FixMenuCell(UIView *cell) {
+    if (!gQueueLook) return;
+    UIView *list = cell.superview;
+    if (!list || list.bounds.size.width < 50) return;
+    NSMutableArray *imgs = [NSMutableArray array], *labels = [NSMutableArray array];
+    NSMutableArray *stack = [NSMutableArray arrayWithArray:cell.subviews];
+    while (stack.count) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v.hidden) continue;
+        if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) [imgs addObject:v];
+        else if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) [labels addObject:v];
+        [stack addObjectsFromArray:v.subviews];
+    }
+    BOOL tile = cell.bounds.size.width < list.bounds.size.width * 0.45;
+    if (tile && imgs.count && labels.count) {
+        UIImageView *iv = imgs.firstObject; UILabel *l = labels.firstObject;
+        CGSize S = cell.bounds.size;
+        UIFont *f = [UIFont systemFontOfSize:15 weight:UIFontWeightRegular];
+        if (![l.font isEqual:f]) l.font = f;
+        l.textAlignment = NSTextAlignmentCenter;
+        l.adjustsFontSizeToFitWidth = YES; l.minimumScaleFactor = 0.75; l.numberOfLines = 1;
+        CGFloat ih = 26, gap = 8, lh = ceil(f.lineHeight);
+        CGFloat top = MAX(6, (S.height - ih - gap - lh) / 2);
+        CGPoint ic = [iv.superview convertPoint:CGPointMake(S.width / 2, top + ih / 2) fromView:cell];
+        iv.contentMode = UIViewContentModeCenter;
+        iv.bounds = CGRectMake(0, 0, ih + 8, ih);
+        iv.center = ic;
+        CGRect lr = [l.superview convertRect:CGRectMake(4, top + ih + gap, S.width - 8, lh) fromView:cell];
+        l.frame = lr;
+        iv.preferredSymbolConfiguration = [UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightMedium];
+        return;
+    }
+    // Ordinary rows: iOS 26 font (regular 17).
+    for (UILabel *l in labels) {
+        if (l.font.pointSize >= 15 && l.font.pointSize <= 20) {
+            UIFont *f = [UIFont systemFontOfSize:17 weight:UIFontWeightRegular];
+            if (![l.font isEqual:f]) l.font = f;
+        }
+    }
+}
+
+%hook UICollectionViewCell
+- (void)layoutSubviews {
+    %orig;
+    static Class menuList; static dispatch_once_t once;
+    dispatch_once(&once, ^{ menuList = NSClassFromString(@"_UIContextMenuListView"); });
+    NSString *n = NSStringFromClass([self class]);
+    if ([n containsString:@"ContextMenu"] || (menuList && [self.superview.superview isKindOfClass:menuList])) {
+        @try { FixMenuCell(self); } @catch (__unused id e) {}
+    }
+}
+%end
+
 %hook UIMenu
 + (UIMenu *)menuWithTitle:(NSString *)title image:(UIImage *)image identifier:(UIMenuIdentifier)identifier options:(UIMenuOptions)options children:(NSArray *)children {
     if (gQueueLook && ![identifier isEqualToString:MP_ROW_ID]) { @try { children = IOS26MenuChildren(children, options); } @catch (__unused id e) {} }
@@ -762,7 +819,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.8 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
