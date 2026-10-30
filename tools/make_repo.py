@@ -34,6 +34,11 @@ for deb in sys.argv[2:]:
     c += '\nFilename: debs/%s\nSize: %d\nMD5sum: %s\nSHA1: %s\nSHA256: %s' % (
         base, len(blob), hashlib.md5(blob).hexdigest(), hashlib.sha1(blob).hexdigest(), hashlib.sha256(blob).hexdigest())
     if 'Depiction:' not in c: c += '\nDepiction: https://nanoonsjs.github.io/nano-repo/'
+    pkg = [l.split(': ',1)[1] for l in c.splitlines() if l.startswith('Package: ')][0]
+    if os.path.exists(os.path.join(out, 'icons', pkg + '.png')):
+        lines = [l for l in c.splitlines() if not l.startswith('Icon: ')]
+        lines.append('Icon: https://nanoonsjs.github.io/nano-repo/icons/%s.png' % pkg)
+        c = '\n'.join(lines)
     entries.append(c)
 pk = ('\n\n'.join(entries) + '\n').encode()
 open(os.path.join(out, 'Packages'), 'wb').write(pk)
