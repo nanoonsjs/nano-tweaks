@@ -1,4 +1,6 @@
-// MusicPill 1.2.14 - made by nano
+// MusicPill 1.2.15 - made by nano
+// 1.2.15: Library title always shows (switch laid out again after narrowing),
+//         glass switch in dark mode too, faster drop animation.
 // 1.2.14: both Apple Music / Library titles show (plain colour per mode), the
 //         switch leaves as a liquid drop into the X and comes back out of it.
 // 1.2.13: light mode: frosted glass with a visible rim and soft shadow, back
@@ -1249,7 +1251,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.14 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.15 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2189,10 +2191,29 @@ static const void *kNarrowSeg = &kNarrowSeg;
 #define SEG_W 236.0
 %hook UISegmentedControl
 - (void)setFrame:(CGRect)f {
+    BOOL narrowed = NO;
     if (objc_getAssociatedObject(self, kNarrowSeg) && f.size.width > SEG_W) {
         f = CGRectMake(round(CGRectGetMidX(f) - SEG_W / 2), f.origin.y, SEG_W, f.size.height);
+        narrowed = YES;
     }
     %orig(f);
+    if (narrowed) [self setNeedsLayout];
+}
+- (void)layoutSubviews {
+    %orig;
+    if (!objc_getAssociatedObject(self, kNarrowSeg) || self.numberOfSegments < 2) return;
+    // Each title's segment exactly in its half.
+    NSMutableArray *segs = [NSMutableArray array];
+    for (UIView *s in self.subviews) if ([NSStringFromClass([s class]) isEqualToString:@"UISegment"]) [segs addObject:s];
+    if (segs.count != (NSUInteger)self.numberOfSegments) return;
+    [segs sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) { return a.frame.origin.x < b.frame.origin.x ? NSOrderedAscending : NSOrderedDescending; }];
+    CGFloat w = self.bounds.size.width / segs.count, h = self.bounds.size.height;
+    for (NSUInteger i = 0; i < segs.count; i++) {
+        UIView *s = segs[i];
+        CGRect want = CGRectMake(round(i * w), 0, round(w), h);
+        if (!CGRectEqualToRect(s.frame, want)) s.frame = want;
+        s.hidden = NO; s.alpha = 1;
+    }
 }
 - (void)setBounds:(CGRect)b {
     if (objc_getAssociatedObject(self, kNarrowSeg) && b.size.width > SEG_W) b.size.width = SEG_W;
@@ -3078,7 +3099,7 @@ static void StyleSegment(UISegmentedControl *seg) {
         objc_setAssociatedObject(seg, kNarrowSeg, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         seg.frame = seg.frame;   // apply the narrow width now
 
-        seg.selectedSegmentTintColor = Dyn([UIColor colorWithWhite:1 alpha:0.95], [UIColor colorWithWhite:0 alpha:0.8]);
+        seg.selectedSegmentTintColor = Dyn([UIColor colorWithWhite:1 alpha:0.95], [UIColor colorWithWhite:1 alpha:0.24]);
         seg.layer.borderWidth = 0;
         [seg addTarget:[MPSegBounce shared] action:@selector(changed:) forControlEvents:UIControlEventValueChanged];
         seg.layer.cornerCurve = kCACornerCurveContinuous;
@@ -3097,7 +3118,7 @@ static void StyleSegment(UISegmentedControl *seg) {
     }
     // Track: nothing in dark mode, a faint grey in light mode so the switch reads.
     static UIColor *track;
-    if (!track) track = Dyn([UIColor colorWithWhite:0 alpha:0.07], UIColor.clearColor);
+    if (!track) track = Dyn([UIColor colorWithWhite:0 alpha:0.07], [UIColor colorWithWhite:1 alpha:0.12]);
     if (seg.backgroundColor != track) seg.backgroundColor = track;
     // UISegmentedControl resets its corners on layout, so this runs every time.
     if (seg.layer.cornerRadius != h / 2) seg.layer.cornerRadius = h / 2;
@@ -3126,7 +3147,7 @@ static void StyleSegment(UISegmentedControl *seg) {
             // Plain fill instead of Apple's pill image: white pill in light mode, dark in dark.
             if (iv.image) iv.image = nil;
             static UIColor *fill;
-            if (!fill) fill = Dyn([UIColor colorWithWhite:1 alpha:0.98], [UIColor colorWithWhite:0.02 alpha:0.95]);
+            if (!fill) fill = Dyn([UIColor colorWithWhite:1 alpha:0.98], [UIColor colorWithWhite:1 alpha:0.24]);
             if (iv.backgroundColor != fill) iv.backgroundColor = fill;
             if (iv.layer.shadowOpacity != 0) iv.layer.shadowOpacity = 0;
         }
@@ -3484,16 +3505,16 @@ static void ScopeEval(BOOL animated) {
         [w addSubview:b];
         live = b;
         seg.alpha = 0;
-        [UIView animateWithDuration:0.14 delay:0 options:o animations:^{ snap.alpha = 0; } completion:nil];
+        [UIView animateWithDuration:0.1 delay:0 options:o animations:^{ snap.alpha = 0; } completion:nil];
         // 1. pinches in, 2. stretches into a long drop half way, 3. rounds into a drop
         //    that lands in the X, which swallows it with a wobble.
-        [UIView animateKeyframesWithDuration:0.62 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic | UIViewKeyframeAnimationOptionBeginFromCurrentState animations:^{
+        [UIView animateKeyframesWithDuration:0.38 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic | UIViewKeyframeAnimationOptionBeginFromCurrentState animations:^{
             [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.22 animations:^{ LiquidTo(b, CGRectInset(sf, sf.size.width * 0.18, H * 0.04)); }];
             [UIView addKeyframeWithRelativeStartTime:0.22 relativeDuration:0.36 animations:^{ LiquidTo(b, stretch); }];
             [UIView addKeyframeWithRelativeStartTime:0.58 relativeDuration:0.30 animations:^{ LiquidTo(b, drop); }];
             [UIView addKeyframeWithRelativeStartTime:0.88 relativeDuration:0.12 animations:^{ LiquidTo(b, CGRectInset(drop, H * 0.2, H * 0.2)); b.alpha = 0; }];
         } completion:^(BOOL d) { [b removeFromSuperview]; }];
-        xWobble(0.52);
+        xWobble(0.32);
     } else {
         UIView *snap = [seg snapshotViewAfterScreenUpdates:YES];
         UIView *b = LiquidBlob(CGRectInset(drop, H * 0.2, H * 0.2), snap);
@@ -3502,16 +3523,16 @@ static void ScopeEval(BOOL animated) {
         live = b;
         xWobble(0);
         // The X lets a drop go, it stretches back across and spreads into the switch.
-        [UIView animateKeyframesWithDuration:0.64 delay:0.04 options:UIViewKeyframeAnimationOptionCalculationModeCubic | UIViewKeyframeAnimationOptionBeginFromCurrentState animations:^{
+        [UIView animateKeyframesWithDuration:0.4 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic | UIViewKeyframeAnimationOptionBeginFromCurrentState animations:^{
             [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.14 animations:^{ b.alpha = 1; LiquidTo(b, drop); }];
             [UIView addKeyframeWithRelativeStartTime:0.14 relativeDuration:0.34 animations:^{ LiquidTo(b, stretch); }];
             [UIView addKeyframeWithRelativeStartTime:0.48 relativeDuration:0.30 animations:^{ LiquidTo(b, CGRectInset(sf, sf.size.width * 0.12, 0)); }];
             [UIView addKeyframeWithRelativeStartTime:0.78 relativeDuration:0.22 animations:^{ LiquidTo(b, sf); }];
         } completion:^(BOOL d) {
             Wobble(b, 1.05, 0.9, 0);
-            [UIView animateWithDuration:0.18 delay:0.05 options:o animations:^{ seg.alpha = 1; b.alpha = 0; } completion:^(BOOL f) { [b removeFromSuperview]; }];
+            [UIView animateWithDuration:0.12 delay:0 options:o animations:^{ seg.alpha = 1; b.alpha = 0; } completion:^(BOOL f) { [b removeFromSuperview]; }];
         }];
-        [UIView animateWithDuration:0.2 delay:0.5 options:o animations:^{ snap.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.14 delay:0.3 options:o animations:^{ snap.alpha = 1; } completion:nil];
     }
 }
 static void ScopeAutoHide(UISearchBar *sb, UINavigationBar *nb) {
