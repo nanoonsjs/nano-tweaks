@@ -1,4 +1,8 @@
-// MusicPill 1.0.2 - made by nano
+// MusicPill 1.0.3 - made by nano
+// 1.0.3: album top bar: the glass sits behind the button (the ... icon shows),
+//        Music's download button stays in the row circle through every state
+//        (arrow, progress, checkmark), a share circle replaces it top right,
+//        and red text is found and turned white on the album page itself.
 // 1.0.2: album top buttons are found by their icons (they aren't always
 //        controls), red text also caught in attributed text and buttons, and
 //        a "float:" debug line shows what was found.
@@ -149,6 +153,8 @@
 #define MARQUEE_TAG 0x4D504D51
 #define ROW_TAG 0x4D50524F
 #define NAVGLASS_TAG 0x4D504E47
+#define FLOATGLASS_TAG 0x4D50464C
+#define SHARE_TAG 0x4D505348
 #define PORTAL_TAG 0x4D50504F
 #define PLAYERDEBUG_TAG 0x4D505044
 #define QUEUEROW_TAG 0x4D505152
@@ -858,7 +864,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2322,6 +2328,8 @@ static void ShowFavToast(UILabel *label, BOOL fav) {
 
 static BOOL IsMusicRed(UIColor *c) {
     CGFloat r = 0, g = 0, b = 0, a = 0;
+    if (!c) return NO;
+    c = [c resolvedColorWithTraitCollection:[UITraitCollection traitCollectionWithUserInterfaceStyle:UIUserInterfaceStyleDark]];
     if (![c getRed:&r green:&g blue:&b alpha:&a] || a < 0.5) return NO;
     return r > 0.8 && g < 0.4 && b > 0.1 && b < 0.55;
 }
@@ -2554,35 +2562,123 @@ static const void *kFloatGlass = &kFloatGlass;
 @end
 
 static void GlassCircleFor(UIControl *c, CGFloat D) {
-    if (!c) return;
+    if (!c || !c.superview) return;
+    UIView *host = c.superview;
     UIView *g = objc_getAssociatedObject(c, kFloatGlass);
-    if (!g || g.superview != c) {
+    if (!g || g.superview != host) {
+        [g removeFromSuperview];
         UIVisualEffectView *e = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
         e.userInteractionEnabled = NO; e.clipsToBounds = YES;
         e.layer.cornerCurve = kCACornerCurveContinuous;
         e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
-        e.tag = NAVGLASS_TAG;
-        [c insertSubview:e atIndex:0];
+        e.tag = FLOATGLASS_TAG;
         g = e;
-        objc_setAssociatedObject(c, kFloatGlass, g, OBJC_ASSOCIATION_ASSIGN);
-        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPFloatJelly shared] action:@selector(press:)];
-        lp.minimumPressDuration = 0; lp.cancelsTouchesInView = NO; lp.delaysTouchesEnded = NO;
-        lp.delegate = [MPFloatJelly shared];
-        [c addGestureRecognizer:lp];
+        objc_setAssociatedObject(c, kFloatGlass, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!objc_getAssociatedObject(c, kSwipeAdded)) {
+            objc_setAssociatedObject(c, kSwipeAdded, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPFloatJelly shared] action:@selector(press:)];
+            lp.minimumPressDuration = 0; lp.cancelsTouchesInView = NO; lp.delaysTouchesEnded = NO;
+            lp.delegate = [MPFloatJelly shared];
+            [c addGestureRecognizer:lp];
+        }
     }
-    if (c.clipsToBounds) c.clipsToBounds = NO;
+    if ([host.subviews indexOfObject:g] == NSNotFound || [host.subviews indexOfObject:g] > [host.subviews indexOfObject:c]) [host insertSubview:g belowSubview:c];
     // Music's own gray circle goes away.
     ClearCircles(c, 0);
     if (c.backgroundColor && CGColorGetAlpha(c.backgroundColor.CGColor) > 0.01) { objc_setAssociatedObject(c, kClearedBG, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); c.backgroundColor = UIColor.clearColor; }
-    for (UIView *s in c.subviews) if ([s isKindOfClass:[UIVisualEffectView class]] && s != g && !s.layer.mask) s.layer.mask = [CALayer layer];
+    for (UIView *s in c.subviews) if ([s isKindOfClass:[UIVisualEffectView class]] && !s.layer.mask) s.layer.mask = [CALayer layer];
     UIView *glyph = GlyphIn(c, 0);
-    CGPoint ctr = glyph ? [glyph.superview convertPoint:glyph.center toView:c] : CGPointMake(c.bounds.size.width / 2, c.bounds.size.height / 2);
+    CGPoint ctr = glyph ? [glyph.superview convertPoint:glyph.center toView:host] : c.center;
     if (CGAffineTransformIsIdentity(g.transform)) {
         CGRect f = CGRectMake(round(ctr.x - D / 2), round(ctr.y - D / 2), D, D);
         if (!CGRectEqualToRect(g.frame, f)) g.frame = f;
     }
     if (g.layer.cornerRadius != D / 2) g.layer.cornerRadius = D / 2;
-    [c sendSubviewToBack:g];
+    g.hidden = c.hidden || c.alpha < 0.01;
+}
+
+// Share circle that takes the download button's place top right.
+static __weak UIView *gMoreBtn;
+@interface MPShare : NSObject
++ (instancetype)shared;
+- (void)tap;
+@end
+static UIAction *FindShareAction(NSArray *kids) {
+    for (UIMenuElement *e in kids) {
+        if ([e isKindOfClass:[UIMenu class]]) { UIAction *a = FindShareAction(((UIMenu *)e).children); if (a) return a; }
+        else if ([e isKindOfClass:[UIAction class]] && [e.title.lowercaseString hasPrefix:@"share"] && ![e.title.lowercaseString containsString:@"lyric"] && ![e.title.lowercaseString containsString:@"shareplay"]) return (UIAction *)e;
+    }
+    return nil;
+}
+@implementation MPShare
++ (instancetype)shared { static MPShare *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPShare new]; }); return t; }
+- (void)tap {
+    UIView *more = gMoreBtn;
+    UIMenu *menu = nil;
+    @try { menu = [more valueForKey:@"menu"]; } @catch (__unused id e) {}
+    UIAction *a = FindShareAction(menu.children);
+    SEL perf = NSSelectorFromString(@"performWithSender:target:");
+    if (a && [a respondsToSelector:perf]) { ((void (*)(id, SEL, id, id))objc_msgSend)(a, perf, more, nil); return; }
+    // Fallback: open the ... menu (Share is in it).
+    if ([more isKindOfClass:[UIControl class]]) [(UIControl *)more sendActionsForControlEvents:UIControlEventTouchUpInside];
+}
+@end
+static void PlaceShareCircle(UIView *dl) {
+    static __weak UIButton *btn;
+    UIButton *b = btn;
+    if (!dl || !dl.superview || !gRowParent) { b.hidden = YES; return; }
+    UIView *host = dl.superview;
+    if (!b || b.superview != host) {
+        [b removeFromSuperview];
+        b = [UIButton buttonWithType:UIButtonTypeSystem];
+        b.tintColor = UIColor.whiteColor; b.tag = SHARE_TAG;
+        [b setImage:[UIImage systemImageNamed:@"square.and.arrow.up" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+        [b addTarget:[MPShare shared] action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
+        [host addSubview:b];
+        btn = b;
+    }
+    b.hidden = NO;
+    CGRect f = CGRectMake(CGRectGetMidX(dl.frame) - 22, CGRectGetMidY(dl.frame) - 22, 44, 44);
+    if (!CGRectEqualToRect(b.frame, f)) b.frame = f;
+    [host bringSubviewToFront:b];
+    GlassCircleFor((UIControl *)b, 44);
+}
+
+static BOOL IsMusicRed(UIColor *c);
+// Album page: red labels / buttons (artist name, "Show Complete Album") -> white.
+static void RedToWhite(UIView *rowParent) {
+    UIView *root = rowParent;
+    for (UIView *p = rowParent; p; p = p.superview) if ([p isKindOfClass:[UIScrollView class]]) { root = p; break; }
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
+    int guard = 0;
+    while (stack.count && guard++ < 4000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v.hidden) continue;
+        if ([v isKindOfClass:[UILabel class]]) {
+            UILabel *l = (UILabel *)v;
+            if (IsMusicRed(l.textColor)) l.textColor = UIColor.whiteColor;
+            NSAttributedString *as = l.attributedText;
+            if (as.length) {
+                __block BOOL red = NO;
+                [as enumerateAttribute:NSForegroundColorAttributeName inRange:NSMakeRange(0, as.length) options:0 usingBlock:^(id val, NSRange rg, BOOL *stop) { if ([val isKindOfClass:[UIColor class]] && IsMusicRed(val)) { red = YES; *stop = YES; } }];
+                if (red) {
+                    NSMutableAttributedString *m = [as mutableCopy];
+                    [m addAttribute:NSForegroundColorAttributeName value:UIColor.whiteColor range:NSMakeRange(0, m.length)];
+                    l.attributedText = m;
+                }
+            }
+            continue;
+        }
+        if ([v isKindOfClass:[UIButton class]]) {
+            UIButton *bt = (UIButton *)v;
+            if (IsMusicRed(bt.tintColor) && bt.titleLabel.text.length) bt.tintColor = UIColor.whiteColor;
+            if (IsMusicRed([bt titleColorForState:UIControlStateNormal])) [bt setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+            UIButtonConfiguration *cfg = nil;
+            if ([bt respondsToSelector:@selector(configuration)]) cfg = bt.configuration;
+            if (cfg && IsMusicRed(cfg.baseForegroundColor)) { cfg.baseForegroundColor = UIColor.whiteColor; bt.configuration = cfg; }
+        }
+        [stack addObjectsFromArray:v.subviews];
+    }
 }
 
 static void FloatTick(UIWindow *w) {
@@ -2594,7 +2690,7 @@ static void FloatTick(UIWindow *w) {
     int guard = 0;
     while (stack.count && guard++ < 8000) {
         UIView *v = stack.lastObject; [stack removeLastObject];
-        if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG || v.tag == NAVGLASS_TAG) continue;
+        if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG || v.tag == NAVGLASS_TAG || v.tag == SHARE_TAG || v.tag == FLOATGLASS_TAG) continue;
         CGRect f = [v convertRect:v.bounds toView:nil];
         if (f.origin.y > band || CGRectGetMaxY(f) < top - 20) continue;
         if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image && f.size.width <= 40 && f.size.height <= 40 && CGRectGetMidY(f) < band && CGRectGetMidY(f) > top - 10) {
@@ -2621,12 +2717,41 @@ static void FloatTick(UIWindow *w) {
         if (dbg.count < 4) [dbg addObject:[NSString stringWithFormat:@"%@@%.0f(%@)", sym, x, NSStringFromClass([holder class])]];
         if ([d containsString:@"ellipsis"]) more = holder;
         else if ([d containsString:@"chevron.left"] || [d containsString:@"chevron.backward"] || (x < W / 3 && !back)) back = holder;
-        else if (x > W / 2 && ([d containsString:@"arrow.down"] || [d containsString:@"checkmark"] || [d containsString:@"icloud"] || [d containsString:@"plus"])) dl = holder;
+        else if (x > W / 2) dl = holder;   // download in any state: arrow, progress (stop), checkmark
     }
     if ([back isKindOfClass:[UIControl class]] || back) GlassCircleFor((UIControl *)back, 44);
     if (more) GlassCircleFor((UIControl *)more, 44);
-    if (dl && gRowParent && gRowParent.window == w) gSlotView = dl;
+    // Mid-download Music swaps in a progress view with no image; keep the last one we caught.
+    if (!dl && gSlotView && gSlotView.window == w) {
+        CGRect sf = [gSlotView convertRect:gSlotView.bounds toView:nil];
+        if (CGRectGetMidY(sf) < band && CGRectGetMidX(sf) > W / 2) dl = gSlotView;
+    }
+    gMoreBtn = more;
+    if (dl && gRowParent && gRowParent.window == w) { gSlotView = dl; PlaceShareCircle(dl); }
+    else PlaceShareCircle(nil);
+    if (gRowParent && gRowParent.window == w) RedToWhite(gRowParent);
     gFloatDebug = [NSString stringWithFormat:@"%lu icons back=%@ more=%@ dl=%@ | %@", (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
+}
+
+// Music's top buttons (Swift SymbolButton): when the download one changes state
+// it's a fresh view; pick it up right away so the row circle keeps mirroring it.
+static IMP gSymLayoutOrig;
+static void SymLayoutHook(UIView *self, SEL _cmd) {
+    if (gSymLayoutOrig) ((void (*)(id, SEL))gSymLayoutOrig)(self, _cmd);
+    @try {
+        UIWindow *w = self.window;
+        if (!w || !gRowParent || gRowParent.window != w || self == gSlotView) return;
+        CGRect f = [self convertRect:self.bounds toView:nil];
+        if (CGRectGetMidY(f) > w.safeAreaInsets.top + 80 || CGRectGetMidX(f) < w.bounds.size.width / 2) return;
+        UIView *g = GlyphIn(self, 0);
+        if ([((UIImageView *)g).image.description containsString:@"ellipsis"]) return;
+        gSlotView = self;
+        dispatch_async(dispatch_get_main_queue(), ^{ @try { AlbumTick(w); FloatTick(w); } @catch (__unused id e) {} });
+    } @catch (__unused id e) {}
+}
+static void HookSymbolButton(void) {
+    Class sym = objc_getClass("MusicApplication.SymbolButton");
+    if (sym) MSHookMessageEx(sym, @selector(layoutSubviews), (IMP)SymLayoutHook, &gSymLayoutOrig);
 }
 
 static UINavigationBar *TopNavBar(UIWindow *w) {
@@ -2966,5 +3091,6 @@ static void StartWatchdog(void) {
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     %init;
     HookMenuClasses();
+    HookSymbolButton();
     dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); });
 }
