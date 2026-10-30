@@ -1,4 +1,6 @@
-// MusicPill 1.0.14 - made by nano
+// MusicPill 1.0.15 - made by nano
+// 1.0.15: favorite state read right (star.circle.fill), Music's hidden play no
+//         longer takes taps (it started radio), side name hidden by position.
 // 1.0.14: our own back button (Music's icon vanished while scrolling), top
 //         buttons a bit lower, permanent soft blur behind the status bar,
 //         Music's side artist name hidden (attributed label).
@@ -927,7 +929,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.14 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.15 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3200,6 +3202,49 @@ static void HideNameCopies(UIWindow *w, NSString *name) {
         [stack addObjectsFromArray:v.subviews];
     }
 }
+static NSString *gSideDebug = @"";
+static void HideTextLayers(CALayer *l, int depth) {
+    if (depth > 6) return;
+    for (CALayer *s in l.sublayers) {
+        if ([s isKindOfClass:[CATextLayer class]] && !s.hidden) s.hidden = YES;
+        HideTextLayers(s, depth + 1);
+    }
+}
+static void HideSideName(UIView *play) {
+    UIWindow *w = play.window;
+    if (!w) return;
+    CGRect pf = [play convertRect:play.bounds toView:nil];
+    // Points across where Music draws the name (left part, level with its play button).
+    CGFloat ys[] = { CGRectGetMidY(pf), CGRectGetMidY(pf) - 10, CGRectGetMidY(pf) + 10 };
+    CGFloat xs[] = { 40, 80, 120 };
+    UIView *top = play;
+    for (int i = 0; i < 6 && top.superview; i++) top = top.superview;
+    NSMutableString *dbg = [NSMutableString string];
+    for (int yi = 0; yi < 3; yi++) for (int xi = 0; xi < 3; xi++) {
+        CGPoint pt = CGPointMake(xs[xi], ys[yi]);
+        // deepest view containing the point (not ours, not images, not big)
+        UIView *v = top, *deep = nil;
+        BOOL moved = YES;
+        int guard = 0;
+        while (moved && guard++ < 30) {
+            moved = NO;
+            for (UIView *s in [v.subviews reverseObjectEnumerator]) {
+                if (s.hidden || s.alpha < 0.01 || s.tag == ARTIST_TAG || s.tag == CARD_TAG) continue;
+                CGRect f = [s convertRect:s.bounds toView:nil];
+                if (!CGRectContainsPoint(f, pt)) continue;
+                v = s; moved = YES;
+                if (![s isKindOfClass:[UIImageView class]] && f.size.height <= 100 && ![play isDescendantOfView:s]) deep = s;
+                break;
+            }
+        }
+        if (deep && !deep.layer.mask) {
+            if (dbg.length < 120) [dbg appendFormat:@"%@ ", NSStringFromClass([deep class])];
+            deep.layer.mask = [CALayer layer];
+        }
+        HideTextLayers(v.layer, 0);
+    }
+    if (dbg.length) gSideDebug = dbg;
+}
 static void ArtistTick(UIView *play) {
     if (!play.window || !InPageList(play)) return;
     {
@@ -3236,6 +3281,8 @@ static void ArtistTick(UIView *play) {
         for (UIView *p = old.superview; p; p = p.superview) for (UIView *s in [p.subviews copy]) if (s.tag == ARTIST_TAG && old != play) [s removeFromSuperview];
     }
     gArtistPlay = play; gArtistName = name; gArtistNameText = nameText;
+    if (play.userInteractionEnabled) play.userInteractionEnabled = NO;   // taps there went to Music's radio play
+    HideSideName(play);
     {
         static CFTimeInterval lastHide;
         if (CACurrentMediaTime() - lastHide > 0.3) { lastHide = CACurrentMediaTime(); HideNameCopies(play.window, nameText); }
@@ -3302,13 +3349,13 @@ static void ArtistTick(UIView *play) {
         if ([sg isKindOfClass:[UIImageView class]]) {
             NSString *sd = ((UIImageView *)sg).image.description;
             gArtistFavKnown = YES;
-            if (CACurrentMediaTime() > gArtistFavLock) gArtistFav = [sd containsString:@"star.fill"];
+            if (CACurrentMediaTime() > gArtistFavLock) gArtistFav = [sd containsString:@"star"] && [sd containsString:@".fill"];
         }
     }
     if (gArtistFavKnown && CACurrentMediaTime() > gArtistFavLock) SetStar((UIButton *)[ov viewWithTag:4], gArtistFav, NO);
     UIButton *stb = (UIButton *)[ov viewWithTag:4];
     if (stb.imageView && stb.subviews.lastObject != stb.imageView) [stb bringSubviewToFront:stb.imageView];
-    gArtistDebug = [NSString stringWithFormat:@"ok name='%@' (%@) fav=%d/%d%@", nameText, NSStringFromClass([name class]), gArtistFavKnown, gArtistFav, gAddDebug];
+    gArtistDebug = [NSString stringWithFormat:@"ok name='%@' side=%@ fav=%d/%d%@", nameText, gSideDebug, gArtistFavKnown, gArtistFav, gAddDebug];
 }
 
 // Latest release: a rounded card, and a round + instead of "+ Add".
