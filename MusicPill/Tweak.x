@@ -1,4 +1,6 @@
-// MusicPill 1.2.9 - made by nano
+// MusicPill 1.2.10 - made by nano
+// 1.2.10: fixes 1.2.9 freezing / closing Music (light-mode colours were re-set
+//         in a loop).
 // 1.2.9: Player Colors setting (Automatic / Pink / White); light mode: clear
 //         frosted glass with dark icons, readable text, light status blur.
 // 1.2.8: follows Increase Contrast: off = white star, Music's own artist colour,
@@ -1223,7 +1225,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.9 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.10 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3076,7 +3078,8 @@ static void StyleSearchBar(UISearchBar *sb) {
         // Field: Apple's height, as a glass capsule.
         UISearchTextField *tf = sb.searchTextField;
         if (tf.borderStyle != UITextBorderStyleNone) tf.borderStyle = UITextBorderStyleNone;
-        if (![tf.backgroundColor isEqual:GlassFill()]) tf.backgroundColor = GlassFill();
+        static char kFillSet;
+        if (!objc_getAssociatedObject(tf, &kFillSet)) { objc_setAssociatedObject(tf, &kFillSet, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); tf.backgroundColor = GlassFill(); }
         CGFloat h = tf.bounds.size.height;
         if (h > 0 && tf.layer.cornerRadius != h / 2) {
             tf.layer.cornerRadius = h / 2; tf.layer.cornerCurve = kCACornerCurveContinuous; tf.clipsToBounds = YES;
@@ -3609,7 +3612,8 @@ static void NavTick(UINavigationBar *nb) {
     if (!nb || !nb.window) return;
     if (!gNavGlass) { RemoveGlass(nb, 0); gNavDebug = @"off"; return; }
     @try { SearchPage(nb); } @catch (__unused id e) {}
-    if (nb.tintColor != GlassIcon()) nb.tintColor = GlassIcon();
+    static char kTintSet;
+    if (!objc_getAssociatedObject(nb, &kTintSet)) { objc_setAssociatedObject(nb, &kTintSet, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); nb.tintColor = GlassIcon(); }
     // No gray bar background and no small centered title (e.g. "Library") when
     // scrolled; the big title in the page stays.
     for (UIView *s in nb.subviews) {
