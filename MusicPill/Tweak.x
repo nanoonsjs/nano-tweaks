@@ -2953,6 +2953,7 @@ static __weak UIBarButtonItem *gEditItem;
 }
 @end
 #define EDIT_TAG 0x4D504544
+static char kEditSym;
 static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidden, BOOL isLibrary) {
     UIButton *eb = (UIButton *)[nb viewWithTag:EDIT_TAG];
     UIBarButtonItem *item = nil;
@@ -2991,8 +2992,8 @@ static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidd
         [nb addSubview:eb];
     }
     NSString *sym = editing ? @"checkmark" : @"checklist";
-    if (![objc_getAssociatedObject(eb, kNoEffect) isEqual:sym]) {
-        objc_setAssociatedObject(eb, kNoEffect, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (![objc_getAssociatedObject(eb, &kEditSym) isEqual:sym]) {
+        objc_setAssociatedObject(eb, &kEditSym, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIImage *img = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold]] ?: [UIImage systemImageNamed:@"list.bullet"];
         [UIView transitionWithView:eb duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ [eb setImage:img forState:UIControlStateNormal]; } completion:nil];
     }
