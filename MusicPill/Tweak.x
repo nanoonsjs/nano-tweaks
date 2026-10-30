@@ -1,4 +1,6 @@
-// MusicPill 1.0.24 - made by nano
+// MusicPill 1.0.25 - made by nano
+// 1.0.25: switch back to its rounded look (no stretching; plain dark selected
+//         pill, no gray rim), account picture hidden while searching.
 // 1.0.24: selected Apple Music/Library pill fills its half (no gray rim),
 //         account picture remembered for launch and hidden the moment the
 //         Search page scrolls.
@@ -958,7 +960,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.24 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.25 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2738,7 +2740,6 @@ static void StyleSegment(UISegmentedControl *seg) {
     if (seg.layer.cornerRadius != h / 2) seg.layer.cornerRadius = h / 2;
     if (seg.layer.borderWidth != 0) seg.layer.borderWidth = 0;
     if (!seg.clipsToBounds) seg.clipsToBounds = YES;
-    CGFloat segW = seg.numberOfSegments ? seg.bounds.size.width / seg.numberOfSegments : 0;
     for (UIView *s in seg.subviews) {
         if (![s isKindOfClass:[UIImageView class]]) {
             if (s.backgroundColor && CGColorGetAlpha(s.backgroundColor.CGColor) > 0.01 && ![s isKindOfClass:[UILabel class]]) s.backgroundColor = UIColor.clearColor;
@@ -2747,14 +2748,16 @@ static void StyleSegment(UISegmentedControl *seg) {
         CGRect f = s.frame;
         if (f.size.width <= 2) { if (!s.hidden) s.hidden = YES; continue; }                       // dividers
         if (f.size.width >= seg.bounds.size.width - 4) { if (s.alpha != 0) s.alpha = 0; continue; } // Apple's gray background
+        if (!CGAffineTransformIsIdentity(s.transform) && ![s.layer animationForKey:@"wx"]) s.transform = CGAffineTransformIdentity;   // undo 1.0.24
         if (f.size.height > 10) {                                                                // selected pill
-            CGFloat bh = s.bounds.size.height, bw = s.bounds.size.width;
+            CGFloat bh = s.bounds.size.height;
             if (s.layer.cornerRadius != bh / 2) { s.layer.cornerRadius = bh / 2; s.layer.cornerCurve = kCACornerCurveContinuous; s.clipsToBounds = YES; }
-            // Fill the whole half (UIKit insets it, which left a gray rim).
-            if (bw > 0 && bh > 0 && segW > 0 && ![s.layer animationForKey:@"wx"]) {
-                CGAffineTransform want = CGAffineTransformMakeScale(segW / bw, h / bh);
-                if (!CGAffineTransformEqualToTransform(s.transform, want)) s.transform = want;
-            }
+            // Plain dark fill instead of Apple's pill image (its lighter rim showed as gray).
+            UIImageView *iv = (UIImageView *)s;
+            if (iv.image) iv.image = nil;
+            UIColor *fill = [UIColor colorWithWhite:0.02 alpha:0.95];
+            if (![iv.backgroundColor isEqual:fill]) iv.backgroundColor = fill;
+            if (iv.layer.shadowOpacity != 0) iv.layer.shadowOpacity = 0;
         }
     }
     for (NSUInteger i = 0; i < seg.numberOfSegments; i++)
@@ -3097,7 +3100,8 @@ static void SearchPage(UINavigationBar *nb) {
         }
 
         gAvatarBtn = b;
-        b.hidden = large.hidden;
+        UISearchController *asc = nb.topItem.searchController;
+        b.hidden = large.hidden || large.alpha < 0.5 || asc.isActive || CGRectGetMinY(f) < nb.window.safeAreaInsets.top;
     }
     // "Browse Categories" goes, category cards get iOS 26 rounding.
     UIResponder *r = nb;
