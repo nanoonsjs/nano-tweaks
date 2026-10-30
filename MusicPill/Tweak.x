@@ -1,4 +1,6 @@
-// MusicPill 1.0.46 - made by nano
+// MusicPill 1.0.47 - made by nano
+// 1.0.47: account picture drawn by its own image view (UIKit cleared the
+//         button's image after other pages), kept in front, debug line.
 // 1.0.46: account picture / Edit come back after returning from an album.
 // 1.0.45: zoom page transition turned off (back to the normal slide).
 // 1.0.44: iOS 26 zoom: tapping an album / playlist / song tile grows its page
@@ -1185,7 +1187,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.46 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.47 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3499,7 +3501,16 @@ static void SearchPage(UINavigationBar *nb) {
             [b addTarget:[MPAvatar shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
             [nb addSubview:b];
         }
-        if ([b imageForState:UIControlStateNormal] != img) [b setImage:img forState:UIControlStateNormal];
+        // The picture is its own image view filling the circle (a button's image view
+        // got resized / cleared by UIKit after other pages opened).
+        if ([b imageForState:UIControlStateNormal]) [b setImage:nil forState:UIControlStateNormal];
+        UIImageView *pic = (UIImageView *)[b viewWithTag:7];
+        if (![pic isKindOfClass:[UIImageView class]]) {
+            pic = [UIImageView new]; pic.tag = 7; pic.userInteractionEnabled = NO;
+            pic.contentMode = UIViewContentModeScaleAspectFill; pic.clipsToBounds = YES;
+            [b addSubview:pic];
+        }
+        if (pic.image != img) pic.image = img;
         CGFloat D = 38;
         // Level with the title's resting spot, same size always (no stretching on pull-down).
         CGRect tf = title ? [title convertRect:title.bounds toView:nb] : [large convertRect:large.bounds toView:nb];
@@ -3508,6 +3519,9 @@ static void SearchPage(UINavigationBar *nb) {
         if (!CGRectEqualToRect(b.bounds, CGRectMake(0, 0, D, D)) || !CGPointEqualToPoint(b.center, CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f)))) {
             b.bounds = CGRectMake(0, 0, D, D); b.center = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f)); b.layer.cornerRadius = D / 2;
         }
+        if (!CGRectEqualToRect(pic.frame, b.bounds)) pic.frame = b.bounds;
+        if (pic.hidden || pic.alpha < 1) { pic.hidden = NO; pic.alpha = 1; }
+        if (nb.subviews.lastObject != b && b.superview == nb) [nb bringSubviewToFront:b];
 
         gAvatarBtn = b;
         UISearchController *asc = nb.topItem.searchController;
@@ -3518,7 +3532,11 @@ static void SearchPage(UINavigationBar *nb) {
         // coming back doesn't always report a scroll, which left the picture popped away.
         if (!b.hidden) { @try { AvatarEval(); } @catch (__unused id e) {} }
     }
-    if (!isSearch) { gSearchDebug = [NSString stringWithFormat:@"%@ avatar=%d", pt, img != nil]; return; }
+    if (!isSearch) {
+        UIButton *ab = gAvatarBtn;
+        gSearchDebug = [NSString stringWithFormat:@"%@ avatar=%d btn=%d hid=%d a=%.2f t=%.2f pic=%d", pt, img != nil, ab != nil, ab.hidden, ab.alpha, ab.transform.a, ((UIImageView *)[ab viewWithTag:7]).image != nil];
+        return;
+    }
     // "Browse Categories" goes, category cards get iOS 26 rounding.
     UIResponder *r = nb;
     while (r && ![r isKindOfClass:[UINavigationController class]]) r = r.nextResponder;
