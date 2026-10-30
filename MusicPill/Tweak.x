@@ -1,4 +1,7 @@
-// MusicPill 1.0.28 - made by nano
+// MusicPill 1.0.29 - made by nano
+// 1.0.29: no black box behind the album buttons on animated covers; animated
+//         album cover plays on the full player's artwork (when that album's
+//         page has shown it).
 // 1.0.28: account picture smaller, liquid pop out / wobble back in.
 // 1.0.27: artists without a photo: the page moves down so the centered name,
 //         play and star sit below the top buttons instead of under them.
@@ -212,6 +215,7 @@
 #import <dlfcn.h>
 #import <objc/message.h>
 #import <MediaPlayer/MediaPlayer.h>
+#import <AVFoundation/AVFoundation.h>
 
 // UIKit's private live-mirror view: draws another view's current contents
 // (including its animations) somewhere else.
@@ -238,6 +242,7 @@
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gFloatDebug = @"-";
+static NSString *gNowAlbum;   // album of the song playing (MediaRemote)
 static CFTimeInterval gPlayerCooldownUntil;   // no reopening the player before this
 static NSString *gDismissDebug = @"-";
 static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from);
@@ -965,7 +970,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.28 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.29 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1318,6 +1323,8 @@ static BOOL OpenPlayer(UIView *mini) {
     if (info) info(q, ^(CFDictionaryRef d) {
         NSDictionary *dict = (__bridge NSDictionary *)d;
         NSString *title = dict[@"kMRMediaRemoteNowPlayingInfoTitle"], *artist = dict[@"kMRMediaRemoteNowPlayingInfoArtist"];
+        NSString *albumName = dict[@"kMRMediaRemoteNowPlayingInfoAlbum"];
+        if ([albumName isKindOfClass:[NSString class]]) dispatch_async(dispatch_get_main_queue(), ^{ gNowAlbum = albumName; });
         BOOL explicitTrack = [dict[@"kMRMediaRemoteNowPlayingInfoIsExplicitTrack"] boolValue];
         NSData *art = dict[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
         static NSData *lastArt; static UIImage *lastImg;
@@ -2398,7 +2405,7 @@ static void AlbumTick(UIWindow *w) {
         row.tag = ROW_TAG;
         UIView *cover = [UIView new];
         cover.tag = 9;
-        cover.backgroundColor = UIColor.systemBackgroundColor;
+        cover.backgroundColor = UIColor.clearColor;   // Music's buttons are hidden anyway; a fill hid animated covers
         cover.userInteractionEnabled = NO;
         [row addSubview:cover];
         [row addSubview:RowButton(2, @"shuffle", nil, NO)];
@@ -4233,7 +4240,104 @@ static void StatusBlur(UIWindow *w) {
     if (dbg) [w insertSubview:v belowSubview:dbg]; else if (w.subviews.lastObject != v) [w bringSubviewToFront:v];
 }
 
+// ---- Animated album cover in the full player (iOS 26) ----
+// Music only plays motion covers on album pages. When one is showing, we keep its
+// video player; when the full player opens on a song from that album, the same
+// video plays on the player's artwork (looping, muted).
+#define MOTION_TAG 0x4D504D4F
+static __weak AVPlayer *gMotionPlayer;
+static __weak UIView *gMotionPage;
+static NSString *gMotionDebug = @"-";
+static AVPlayerLayer *FindPlayerLayer(CALayer *l, int depth) {
+    if ([l isKindOfClass:[AVPlayerLayer class]] && ((AVPlayerLayer *)l).player) return (AVPlayerLayer *)l;
+    if (depth > 12) return nil;
+    for (CALayer *s in l.sublayers) { AVPlayerLayer *p = FindPlayerLayer(s, depth + 1); if (p) return p; }
+    return nil;
+}
+static BOOL PageHasLabel(UIView *page, NSString *text) {
+    if (!text.length) return NO;
+    NSString *t1 = text.lowercaseString;
+    for (NSString *suf in @[@" - single", @" - ep"]) if ([t1 hasSuffix:suf]) t1 = [t1 substringToIndex:t1.length - suf.length];
+    NSMutableArray *st = [NSMutableArray arrayWithObject:page];
+    int g = 0;
+    while (st.count && g++ < 1500) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if ([v isKindOfClass:[UILabel class]]) {
+            NSString *l = ((UILabel *)v).text.lowercaseString;
+            for (NSString *suf in @[@" - single", @" - ep"]) if ([l hasSuffix:suf]) l = [l substringToIndex:l.length - suf.length];
+            if ([l isEqualToString:t1]) return YES;
+            continue;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+    return NO;
+}
+static void MotionTick(UIWindow *w) {
+    // 1. On an album page with a motion cover: remember its player.
+    UIView *rp = gRowParent;
+    if (rp.window == w) {
+        UIView *page = rp;
+        for (UIView *p = rp; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]]) { page = p; break; }
+        AVPlayerLayer *pl = FindPlayerLayer(page.layer, 0);
+        if (pl.player) { gMotionPlayer = pl.player; gMotionPage = page; }
+    }
+    // 2. Full player up: put the video on its artwork when the album matches.
+    UIView *pv = nil;
+    BOOL up = PlayerIsUp(w, &pv);
+    UIImageView *art = nil;
+    if (up) {
+        CGFloat best = 0;
+        NSMutableArray *st = [NSMutableArray arrayWithObject:pv];
+        int g = 0;
+        while (st.count && g++ < 600) {
+            UIView *v = st.lastObject; [st removeLastObject];
+            if (v.hidden || v.alpha < 0.01 || v.tag == MOTION_TAG) continue;
+            if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) {
+                CGSize s = v.bounds.size;
+                if (s.width > w.bounds.size.width * 0.3 && fabs(s.width - s.height) < 8 && s.width * s.height > best) { best = s.width * s.height; art = (UIImageView *)v; }
+            }
+            [st addObjectsFromArray:v.subviews];
+        }
+    }
+    static __weak UIView *shown;
+    AVPlayer *mp = gMotionPlayer;
+    BOOL match = up && art && mp && gMotionPage && PageHasLabel(gMotionPage, gNowAlbum);
+    if (!match) {
+        [shown removeFromSuperview];
+        gMotionDebug = [NSString stringWithFormat:@"player=%d art=%d video=%d album=%@", up, art != nil, mp != nil, gNowAlbum];
+        return;
+    }
+    UIView *mv = [art viewWithTag:MOTION_TAG];
+    if (!mv) {
+        [shown removeFromSuperview];
+        mv = [[UIView alloc] initWithFrame:art.bounds];
+        mv.tag = MOTION_TAG; mv.userInteractionEnabled = NO; mv.clipsToBounds = YES;
+        mv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        AVPlayerLayer *l = [AVPlayerLayer playerLayerWithPlayer:mp];
+        l.videoGravity = AVLayerVideoGravityResizeAspectFill;
+        l.name = @"mp.motion";
+        [mv.layer addSublayer:l];
+        [art addSubview:mv];
+        shown = mv;
+    }
+    CGFloat r = MAX(art.layer.cornerRadius, art.superview.layer.cornerRadius);
+    if (mv.layer.cornerRadius != r) { mv.layer.cornerRadius = r; mv.layer.cornerCurve = kCACornerCurveContinuous; }
+    for (CALayer *l in mv.layer.sublayers) if ([l.name isEqualToString:@"mp.motion"] && !CGRectEqualToRect(l.frame, mv.bounds)) {
+        [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = mv.bounds; [CATransaction commit];
+    }
+    // Keep it moving: muted, and looped from the start when it ends.
+    if (!mp.muted) mp.muted = YES;
+    if (mp.rate == 0 && mp.currentItem) {
+        if (CMTimeCompare(mp.currentTime, mp.currentItem.duration) >= 0 || mp.currentItem.status == AVPlayerItemStatusReadyToPlay) {
+            if (CMTIME_IS_NUMERIC(mp.currentItem.duration) && CMTimeCompare(mp.currentTime, mp.currentItem.duration) >= 0) [mp seekToTime:kCMTimeZero];
+            [mp play];
+        }
+    }
+    gMotionDebug = @"showing";
+}
+
 static void FloatTick(UIWindow *w) {
+    @try { MotionTick(w); } @catch (__unused id e) {}
     if (!w || !gNavGlass) return;
     CGFloat top = w.safeAreaInsets.top, band = top + 80, W = w.bounds.size.width;
     // Icons in the top band (any view), then the small square-ish view holding each.
@@ -4293,7 +4397,7 @@ static void FloatTick(UIWindow *w) {
     if (artist && more && more != favMore) { favMore = more; @try { RefreshArtistFav(); } @catch (__unused id e) {} }
     if (!album && !artist && more) GlassCircleFor((UIControl *)more, TOPBTN);
     if (gRowParent && gRowParent.window == w) RedToWhite(gRowParent);
-    gFloatDebug = [NSString stringWithFormat:@"search: %@ | artist: %@ | share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gSearchDebug, gArtistDebug, gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
+    gFloatDebug = [NSString stringWithFormat:@"motion: %@ | search: %@ | artist: %@ | share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gMotionDebug, gSearchDebug, gArtistDebug, gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
 }
 
 // Music's top buttons (Swift SymbolButton): when the download one changes state
