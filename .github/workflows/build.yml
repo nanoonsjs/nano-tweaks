@@ -28,7 +28,11 @@ jobs:
           mkdir -p out
           for p in MusicPill Control26 Photos26; do  # PhotosGlass replaced by Photos26, Spotlight26 ditched
             echo "::group::$p"
-            (cd "$p" && gmake clean package FINALPACKAGE=1)
+            if ! (cd "$p" && gmake clean package FINALPACKAGE=1 > ../build-$p.log 2>&1); then
+              cat ../build-$p.log
+              grep -E "error:" ../build-$p.log | head -15 | while read -r l; do echo "::error::$l"; done
+              exit 2
+            fi
             cp "$p"/packages/*.deb out/
             echo "::endgroup::"
           done
