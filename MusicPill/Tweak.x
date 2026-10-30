@@ -1,4 +1,5 @@
-// MusicPill 1.2.1 - made by nano
+// MusicPill 1.2.2 - made by nano
+// 1.2.2: an album / artist share button no longer stays behind on Library.
 // 1.2.1: player ••• / Lossless / album download found by symbol and text too
 //        (VoiceOver labels are empty after a reboot, which broke them).
 // 1.2.0: public release: package id com.nano.musicpill (replaces com.user.musicpill).
@@ -1196,7 +1197,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3876,7 +3877,20 @@ static void AlignGlyph(UIView *c, CGFloat targetX, CGFloat scale, CGFloat dy) {
 #define PAIRW 117.0
 static const void *kShareBtn = &kShareBtn;
 // Share + ••• share one glass capsule, like iOS 26 (album and artist pages).
+@interface MPWeakBox : NSObject
+@property (nonatomic, weak) id obj;
+@end
+@implementation MPWeakBox
+@end
+static NSHashTable *gShareBtns;   // every share button made (they live outside their page)
+static const void *kShareOwner = &kShareOwner;
 static void PlaceSharePair(UIView *more) {
+    // Share buttons whose page is gone (popped album / artist) go too; they sit in
+    // a shared ancestor, so they outlived their page and showed up on Library.
+    for (UIButton *sb in [gShareBtns allObjects]) {
+        UIView *owner = ((MPWeakBox *)objc_getAssociatedObject(sb, kShareOwner)).obj;
+        if (!owner || !owner.window || owner != more) { [sb removeFromSuperview]; [gShareBtns removeObject:sb]; if (owner) objc_setAssociatedObject(owner, kShareBtn, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    }
     static __weak UIView *lastMore;
     UIView *prev = lastMore;
     if (prev && prev != more) {
@@ -3917,6 +3931,10 @@ static void PlaceSharePair(UIView *more) {
         [b setImage:[UIImage systemImageNamed:@"square.and.arrow.up" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
         [b addTarget:[MPShare shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
         objc_setAssociatedObject(more, kShareBtn, b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        MPWeakBox *box = [MPWeakBox new]; box.obj = more;
+        objc_setAssociatedObject(b, kShareOwner, box, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!gShareBtns) gShareBtns = [NSHashTable weakObjectsHashTable];
+        [gShareBtns addObject:b];
         AttachJelly(b, g);
     }
     if (bigHost.subviews.lastObject != b) [bigHost addSubview:b];
