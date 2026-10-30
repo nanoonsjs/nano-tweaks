@@ -1,4 +1,6 @@
-// MusicPill 1.0.26 - made by nano
+// MusicPill 1.0.27 - made by nano
+// 1.0.27: artists without a photo: the page moves down so the centered name,
+//         play and star sit below the top buttons instead of under them.
 // 1.0.26: account picture back on Search (a wrong check hid it), and also on
 //         Library, Radio and Browse.
 // 1.0.25: switch back to its rounded look (no stretching; plain dark selected
@@ -962,7 +964,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.26 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.27 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3865,6 +3867,30 @@ static void ArtistTick(UIView *play) {
     // Run to the very bottom of Music's header cell, so no strip of photo shows under it.
     if ([container isKindOfClass:[UICollectionReusableView class]] && container.bounds.size.height - bottom < 60 && container.bounds.size.height > bottom) bottom = container.bounds.size.height;
     CGRect of = CGRectMake(0, bottom - OH, W, OH + 8);   // 8pt solid past the fade covers the photo's last line
+    // Artists without a photo have a short header: our name would end up under the
+    // top buttons. Push the page down (once, at rest) so there's room above it.
+    {
+        UIScrollView *cv = nil;
+        for (UIView *p = container.superview; p; p = p.superview) if ([p isKindOfClass:[UIScrollView class]]) { cv = (UIScrollView *)p; break; }
+        UIWindow *win = play.window;
+        BOOL atRest = cv && fabs(cv.contentOffset.y + cv.adjustedContentInset.top) < 2 && !cv.isTracking && !cv.isDecelerating;
+        if (cv && atRest && !objc_getAssociatedObject(cv, &gArtistOverlay)) {
+            objc_setAssociatedObject(cv, &gArtistOverlay, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            CGFloat nameTop = [container convertPoint:CGPointMake(0, bottom - OH + (OH - 14 - PD) - 66) toView:win].y;
+            CGFloat want = win.safeAreaInsets.top + 70;
+            if (nameTop < want) {
+                UIResponder *r = cv;
+                while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
+                UIViewController *vc = (UIViewController *)r;
+                if (vc) {
+                    UIEdgeInsets add = vc.additionalSafeAreaInsets;
+                    add.top += round(want - nameTop);
+                    vc.additionalSafeAreaInsets = add;
+                }
+                if (container.clipsToBounds) container.clipsToBounds = NO;
+            }
+        }
+    }
     if (!CGRectEqualToRect(ov.frame, of)) {
         ov.frame = of;
         for (CALayer *l in ov.layer.sublayers) if ([l.name isEqualToString:@"mp.fade"]) { [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = ov.bounds; [CATransaction commit]; }
