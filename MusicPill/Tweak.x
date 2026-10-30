@@ -1,4 +1,7 @@
-// MusicPill 1.0.32 - made by nano
+// MusicPill 1.0.33 - made by nano
+// 1.0.33: full player: favorite star left of ••• (pops + sparks when on),
+//         ••• without its circle, artist name in Music's pink, Lossless badge
+//         on liquid glass.
 // 1.0.32: motion cover runs while the player is open (it wasn't being checked
 //         then), album matched by accessibility text / page title too.
 // 1.0.31: player artwork found by any picture-holding square view; motion
@@ -249,6 +252,8 @@ static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gFloatDebug = @"-";
 static NSString *gNowAlbum;   // album of the song playing (MediaRemote)
+static NSString *gNowTitle;   // song playing (MediaRemote)
+static const void *kKeepRed = &kKeepRed;   // labels we colour pink on purpose
 static CFTimeInterval gPlayerCooldownUntil;   // no reopening the player before this
 static NSString *gDismissDebug = @"-";
 static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from);
@@ -976,7 +981,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.32 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.33 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1331,6 +1336,7 @@ static BOOL OpenPlayer(UIView *mini) {
         NSString *title = dict[@"kMRMediaRemoteNowPlayingInfoTitle"], *artist = dict[@"kMRMediaRemoteNowPlayingInfoArtist"];
         NSString *albumName = dict[@"kMRMediaRemoteNowPlayingInfoAlbum"];
         if ([albumName isKindOfClass:[NSString class]]) dispatch_async(dispatch_get_main_queue(), ^{ gNowAlbum = albumName; });
+        if ([title isKindOfClass:[NSString class]]) dispatch_async(dispatch_get_main_queue(), ^{ gNowTitle = title; });
         BOOL explicitTrack = [dict[@"kMRMediaRemoteNowPlayingInfoIsExplicitTrack"] boolValue];
         NSData *art = dict[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
         static NSData *lastArt; static UIImage *lastImg;
@@ -2585,15 +2591,15 @@ static BOOL InBars(UIView *v) {
 %hook UILabel
 - (void)tintColorDidChange {
     %orig;
-    if (gAlbum && IsMusicRed(self.textColor) && !InBars(self)) self.textColor = UIColor.whiteColor;
+    if (gAlbum && IsMusicRed(self.textColor) && !InBars(self) && !objc_getAssociatedObject(self, kKeepRed)) self.textColor = UIColor.whiteColor;
 }
 - (void)didMoveToSuperview {
     %orig;
-    if (gAlbum && self.superview && IsMusicRed(self.textColor) && !InBars(self)) self.textColor = UIColor.whiteColor;
+    if (gAlbum && self.superview && IsMusicRed(self.textColor) && !InBars(self) && !objc_getAssociatedObject(self, kKeepRed)) self.textColor = UIColor.whiteColor;
 }
 - (void)setTextColor:(UIColor *)c {
     // iOS 26: the artist name and "Show Complete Album" are white, not red.
-    if (gAlbum && IsMusicRed(c) && !InBars(self)) { %orig(UIColor.whiteColor); return; }
+    if (gAlbum && IsMusicRed(c) && !InBars(self) && !objc_getAssociatedObject(self, kKeepRed)) { %orig(UIColor.whiteColor); return; }
     %orig;
 }
 - (void)setText:(NSString *)text {
@@ -3688,13 +3694,13 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
     CGPoint c = CGPointMake(star.bounds.size.width / 2, star.bounds.size.height / 2);
     UIView *ring = [[UIView alloc] initWithFrame:CGRectMake(c.x - 20, c.y - 20, 40, 40)];
     ring.userInteractionEnabled = NO; ring.layer.cornerRadius = 20;
-    ring.layer.borderWidth = 2; ring.layer.borderColor = UIColor.whiteColor.CGColor;
+    ring.layer.borderWidth = 2; ring.layer.borderColor = (star.tintColor ?: UIColor.whiteColor).CGColor;
     [star addSubview:ring];
     ring.transform = CGAffineTransformMakeScale(0.4, 0.4);
     [UIView animateWithDuration:0.5 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ ring.transform = CGAffineTransformMakeScale(1.6, 1.6); ring.alpha = 0; } completion:^(BOOL f) { [ring removeFromSuperview]; }];
     for (int i = 0; i < 8; i++) {
         UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(c.x - 2.5, c.y - 2.5, 5, 5)];
-        dot.userInteractionEnabled = NO; dot.layer.cornerRadius = 2.5; dot.backgroundColor = UIColor.whiteColor;
+        dot.userInteractionEnabled = NO; dot.layer.cornerRadius = 2.5; dot.backgroundColor = star.tintColor ?: UIColor.whiteColor;
         [star addSubview:dot];
         CGFloat ang = i * M_PI / 4 + M_PI / 8;
         [UIView animateWithDuration:0.55 delay:0.04 options:UIViewAnimationOptionCurveEaseOut animations:^{
@@ -4789,6 +4795,133 @@ static void PlayerDebug(UIView *player, UIWindow *w) {
 }
 
 static void MotionTick(UIWindow *w);
+
+// ---- Full player, iOS 26 details ----
+static UIColor *MusicPink(void) { return [UIColor colorWithRed:0.98 green:0.24 blue:0.37 alpha:1]; }
+#define PSTAR_TAG 0x4D505354
+#define LOSSGLASS_TAG 0x4D504C47
+static __weak UIView *gPlayerMore;
+static BOOL gSongFav, gSongFavKnown;
+static CFTimeInterval gSongFavLock;
+static void RefreshSongFav(void) {
+    if (CACurrentMediaTime() < gSongFavLock) return;
+    UIAction *a = FindKind(MenuOf(gPlayerMore, NULL).children, @[@"love", @"unlove"]);
+    gSongFavKnown = a != nil;
+    if (a) gSongFav = [MenuKind(a) isEqualToString:@"unlove"];
+}
+@interface MPSongStar : NSObject
++ (instancetype)shared;
+@end
+@implementation MPSongStar
++ (instancetype)shared { static MPSongStar *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPSongStar new]; }); return t; }
+- (void)tap:(UIButton *)b {
+    UIView *more = gPlayerMore;
+    UIContextMenuInteraction *mi = nil;
+    UIAction *a = FindKind(MenuOf(more, &mi).children, @[@"love", @"unlove"]);
+    if (!a) { OpenMenu(more, mi); return; }
+    BOOL willFav = ![MenuKind(a) isEqualToString:@"unlove"];
+    RunAction(a, b);
+    gSongFav = willFav; gSongFavKnown = YES;
+    gSongFavLock = CACurrentMediaTime() + 1.5;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    SetStar(b, willFav, YES);
+}
+@end
+static void PlayerExtras(UIView *player, UIWindow *w) {
+    CGFloat H = w.bounds.size.height;
+    UIView *more = nil, *loss = nil; UIButton *artist = nil;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:player];
+    int g = 0;
+    while (st.count && g++ < 900) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (v.hidden || v.alpha < 0.01 || v.tag == PSTAR_TAG || v.tag == PLAYERDEBUG_TAG) continue;
+        CGRect f = [v convertRect:v.bounds toView:nil];
+        NSString *ax = v.accessibilityLabel;
+        if ([v isKindOfClass:[UIControl class]] && CGRectGetMidY(f) > H * 0.4 && CGRectGetMidY(f) < H * 0.9) {
+            NSString *cn = NSStringFromClass([v class]);
+            if (!more && [cn containsString:@"SymbolButton"] && [ax isEqualToString:@"More"]) more = v;
+            else if (!loss && [cn containsString:@"SymbolButton"] && ([ax containsString:@"Lossless"] || [ax containsString:@"Dolby"] || [ax containsString:@"Atmos"] || [ax containsString:@"Hi-Res"])) loss = v;
+            else if (!artist && [v isKindOfClass:[UIButton class]] && [NSStringFromClass([v.superview class]) containsString:@"Marquee"]) artist = (UIButton *)v;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+    // Artist name in Music's pink, like iOS 26.
+    if (artist) {
+        objc_setAssociatedObject(artist.titleLabel, kKeepRed, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (![[artist titleColorForState:UIControlStateNormal] isEqual:MusicPink()]) [artist setTitleColor:MusicPink() forState:UIControlStateNormal];
+        if (![artist.titleLabel.textColor isEqual:MusicPink()]) artist.titleLabel.textColor = MusicPink();
+    }
+    // ••• without its circle; a favourite star just left of it.
+    if (more) {
+        gPlayerMore = more;
+        StripMusicCircle(more);
+        if ([more isKindOfClass:[UIButton class]]) {
+            UIButton *mb = (UIButton *)more;
+            if (mb.configuration && mb.configuration.background.backgroundColor && ![mb.configuration.background.backgroundColor isEqual:UIColor.clearColor]) {
+                UIButtonConfiguration *c = mb.configuration; c.background.backgroundColor = UIColor.clearColor; mb.configuration = c;
+            }
+            if (mb.tintColor && ![mb.tintColor isEqual:MusicPink()]) mb.tintColor = MusicPink();
+        }
+        CGPoint mc = GlyphCenter(more, nil);
+        CGPoint want = CGPointMake(mc.x - 52, mc.y);
+        UIView *host = nil;
+        for (UIView *p = more.superview; p && p != w; p = p.superview) {
+            CGPoint q = [w convertPoint:want toView:p];
+            if (CGRectContainsRect(p.bounds, CGRectMake(q.x - 22, q.y - 22, 44, 44)) && p.userInteractionEnabled && ![p isKindOfClass:[UIStackView class]]) { host = p; break; }
+        }
+        if (!host) host = player;
+        UIButton *star = (UIButton *)[host viewWithTag:PSTAR_TAG];
+        if (!star) {
+            star = [UIButton buttonWithType:UIButtonTypeCustom];
+            star.tag = PSTAR_TAG;
+            star.tintColor = MusicPink();
+            [star addTarget:[MPSongStar shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+            [host addSubview:star];
+            SetStar(star, NO, NO);
+            gSongFavKnown = NO;
+        }
+        CGPoint q = [w convertPoint:want toView:host];
+        CGRect sf = CGRectMake(round(q.x - 22), round(q.y - 22), 44, 44);
+        if (!CGRectEqualToRect(star.frame, sf)) star.frame = sf;
+        if (host.subviews.lastObject != star) [host bringSubviewToFront:star];
+        static NSString *lastSong;
+        if (gNowTitle && ![gNowTitle isEqualToString:lastSong]) {
+            lastSong = gNowTitle;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ @try { RefreshSongFav(); } @catch (__unused id e) {} });
+        }
+        static CFTimeInterval lastRefresh;
+        if (CACurrentMediaTime() - lastRefresh > 2) { lastRefresh = CACurrentMediaTime(); @try { RefreshSongFav(); } @catch (__unused id e) {} }
+        if (gSongFavKnown && CACurrentMediaTime() > gSongFavLock) SetStar(star, gSongFav, NO);
+    }
+    // Lossless / Dolby badge on liquid glass instead of its outline.
+    if (loss && loss.superview) {
+        NSMutableArray *ls = [NSMutableArray arrayWithObject:loss.layer];
+        int lg = 0;
+        while (ls.count && lg++ < 40) {
+            CALayer *l = ls.lastObject; [ls removeLastObject];
+            if (l.borderWidth > 0) l.borderWidth = 0;
+            if ([l isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)l).lineWidth > 0 && ((CAShapeLayer *)l).fillColor == NULL) l.hidden = YES;
+            [ls addObjectsFromArray:l.sublayers ?: @[]];
+        }
+        if ([loss isKindOfClass:[UIButton class]] && ((UIButton *)loss).configuration) {
+            UIButtonConfiguration *c = ((UIButton *)loss).configuration;
+            if (c.background.strokeWidth > 0) { c.background.strokeWidth = 0; ((UIButton *)loss).configuration = c; }
+        }
+        UIView *hostL = loss.superview;
+        UIVisualEffectView *gl = (UIVisualEffectView *)[hostL viewWithTag:LOSSGLASS_TAG];
+        if (!gl) {
+            gl = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+            gl.tag = LOSSGLASS_TAG; gl.userInteractionEnabled = NO; gl.clipsToBounds = YES;
+            gl.layer.borderWidth = 0.75; gl.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2].CGColor;
+            gl.layer.cornerCurve = kCACornerCurveContinuous;
+            [hostL insertSubview:gl belowSubview:loss];
+        }
+        CGRect lf = CGRectInset(loss.frame, -4, -3);
+        if (!CGRectEqualToRect(gl.frame, lf)) { gl.frame = lf; gl.layer.cornerRadius = lf.size.height / 2; }
+        gl.hidden = loss.hidden || loss.alpha < 0.05;
+    }
+}
+
 static void StartWatchdog(void) {
     static int tick = 0;
     CADisplayLink *dl = [CADisplayLink displayLinkWithTarget:[MPPillTicker shared] selector:@selector(tick:)];
@@ -4826,6 +4959,7 @@ static void StartWatchdog(void) {
             @try { SweepQueueButtons(player, 0); } @catch (__unused id e) {}
             @try { QueueTick(player); } @catch (__unused id e) {}
             @try { MotionTick(w); } @catch (__unused id e) {}   // animated cover on the artwork
+            @try { PlayerExtras(player, w); } @catch (__unused id e) {}
             if (tick % 4 == 0) { @try { PlayerDebug(player, w); } @catch (__unused id e) {} }
         } else if (w) {
             [[w viewWithTag:PLAYERDEBUG_TAG] removeFromSuperview];
