@@ -1,4 +1,6 @@
-// LockStar 0.3.0 - made by nano
+// LockStar 0.4.0 - made by nano
+// 0.4.0: Control Center left alone; Lock Screen / Dynamic Island players found
+//        through their own back button (MRUTransportButton) layout.
 // 0.3.0: all SpringBoard windows scanned, buttons found by their symbols too, floating debug strip.
 // 0.2.1: players found by their back / AirPlay buttons (not class names); Apple Music only.
 // iOS 26 favorite star on the Lock Screen / Dynamic Island now-playing player:
@@ -164,6 +166,7 @@ static BOOL IsRoute(UIView *v) {
     return [n containsString:@"Rout"] || [a containsString:@"airplay"] || [a containsString:@"destination"] || [a containsString:@"route"] || [g containsString:@"airplay"];
 }
 static NSMutableOrderedSet *gSeen;
+static NSHashTable *gBacks;   // back buttons met in their own layout (any depth / window)
 static void Find(UIView *v, int depth, NSMutableArray *prev, NSMutableArray *route) {
     for (UIView *s in v.subviews) {
         if (s.hidden || s.alpha < 0.02 || s.tag == STAR_TAG || s.tag == DBG_TAG) continue;
@@ -174,7 +177,7 @@ static void Find(UIView *v, int depth, NSMutableArray *prev, NSMutableArray *rou
             if (IsPrevious(s)) [prev addObject:s];
             else if (IsRoute(s)) [route addObject:s];
         }
-        if (depth < 28) Find(s, depth + 1, prev, route);
+        if (depth < 60) Find(s, depth + 1, prev, route);
     }
 }
 static UIView *Common(UIView *a, UIView *b) {
@@ -189,6 +192,40 @@ static void Debug(UIView *host, NSString *text) {
     CGSize sz = [dbg sizeThatFits:CGSizeMake(host.bounds.size.width - 16, 200)];
     dbg.frame = CGRectMake(8, 0, host.bounds.size.width - 16, sz.height);
     [host bringSubviewToFront:dbg];
+}
+// Control Center's player is left alone (Control26 handles it).
+static BOOL InControlCenter(UIView *v) {
+    for (UIView *p = v; p; p = p.superview) {
+        NSString *n = Cls(p);
+        if ([n containsString:@"CCUI"] || [n containsString:@"ControlCenter"] || [n containsString:@"MediaControlsModule"]) return YES;
+    }
+    UIWindow *w = v.window;
+    NSString *wn = w ? Cls(w) : @"";
+    return [wn containsString:@"ControlCenter"];
+}
+static UIView *RouteNear(UIView *back) {
+    UIView *np = nil;
+    for (UIView *p = back.superview; p; p = p.superview) if ([Cls(p) containsString:@"NowPlayingView"]) { np = p; break; }
+    if (!np) np = back.superview.superview.superview;
+    NSMutableArray *prev = [NSMutableArray array], *route = [NSMutableArray array];
+    Find(np, 0, prev, route);
+    CGPoint bc = [back convertPoint:CGPointMake(back.bounds.size.width / 2, back.bounds.size.height / 2) toView:nil];
+    UIView *best = nil; CGFloat bd = 1e9;
+    for (UIView *r in route) {
+        CGPoint rc = [r convertPoint:CGPointMake(r.bounds.size.width / 2, r.bounds.size.height / 2) toView:nil];
+        if (fabs(rc.y - bc.y) < 40 && fabs(rc.x - bc.x) < bd) { bd = fabs(rc.x - bc.x); best = r; }
+    }
+    return best;
+}
+static void PlaceStar(UIView *back, UIView *rt);
+static void PlaceFor(UIView *back) {
+    if (!back.window || !Showing(back)) return;
+    if (InControlCenter(back)) {
+        // Remove anything an earlier version put there.
+        for (UIView *p = back.superview; p; p = p.superview) for (UIView *s in [p.subviews copy]) if (s.tag == STAR_TAG || s.tag == DBG_TAG) [s removeFromSuperview];
+        return;
+    }
+    PlaceStar(back, RouteNear(back));
 }
 // Places a star in the container holding one player's back + AirPlay buttons.
 static void PlaceStar(UIView *back, UIView *rt) {
@@ -241,18 +278,8 @@ static void Scan(void) {
     gSeen = [NSMutableOrderedSet orderedSet];
     int nwin = 0;
     for (UIWindow *w in wins) if (!w.hidden && w.alpha > 0.02 && w.tag != DBG_TAG) { nwin++; Find(w, 0, prev, route); }
-    for (UIView *b in prev) {
-        if (!Showing(b)) continue;
-        UIView *rt = nil; CGFloat best = 1e9;
-        CGPoint bc = [b convertPoint:CGPointMake(b.bounds.size.width / 2, b.bounds.size.height / 2) toView:nil];
-        for (UIView *r in route) {
-            if (r.window != b.window || !Showing(r)) continue;
-            CGPoint rc = [r convertPoint:CGPointMake(r.bounds.size.width / 2, r.bounds.size.height / 2) toView:nil];
-            CGFloat d = fabs(rc.y - bc.y) * 4 + fabs(rc.x - bc.x);
-            if (fabs(rc.y - bc.y) < 40 && d < best) { best = d; rt = r; }
-        }
-        @try { PlaceStar(b, rt); } @catch (__unused id e) {}
-    }
+    for (UIView *b in prev) { @try { PlaceFor(b); } @catch (__unused id e) {} }
+    for (UIView *b in [gBacks allObjects]) { @try { PlaceFor(b); } @catch (__unused id e) {} }
     for (UIButton *s in [gStars allObjects]) if (!s.window) [s removeFromSuperview];
     // A floating debug strip at the top of the screen, whatever is showing.
     static UIWindow *dw;
@@ -268,13 +295,24 @@ static void Scan(void) {
     }
     dw.frame = UIScreen.mainScreen.bounds; dw.hidden = NO;
     UILabel *l = (UILabel *)[dw viewWithTag:1];
-    l.text = [NSString stringWithFormat:@" LockStar 0.3.0 | wins=%d prev=%lu route=%lu music=%d fav=%@:%d %@\n %@", nwin, (unsigned long)prev.count, (unsigned long)route.count, MusicIsPlaying(), gFavKey, gFav, gLastCmd, [gSeen.array componentsJoinedByString:@"\n "]];
+    l.text = [NSString stringWithFormat:@" LockStar 0.4.0 | hooked=%lu wins=%d prev=%lu route=%lu music=%d fav=%@:%d %@\n %@", (unsigned long)gBacks.count, nwin, (unsigned long)prev.count, (unsigned long)route.count, MusicIsPlaying(), gFavKey, gFav, gLastCmd, [gSeen.array componentsJoinedByString:@"\n "]];
     CGSize sz = [l sizeThatFits:CGSizeMake(dw.bounds.size.width - 16, 400)];
     l.frame = CGRectMake(8, 50, dw.bounds.size.width - 16, sz.height);
 }
 
 #pragma mark - hooks
 
+static IMP gTBLayout;
+static void TBLayout(UIView *self, SEL _cmd) {
+    if (gTBLayout) ((void (*)(id, SEL))gTBLayout)(self, _cmd);
+    @try {
+        if (IsPrevious(self)) {
+            if (!gBacks) gBacks = [NSHashTable weakObjectsHashTable];
+            [gBacks addObject:self];
+            PlaceFor(self);
+        }
+    } @catch (__unused id e) {}
+}
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u) {
     LoadPrefs();
     dispatch_async(dispatch_get_main_queue(), ^{ for (UIButton *b in [gStars allObjects]) [b.superview setNeedsLayout]; });
@@ -287,6 +325,8 @@ static void PrefsChanged(CFNotificationCenterRef c, void *o, CFStringRef n, cons
     [[NSNotificationCenter defaultCenter] addObserverForName:@"kMRMediaRemoteNowPlayingInfoDidChangeNotification" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) { QueryFav(); }];
     void (*reg)(dispatch_queue_t) = (void (*)(dispatch_queue_t))MR("MRMediaRemoteRegisterForNowPlayingNotifications");
     if (reg) reg(dispatch_get_main_queue());
+    Class tb = objc_getClass("MRUTransportButton");
+    if (tb) MSHookMessageEx(tb, @selector(layoutSubviews), (IMP)TBLayout, &gTBLayout);
     // Players come and go (lock, Dynamic Island, swipes): look a few times a second.
     dispatch_async(dispatch_get_main_queue(), ^{
         [NSTimer scheduledTimerWithTimeInterval:0.3 repeats:YES block:^(NSTimer *tm) { @try { Scan(); } @catch (__unused id e) {} }];
