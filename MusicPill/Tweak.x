@@ -2791,7 +2791,7 @@ static BOOL IsMusicRed(UIColor *c);
 // Album page: red labels / buttons (artist name, "Show Complete Album") -> white.
 static NSString *gRedDebug = @"-";
 static void RedToWhite(UIView *rowParent) {
-    __block int fixed = 0;
+
     UIView *root = rowParent;
     for (UIView *p = rowParent; p; p = p.superview) if ([p isKindOfClass:[UIScrollView class]]) { root = p; break; }
     NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
@@ -2806,7 +2806,7 @@ static void RedToWhite(UIView *rowParent) {
                 [[l.textColor resolvedColorWithTraitCollection:l.traitCollection] getRed:&r green:&g blue:&b alpha:&a];
                 gRedDebug = [NSString stringWithFormat:@"%@ rgb=%.2f,%.2f,%.2f %@", NSStringFromClass([l class]), r, g, b, NSStringFromClass([l.superview class])];
             }
-            if (IsMusicRed(l.textColor)) { l.textColor = UIColor.whiteColor; fixed++; }
+            if (IsMusicRed(l.textColor)) l.textColor = UIColor.whiteColor;
             NSAttributedString *as = l.attributedText;
             if (as.length) {
                 __block BOOL red = NO;
