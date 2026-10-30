@@ -1,4 +1,7 @@
-// MusicPill 1.0.43 - made by nano
+// MusicPill 1.0.44 - made by nano
+// 1.0.44: iOS 26 zoom: tapping an album / playlist / song tile grows its page
+//         out of the tile (back shrinks it into the tile) instead of iOS 16's
+//         side slide; picture / Edit leave the bar the moment a page opens.
 // 1.0.43: Library's Edit/Done text made clear at the source (no flash at all).
 // 1.0.42: closing always lands at the bottom pill (a stale frame sent it up).
 // 1.0.41: no frame of the player after swipe-down close, Music's Edit/Done is
@@ -491,6 +494,163 @@ static void InvisibleLibraryEdit(UINavigationItem *ni) {
     if (![ni.title isEqualToString:@"Library"]) return;
     for (UIBarButtonItem *it in ni.rightBarButtonItems) InvisibleBarItem(it);
 }
+// ---- iOS 26 zoom: pages grow out of the tile you tapped, and shrink back ----
+static __weak UIView *gTapCell;
+static CFTimeInterval gTapTime;
+static const void *kZoomCell = &kZoomCell, *kZoomRect = &kZoomRect;
+static BOOL gZoomOn = YES;
+static UIView *CellUnder(UIView *v) {
+    for (UIView *p = v; p; p = p.superview) {
+        if ([p isKindOfClass:[UICollectionViewCell class]] || [p isKindOfClass:[UITableViewCell class]]) return p;
+        if ([p isKindOfClass:[UIWindow class]]) break;
+    }
+    return nil;
+}
+static void HideTopExtras(UINavigationController *nav) {
+    UINavigationBar *nb = nav.navigationBar;
+    [nb viewWithTag:0x4D504156].hidden = YES;   // account picture
+    [nb viewWithTag:0x4D504544].hidden = YES;   // Library edit
+}
+static UIView *ZoomBackdrop(UIView *page, UIView *in) {
+    UIView *bd = [page snapshotViewAfterScreenUpdates:NO] ?: [UIView new];
+    bd.frame = [page convertRect:page.bounds toView:in];
+    bd.userInteractionEnabled = NO;
+    UIView *dim = [[UIView alloc] initWithFrame:bd.bounds];
+    dim.tag = 1; dim.backgroundColor = UIColor.blackColor; dim.alpha = 0;
+    [bd addSubview:dim];
+    return bd;
+}
+static void ZoomPush(UINavigationController *nav, UIViewController *vc, CGRect from) {
+    UIWindow *w = nav.view.window;
+    UIView *oldPage = nav.topViewController.view;
+    UIView *bd = ZoomBackdrop(oldPage, w);
+    [w addSubview:bd];
+    UIView *newPage = vc.view;
+    [nav.view layoutIfNeeded]; [newPage layoutIfNeeded];
+    CGRect full = [newPage convertRect:newPage.bounds toView:w];
+    if (CGRectIsEmpty(full)) full = w.bounds;
+    UIView *snap = [newPage snapshotViewAfterScreenUpdates:YES];
+    if (!snap) { [bd removeFromSuperview]; return; }
+    UIView *wrap = [[UIView alloc] initWithFrame:from];
+    wrap.clipsToBounds = YES; wrap.userInteractionEnabled = NO;
+    wrap.layer.cornerRadius = 18; wrap.layer.cornerCurve = kCACornerCurveContinuous;
+    wrap.backgroundColor = UIColor.blackColor;
+    CGFloat s = from.size.width / full.size.width;
+    snap.layer.anchorPoint = CGPointZero;
+    snap.frame = CGRectMake(0, 0, full.size.width, full.size.height);
+    snap.layer.position = CGPointZero;
+    snap.transform = CGAffineTransformMakeScale(s, s);
+    [wrap addSubview:snap];
+    [w addSubview:wrap];
+    newPage.alpha = 0;
+    UIView *dim = [bd viewWithTag:1];
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0.3 options:0 animations:^{
+        wrap.frame = full;
+        wrap.layer.cornerRadius = 0;
+        snap.transform = CGAffineTransformIdentity;
+        bd.transform = CGAffineTransformMakeScale(0.94, 0.94);
+        dim.alpha = 0.55;
+    } completion:^(BOOL d) {
+        newPage.alpha = 1;
+        [wrap removeFromSuperview];
+        [bd removeFromSuperview];
+    }];
+}
+static void ZoomPop(UINavigationController *nav, UIView *oldSnap, CGRect full, UIViewController *back, UIView *cell, CGRect stored) {
+    UIWindow *w = nav.view.window;
+    [nav.view layoutIfNeeded];
+    CGRect to = (cell.window == w) ? [cell convertRect:cell.bounds toView:w] : stored;
+    UIView *bd = ZoomBackdrop(back.view, w);
+    bd.transform = CGAffineTransformMakeScale(0.94, 0.94);
+    [bd viewWithTag:1].alpha = 0.55;
+    UIView *wrap = [[UIView alloc] initWithFrame:full];
+    wrap.clipsToBounds = YES; wrap.userInteractionEnabled = NO;
+    wrap.layer.cornerCurve = kCACornerCurveContinuous;
+    wrap.backgroundColor = UIColor.blackColor;
+    oldSnap.layer.anchorPoint = CGPointZero;
+    oldSnap.frame = CGRectMake(0, 0, full.size.width, full.size.height);
+    oldSnap.layer.position = CGPointZero;
+    [wrap addSubview:oldSnap];
+    [w addSubview:bd];
+    [w addSubview:wrap];
+    back.view.alpha = 0;
+    CGFloat s = to.size.width / full.size.width;
+    UIView *dim = [bd viewWithTag:1];
+    [UIView animateWithDuration:0.46 delay:0 usingSpringWithDamping:0.88 initialSpringVelocity:0.3 options:0 animations:^{
+        wrap.frame = to;
+        wrap.layer.cornerRadius = 18;
+        oldSnap.transform = CGAffineTransformMakeScale(s, s);
+        bd.transform = CGAffineTransformIdentity;
+        dim.alpha = 0;
+    } completion:nil];
+    [UIView animateWithDuration:0.16 delay:0.3 options:0 animations:^{ wrap.alpha = 0; } completion:^(BOOL d) {
+        [wrap removeFromSuperview];
+    }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        back.view.alpha = 1;
+        [bd removeFromSuperview];
+    });
+}
+
+%hook UIWindow
+- (void)sendEvent:(UIEvent *)e {
+    if (e.type == UIEventTypeTouches) {
+        UITouch *t0 = e.allTouches.anyObject;
+        if (t0.phase == UITouchPhaseBegan) {
+            UIView *c = CellUnder(t0.view);
+            if (c && c.bounds.size.width < self.bounds.size.width * 0.98) { gTapCell = c; gTapTime = CACurrentMediaTime(); }
+            else if (c) { gTapCell = c; gTapTime = CACurrentMediaTime(); }
+            else gTapCell = nil;
+        }
+    }
+    %orig;
+}
+%end
+
+%hook UINavigationController
+- (void)pushViewController:(UIViewController *)vc animated:(BOOL)animated {
+    UIView *cell = gTapCell;
+    BOOL zoom = gZoomOn && animated && self.view.window && cell.window == self.view.window && CACurrentMediaTime() - gTapTime < 1.2 &&
+                self.presentedViewController == nil && self.topViewController && [cell isDescendantOfView:self.topViewController.view];
+    HideTopExtras(self);
+    if (!zoom) { %orig; return; }
+    gTapCell = nil;
+    CGRect from = [cell convertRect:cell.bounds toView:self.view.window];
+    // The tile's artwork is where it grows from (rows: the whole row).
+    objc_setAssociatedObject(vc, kZoomCell, cell, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(vc, kZoomRect, [NSValue valueWithCGRect:from], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIView *oldBackdropSrc = self.topViewController.view;
+    (void)oldBackdropSrc;
+    UIWindow *w = self.view.window;
+    UIView *pre = ZoomBackdrop(self.topViewController.view, w);   // holds the screen while the push happens
+    [w addSubview:pre];
+    %orig(vc, NO);
+    @try { ZoomPush(self, vc, from); } @catch (__unused id e) { vc.view.alpha = 1; }
+    [pre removeFromSuperview];
+}
+- (UIViewController *)popViewControllerAnimated:(BOOL)animated {
+    UIViewController *top = self.topViewController;
+    NSValue *rv = objc_getAssociatedObject(top, kZoomRect);
+    UIGestureRecognizerState gs = self.interactivePopGestureRecognizer.state;
+    BOOL interactive = gs == UIGestureRecognizerStateBegan || gs == UIGestureRecognizerStateChanged;
+    HideTopExtras(self);
+    if (!gZoomOn || !animated || !rv || interactive || self.viewControllers.count < 2 || !self.view.window) return %orig;
+    UIWindow *w = self.view.window;
+    CGRect full = [top.view convertRect:top.view.bounds toView:w];
+    UIView *snap = [top.view snapshotViewAfterScreenUpdates:NO];
+    UIView *cell = objc_getAssociatedObject(top, kZoomCell);
+    UIViewController *back = self.viewControllers[self.viewControllers.count - 2];
+    if (!snap) return %orig;
+    UIView *hold = [snap snapshotViewAfterScreenUpdates:NO] ?: [UIView new];
+    hold.frame = full; hold.userInteractionEnabled = NO;
+    [w addSubview:hold];
+    UIViewController *r = %orig(NO);
+    @try { ZoomPop(self, snap, full, back, cell, rv.CGRectValue); } @catch (__unused id e) { back.view.alpha = 1; }
+    [hold removeFromSuperview];
+    return r;
+}
+%end
+
 %hook UINavigationItem
 - (void)setTitle:(NSString *)title { %orig(IsListenNow(title) ? @"Home" : title); }
 - (void)setRightBarButtonItems:(NSArray *)items animated:(BOOL)animated { %orig; @try { InvisibleLibraryEdit(self); } @catch (__unused id e) {} }
@@ -1023,7 +1183,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.43 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.44 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3262,7 +3422,7 @@ static void SearchPage(UINavigationBar *nb) {
     while (nr && ![nr isKindOfClass:[UINavigationController class]]) nr = nr.nextResponder;
     UINavigationController *nav = (UINavigationController *)nr;
     BOOL avatarPage = pt && [@[@"Search", @"Library", @"Radio", @"Browse"] containsObject:pt] && nav.viewControllers.count <= 1;
-    if (!avatarPage) { av.hidden = YES; return; }
+    if (!avatarPage) { av.hidden = YES; [nb viewWithTag:0x4D504544].hidden = YES; return; }
     // The page's list (the picture fades as soon as it scrolls).
     {
         NSMutableArray *q = [NSMutableArray arrayWithObject:nav.topViewController.view ?: nb];
