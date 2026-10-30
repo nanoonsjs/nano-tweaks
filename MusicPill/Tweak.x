@@ -1,4 +1,5 @@
-// MusicPill 1.0.12 - made by nano
+// MusicPill 1.0.13 - made by nano
+// 1.0.13: artist header found again (1.0.12's check was too strict).
 // 1.0.12: debug box moves with a two-finger drag; Music's own artist name hidden
 //         wherever it is; only the header play button inside the page is taken
 //         over (not the small one in the top bar, which made a 2nd copy); star
@@ -923,7 +924,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.12 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.13 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3170,11 +3171,12 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
 // Builds / updates our header over Music's (name centered, play big and white,
 // favorite star). Safe to call from Music's layout pass.
 static BOOL InPageList(UIView *v) {
-    for (UIView *p = v.superview; p; p = p.superview) {
-        if ([p isKindOfClass:[UINavigationBar class]]) return NO;
-        if ([p isKindOfClass:[UICollectionView class]]) return YES;
-    }
-    return NO;
+    // The page's header play button, not the small copy Music shows in the top bar.
+    for (UIView *p = v.superview; p; p = p.superview) if ([p isKindOfClass:[UINavigationBar class]]) return NO;
+    UIWindow *w = v.window;
+    CGRect f = [v convertRect:v.bounds toView:nil];
+    if (CGRectGetMidY(f) < w.safeAreaInsets.top + 80) return v == gArtistPlay;   // scrolled up: keep the one we have
+    return YES;
 }
 // Music's own name text anywhere on screen (e.g. a big title label), so it can be hidden.
 static void HideNameCopies(UIWindow *w, NSString *name) {
