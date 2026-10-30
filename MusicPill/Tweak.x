@@ -1,4 +1,6 @@
-// MusicPill 1.2.4 - made by nano
+// MusicPill 1.2.5 - made by nano
+// 1.2.5: animated cover also matched by the playing song's title on the album
+//         page; Lossless badge back to Music's own (no glass).
 // 1.2.4: animated cover matched to its album by the header text Music draws
 //         itself (no labels after a reboot meant no match).
 // 1.2.3: animated cover: only the album's own header video is taken (a music
@@ -1201,7 +1203,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -4721,6 +4723,7 @@ static BOOL PageHasLabel(UIView *page, NSString *text) {
     return NO;
 }
 static NSMapTable *gMotionByAlbum;   // album title -> its cover video player
+static NSMapTable *gMotionTexts;     // cover video player -> every text on its album page
 static NSString *AlbumKey(NSString *s) {
     s = s.lowercaseString;
     for (NSString *suf in @[@" - single", @" - ep"]) if ([s hasSuffix:suf]) s = [s substringToIndex:s.length - suf.length];
@@ -4776,6 +4779,21 @@ static void MotionTick(UIWindow *w) {
                     [vs addObjectsFromArray:v.subviews];
                 }
                 for (NSString *k in keys) [gMotionByAlbum setObject:pick.player forKey:AlbumKey(k)];
+                // Plus every text on the page (song list): the playing song's title is
+                // there even when the album title can't be read.
+                NSMutableSet *all = [NSMutableSet set];
+                NSMutableArray *as = [NSMutableArray arrayWithObject:page];
+                int ga = 0;
+                while (as.count && ga++ < 3000) {
+                    UIView *v = as.lastObject; [as removeLastObject];
+                    NSString *s = DrawnText(v);
+                    if (s.length > 1 && s.length < 160) [all addObject:AlbumKey(s)];
+                    [as addObjectsFromArray:v.subviews];
+                }
+                if (!gMotionTexts) gMotionTexts = [NSMapTable weakToStrongObjectsMapTable];
+                NSMutableSet *old = [gMotionTexts objectForKey:pick.player];
+                if (old) [all unionSet:old];
+                [gMotionTexts setObject:all forKey:pick.player];
                 [gVideoSeen appendFormat:@"cover keys=%@", [keys componentsJoinedByString:@"/"]];
             }
             videoDebug = [gVideoSeen copy];
@@ -4808,6 +4826,13 @@ static void MotionTick(UIWindow *w) {
     // This album's own cover video (by title), else the last page's if it matches.
     AVPlayer *byTitle = nil;
     for (NSString *k in gMotionByAlbum.keyEnumerator.allObjects) if ([AlbumKey(k) isEqualToString:AlbumKey(gNowAlbum ?: @"")]) { byTitle = [gMotionByAlbum objectForKey:k]; break; }
+    if (!byTitle) {
+        NSString *song = AlbumKey(gNowTitle ?: @""), *alb = AlbumKey(gNowAlbum ?: @"");
+        for (AVPlayer *p in gMotionTexts.keyEnumerator.allObjects) {
+            NSSet *tx = [gMotionTexts objectForKey:p];
+            if ((alb.length && [tx containsObject:alb]) || (song.length && [tx containsObject:song])) { byTitle = p; break; }
+        }
+    }
     if (byTitle) mp = byTitle;
     BOOL match = up && art && mp && (byTitle || (gMotionPage && PageHasLabel(gMotionPage, gNowAlbum)));
     if (match && objc_getAssociatedObject(art, &gMotionByAlbum) != mp) {
@@ -5521,7 +5546,8 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
     static __weak UIView *lossGlass;
     BOOL lossShowing = loss && ViewShowing(loss) && (HasText(loss, 0) || GlyphIn(loss, 0));
     if (!lossShowing) lossGlass.hidden = YES;
-    if (lossShowing && loss.superview) {
+    for (UIView *s in [loss.superview.subviews copy]) if (s.tag == LOSSGLASS_TAG) [s removeFromSuperview];
+    if (NO && lossShowing && loss.superview) {
         NSMutableArray *ls = [NSMutableArray arrayWithObject:loss.layer];
         int lg = 0;
         while (ls.count && lg++ < 40) {
