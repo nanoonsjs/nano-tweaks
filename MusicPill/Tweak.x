@@ -1,4 +1,6 @@
-// MusicPill 1.0.31 - made by nano
+// MusicPill 1.0.32 - made by nano
+// 1.0.32: motion cover runs while the player is open (it wasn't being checked
+//         then), album matched by accessibility text / page title too.
 // 1.0.31: player artwork found by any picture-holding square view; motion
 //         status shown in the player's debug box.
 // 1.0.30: motion cover looked for across the whole album page (+ debug of
@@ -974,7 +976,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.31 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.32 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -4266,20 +4268,24 @@ static AVPlayerLayer *FindPlayerLayer(CALayer *l, int depth) {
     for (CALayer *s in l.sublayers) { AVPlayerLayer *p = FindPlayerLayer(s, depth + 1); if (p) return p; }
     return nil;
 }
+static NSString *PageTitleOf(UIView *v);
 static BOOL PageHasLabel(UIView *page, NSString *text) {
     if (!text.length) return NO;
+    NSString *pt = PageTitleOf(page);
+    if (pt.length && [pt caseInsensitiveCompare:text] == NSOrderedSame) return YES;
     NSString *t1 = text.lowercaseString;
     for (NSString *suf in @[@" - single", @" - ep"]) if ([t1 hasSuffix:suf]) t1 = [t1 substringToIndex:t1.length - suf.length];
     NSMutableArray *st = [NSMutableArray arrayWithObject:page];
     int g = 0;
     while (st.count && g++ < 1500) {
         UIView *v = st.lastObject; [st removeLastObject];
-        if ([v isKindOfClass:[UILabel class]]) {
-            NSString *l = ((UILabel *)v).text.lowercaseString;
+        NSString *l = [v isKindOfClass:[UILabel class]] ? ((UILabel *)v).text : v.accessibilityLabel;
+        if (l.length) {
+            l = l.lowercaseString;
             for (NSString *suf in @[@" - single", @" - ep"]) if ([l hasSuffix:suf]) l = [l substringToIndex:l.length - suf.length];
-            if ([l isEqualToString:t1]) return YES;
-            continue;
+            if ([l isEqualToString:t1] || [l hasPrefix:[t1 stringByAppendingString:@","]]) return YES;
         }
+        if ([v isKindOfClass:[UILabel class]]) continue;
         [st addObjectsFromArray:v.subviews];
     }
     return NO;
@@ -4782,6 +4788,7 @@ static void PlayerDebug(UIView *player, UIWindow *w) {
     [w bringSubviewToFront:l];
 }
 
+static void MotionTick(UIWindow *w);
 static void StartWatchdog(void) {
     static int tick = 0;
     CADisplayLink *dl = [CADisplayLink displayLinkWithTarget:[MPPillTicker shared] selector:@selector(tick:)];
@@ -4818,6 +4825,7 @@ static void StartWatchdog(void) {
         if (w && PlayerIsUp(w, &player)) {
             @try { SweepQueueButtons(player, 0); } @catch (__unused id e) {}
             @try { QueueTick(player); } @catch (__unused id e) {}
+            @try { MotionTick(w); } @catch (__unused id e) {}   // animated cover on the artwork
             if (tick % 4 == 0) { @try { PlayerDebug(player, w); } @catch (__unused id e) {} }
         } else if (w) {
             [[w viewWithTag:PLAYERDEBUG_TAG] removeFromSuperview];
