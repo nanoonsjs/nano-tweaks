@@ -1,4 +1,6 @@
-// MusicPill 1.0.39 - made by nano
+// MusicPill 1.0.40 - made by nano
+// 1.0.40: closing the player animates into the bar when it's expanded too (it
+//         vanished in one frame), a paused song after launch isn't "Not Playing".
 // 1.0.39: Library glass Edit always shows (Music's Edit found by position, only
 //         ours takes taps), nothing opens when tapping the bar with Not Playing.
 // 1.0.38: queue History visible again (pills step aside while it's open),
@@ -995,7 +997,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.39 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.40 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1217,6 +1219,7 @@ static BOOL OpenPlayer(UIView *mini) {
     return NO;
 }
 
+static NSString *MusicBarTitle(UIView *mini);
 @interface MPMiniPill : UIView
 @property (nonatomic, strong) UIView *glass;
 @property (nonatomic, strong) UIImageView *art, *badge;
@@ -1363,6 +1366,11 @@ static BOOL OpenPlayer(UIView *mini) {
             MPMiniPill *me = weak; if (!me) return;
             BOOL have = [title isKindOfClass:[NSString class]] && [title length];
             if (!have && me.title.text.length && ![me.title.text isEqualToString:@"Not Playing"]) return;   // keep the last song
+            if (!have) {
+                UIView *m = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
+                NSString *mt = m ? MusicBarTitle(m) : nil;
+                if (mt.length && ![mt isEqualToString:@"Not Playing"]) { if (![me.title.text isEqualToString:mt]) me.title.text = mt; [me setNeedsLayout]; return; }
+            }
             NSString *t2 = have ? title : @"Not Playing";
             NSString *a2 = [artist isKindOfClass:[NSString class]] ? artist : @"";
             if (![me.title.text isEqualToString:t2]) me.title.text = t2;
@@ -1409,8 +1417,12 @@ static BOOL OpenPlayer(UIView *mini) {
     for (NSNumber *d in @[@0.15, @0.5]) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self refresh]; });
 }
 - (void)open {
-    if ([self.title.text isEqualToString:@"Not Playing"]) { [self bump:0]; return; }
     UITabBar *tb = gLastTabBar;
+    {
+        UIView *m = tb ? objc_getAssociatedObject(tb, kMini) : nil;
+        NSString *mt = m ? MusicBarTitle(m) : nil;
+        if ([self.title.text isEqualToString:@"Not Playing"] && (!mt.length || [mt isEqualToString:@"Not Playing"])) { [self bump:0]; return; }
+    }
     UIView *mini = tb ? objc_getAssociatedObject(tb, kMini) : nil;
     if (!OpenPlayer(mini)) SetCollapsedFwd(NO);
 }
@@ -1672,8 +1684,9 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
     MPMiniPill *pill = nil;
     for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
-    if (!snap || !pill || pill.hidden) return;
-    CGRect to = [pill convertRect:pill.bounds toView:win];
+    UIView *target = (pill && !pill.hidden && pill.alpha > 0.05) ? pill : objc_getAssociatedObject(tb, kMini);
+    if (!snap || !target.window) return;
+    CGRect to = [target convertRect:target.bounds toView:win];
     // The player keeps its shape: it scales down to the pill's width and folds
     // its height into the pill while gliding there.
     UIView *wrap = [[UIView alloc] initWithFrame:from];
@@ -1702,7 +1715,7 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     // The pill gives a little liquid bounce as the player lands in it.
     CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
     k.values = @[@0.92, @0.92, @1.05, @0.98, @1]; k.keyTimes = @[@0, @0.4, @0.65, @0.85, @1]; k.duration = 0.75;
-    [pill.layer addAnimation:k forKey:@"land"];
+    [target.layer addAnimation:k forKey:@"land"];
 }
 
 #pragma mark - drag to close
@@ -4936,9 +4949,21 @@ static void PlayerDebug(UIView *player, UIWindow *w) {
 
 static void MotionTick(UIWindow *w);
 #define BLOCK_TAG 0x4D50424B
+// Title Music's own bar shows (nil if none); a paused song after launch counts as loaded.
+static NSString *MusicBarTitle(UIView *mini) {
+    NSMutableArray *st = [NSMutableArray arrayWithObject:mini];
+    int g = 0;
+    while (st.count && g++ < 200) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (v.tag == BLOCK_TAG || [v isKindOfClass:NSClassFromString(@"MPMiniPill")]) continue;
+        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) return ((UILabel *)v).text;
+        [st addObjectsFromArray:v.subviews];
+    }
+    return nil;
+}
 static void NotPlayingBlock(UIView *mini) {
-    MPMiniPill *p = gPillObj;
-    BOOL idle = [p.title.text isEqualToString:@"Not Playing"];
+    NSString *mt = MusicBarTitle(mini);
+    BOOL idle = !mt.length || [mt isEqualToString:@"Not Playing"];
     UIView *blk = [mini viewWithTag:BLOCK_TAG];
     if (!idle) { [blk removeFromSuperview]; return; }
     CGFloat stopX = mini.bounds.size.width;
