@@ -1,4 +1,6 @@
-// MusicPill 1.0.22 - made by nano
+// MusicPill 1.0.23 - made by nano
+// 1.0.23: account picture fully visible and a fixed size, Apple Music/Library
+//         switch has no outline and bounces when switched.
 // 1.0.22: switch animation only while searching; it's now the bottom bar's real
 //         liquid glass flowing into / out of the search field with the same
 //         squeeze + wobble; collapsed tab icon at full size; the circle icons
@@ -953,7 +955,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.22 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.23 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2694,6 +2696,22 @@ static NSString *gSearchDebug = @"-";
 // A taller capsule search field (the background image sets its height).
 static UIColor *GlassFill(void) { return [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94]; }
 #define XDISC_TAG 0x4D505844
+static void Wobble(UIView *v, CGFloat sx, CGFloat sy, CFTimeInterval delay);
+@interface MPSegBounce : NSObject
++ (instancetype)shared;
+@end
+@implementation MPSegBounce
++ (instancetype)shared { static MPSegBounce *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPSegBounce new]; }); return t; }
+- (void)changed:(UISegmentedControl *)seg {
+    // Jelly bounce on the switch, and the selected pill pops.
+    Wobble(seg, 1.05, 0.9, 0);
+    for (UIView *s in seg.subviews) {
+        if (![s isKindOfClass:[UIImageView class]] || s.alpha < 0.05 || s.hidden) continue;
+        if (s.frame.size.width <= 2 || s.frame.size.width >= seg.bounds.size.width - 4) continue;
+        Wobble(s, 1.12, 0.86, 0.04);
+    }
+}
+@end
 static void StyleSegment(UISegmentedControl *seg) {
     CGFloat h = seg.bounds.size.height;
     if (h < 10) return;
@@ -2705,12 +2723,14 @@ static void StyleSegment(UISegmentedControl *seg) {
         [seg setTitleTextAttributes:ta forState:UIControlStateNormal];
         [seg setTitleTextAttributes:ta forState:UIControlStateSelected];
         seg.selectedSegmentTintColor = [UIColor colorWithWhite:0 alpha:0.8];
-        seg.layer.borderWidth = 0.75; seg.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+        seg.layer.borderWidth = 0;
+        [seg addTarget:[MPSegBounce shared] action:@selector(changed:) forControlEvents:UIControlEventValueChanged];
         seg.layer.cornerCurve = kCACornerCurveContinuous;
     }
     if (seg.backgroundColor && ![seg.backgroundColor isEqual:UIColor.clearColor]) seg.backgroundColor = UIColor.clearColor;
     // UISegmentedControl resets its corners on layout, so this runs every time.
     if (seg.layer.cornerRadius != h / 2) seg.layer.cornerRadius = h / 2;
+    if (seg.layer.borderWidth != 0) seg.layer.borderWidth = 0;
     if (!seg.clipsToBounds) seg.clipsToBounds = YES;
     for (UIView *s in seg.subviews) {
         if (![s isKindOfClass:[UIImageView class]]) continue;
@@ -2980,7 +3000,7 @@ static void SearchPage(UINavigationBar *nb) {
     if (bar.window) { StyleSearchBar(bar); if (isSearch) ScopeAutoHide(bar, nb); }
     UIView *large = nil;
     for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"LargeTitle"]) large = s;
-    UIView *av = [large viewWithTag:AVATAR_TAG];
+    UIView *av = [nb viewWithTag:AVATAR_TAG];
     if (!isSearch) { av.hidden = YES; return; }
     // Title a little higher.
     UILabel *title = nil;
@@ -2998,7 +3018,9 @@ static void SearchPage(UINavigationBar *nb) {
     gAccountItem = it; gAccountView = accView;
     UIImage *img = accView ? ImageInView(accView) : it.image;
     if (large && img) {
-        UIButton *b = (UIButton *)av;
+        // Lives in the bar itself: the big-title strip cut off its top half.
+        UIButton *b = (UIButton *)[nb viewWithTag:AVATAR_TAG];
+        if (b && b.superview != nb) { [b removeFromSuperview]; b = nil; }
         if (!b) {
             b = [UIButton buttonWithType:UIButtonTypeCustom];
             b.tag = AVATAR_TAG;
@@ -3006,14 +3028,18 @@ static void SearchPage(UINavigationBar *nb) {
             b.layer.borderWidth = 1.5; b.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.25].CGColor;
             b.imageView.contentMode = UIViewContentModeScaleAspectFill;
             [b addTarget:[MPAvatar shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
-            [large addSubview:b];
+            [nb addSubview:b];
         }
         if ([b imageForState:UIControlStateNormal] != img) [b setImage:img forState:UIControlStateNormal];
         CGFloat D = 46;
-        CGFloat cy = title ? CGRectGetMidY([title convertRect:title.bounds toView:large]) : large.bounds.size.height / 2;
-        CGRect f = CGRectMake(large.bounds.size.width - 18 - D, round(cy - D / 2), D, D);
+        // Level with the title's resting spot, same size always (no stretching on pull-down).
+        CGRect tf = title ? [title convertRect:title.bounds toView:nb] : [large convertRect:large.bounds toView:nb];
+        CGFloat cy = round(CGRectGetMinY(tf) + MIN(tf.size.height, 41) / 2);
+        CGRect f = CGRectMake(nb.bounds.size.width - 18 - D, round(cy - D / 2), D, D);
         if (!CGRectEqualToRect(b.frame, f)) { b.frame = f; b.layer.cornerRadius = D / 2; }
-        b.hidden = NO;
+        if (!CGAffineTransformIsIdentity(b.transform)) b.transform = CGAffineTransformIdentity;
+        b.alpha = large.alpha;
+        b.hidden = large.hidden;
     }
     // "Browse Categories" goes, category cards get iOS 26 rounding.
     UIResponder *r = nb;
