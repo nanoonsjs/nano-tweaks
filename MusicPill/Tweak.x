@@ -1,4 +1,7 @@
-// MusicPill 1.0.13 - made by nano
+// MusicPill 1.0.14 - made by nano
+// 1.0.14: our own back button (Music's icon vanished while scrolling), top
+//         buttons a bit lower, permanent soft blur behind the status bar,
+//         Music's side artist name hidden (attributed label).
 // 1.0.13: artist header found again (1.0.12's check was too strict).
 // 1.0.12: debug box moves with a two-finger drag; Music's own artist name hidden
 //         wherever it is; only the header play button inside the page is taken
@@ -924,7 +927,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.13 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.14 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2896,15 +2899,16 @@ static void GlyphOnly(UIView *c) {
     }
     if (!CGRectEqualToRect(m.frame, r)) { [CATransaction begin]; [CATransaction setDisableActions:YES]; m.frame = r; [CATransaction commit]; }
 }
-static void AlignGlyph(UIView *c, CGFloat targetX, CGFloat scale) {
+#define TOPDY 8.0   // our top buttons sit a bit lower than Music's
+static void AlignGlyph(UIView *c, CGFloat targetX, CGFloat scale, CGFloat dy) {
     UIView *g = GlyphIn(c, 0);
     if (!g || !c.window) return;
     CGFloat vis = GlyphCenter(c, nil).x;
     CGFloat untrans = vis - g.transform.tx;
     CGFloat tx = round(targetX - untrans);
     if (fabs(tx) > 45) return;   // page is sliding in/out: leave it
-    if (fabs(g.transform.tx - tx) > 0.5 || fabs(g.transform.a - scale) > 0.01)
-        g.transform = CGAffineTransformMake(scale, 0, 0, scale, tx, 0);
+    if (fabs(g.transform.tx - tx) > 0.5 || fabs(g.transform.a - scale) > 0.01 || fabs(g.transform.ty - dy) > 0.5)
+        g.transform = CGAffineTransformMake(scale, 0, 0, scale, tx, dy);
 }
 
 #define TOPBTN 46.0
@@ -2926,7 +2930,7 @@ static void PlaceSharePair(UIView *more) {
     [(UIView *)objc_getAssociatedObject(more, kBackGlass) setHidden:YES];
     StripMusicCircle(more);
     UIView *dots = GlyphIn(more, 0);
-    AlignGlyph(more, w.bounds.size.width - TOPMARGIN - 28, 1.15);
+    AlignGlyph(more, w.bounds.size.width - TOPMARGIN - 28, 1.15, TOPDY);
     GlyphOnly(more);
 
     UIView *g = FloatGlassIn(more, host, more, kPairGlass);
@@ -3037,7 +3041,7 @@ static UILabel *ArtistNameNear(UIView *play) {
             CGFloat W = play.window.bounds.size.width;
             BOOL onScreen = CGRectGetMinX(lf) >= -1 && CGRectGetMaxX(lf) <= W + 1;
             CGFloat dy = fabs(CGRectGetMidY(lf) - CGRectGetMidY(pf));
-            if (onScreen && dy < 45 && l.font.pointSize >= 24 && CGRectGetMinX(lf) < CGRectGetMinX(pf)) {
+            if (onScreen && dy < 45 && (l.font.pointSize >= 24 || lf.size.height >= 30) && CGRectGetMinX(lf) < CGRectGetMinX(pf)) {
                 CGFloat bdy = best ? fabs(CGRectGetMidY([best convertRect:best.bounds toView:nil]) - CGRectGetMidY(pf)) : 1e9;
                 if (dy < bdy) best = l;
             }
@@ -3188,7 +3192,9 @@ static void HideNameCopies(UIWindow *w, NSString *name) {
         if (v.tag == ARTIST_TAG || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG || [v isKindOfClass:[UITabBar class]] || [v isKindOfClass:NSClassFromString(@"MPMiniPill")]) continue;
         if ([v isKindOfClass:[UILabel class]]) {
             UILabel *l = (UILabel *)v;
-            if (l.font.pointSize >= 24 && [l.text caseInsensitiveCompare:name] == NSOrderedSame) MaskOut(l);
+            NSString *lt = l.text ?: l.attributedText.string;
+            BOOL big = l.font.pointSize >= 24 || l.bounds.size.height >= 30;
+            if (big && [lt caseInsensitiveCompare:name] == NSOrderedSame) MaskOut(l);
             continue;
         }
         [stack addObjectsFromArray:v.subviews];
@@ -3500,6 +3506,97 @@ static void RedToWhite(UIView *rowParent) {
         gRedDebug = [NSString stringWithFormat:@"%@ root=%@ labels=%d redviews=%@", [gRedDebug containsString:@"rgb"] ? gRedDebug : @"", NSStringFromClass([root class]), labels, redOther];
 }
 
+// Our own back button: Music's is hidden (its look changed while scrolling and
+// its icon vanished), ours pops the page.
+static const void *kOurBack = &kOurBack;
+@interface MPBack : NSObject
++ (instancetype)shared;
+@end
+@implementation MPBack
++ (instancetype)shared { static MPBack *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPBack new]; }); return t; }
+- (void)tap:(UIButton *)b {
+    UIView *music = objc_getAssociatedObject(b, kOurBack);
+    UIResponder *r = music;
+    while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
+    UINavigationController *nav = [(UIViewController *)r navigationController];
+    if ([r isKindOfClass:[UINavigationController class]]) nav = (UINavigationController *)r;
+    if (nav.viewControllers.count > 1) { [nav popViewControllerAnimated:YES]; return; }
+    UIControl *c = [music isKindOfClass:[UIControl class]] ? (UIControl *)music : FirstControl(music, 0);
+    Forward(c);
+}
+@end
+#define BACK_TAG 0x4D504241
+static __weak UIButton *gLastBack;
+static void PlaceBack(UIView *back, UIWindow *w) {
+    UIView *g = GlyphIn(back, 0);
+    if (g && !CGAffineTransformIsIdentity(g.transform)) g.transform = CGAffineTransformIdentity;
+    if (!CGAffineTransformIsIdentity(back.transform)) back.transform = CGAffineTransformIdentity;
+    CGPoint gc = GlyphCenter(back, nil);
+    CGPoint want = CGPointMake(TOPMARGIN + TOPBTN / 2, gc.y + TOPDY);
+    if (fabs(gc.x - 30) > 50) return;   // page sliding in / out
+    UIView *host = nil;
+    for (UIView *p = back.superview; p && p != w; p = p.superview) {
+        CGPoint q = [w convertPoint:want toView:p];
+        if (CGRectContainsRect(p.bounds, CGRectMake(q.x - TOPBTN / 2, q.y - TOPBTN / 2, TOPBTN, TOPBTN)) && p.userInteractionEnabled) { host = p; break; }
+    }
+    if (!host) host = w;
+    UIButton *b = objc_getAssociatedObject(back, kOurBack);
+    if (!b || b.superview != host) {
+        [b removeFromSuperview];
+        b = [UIButton buttonWithType:UIButtonTypeCustom];
+        b.tag = BACK_TAG;
+        UIView *disc = [UIView new];
+        disc.userInteractionEnabled = NO;
+        disc.frame = CGRectMake(0, 0, TOPBTN, TOPBTN); disc.layer.cornerRadius = TOPBTN / 2;
+        disc.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94];
+        disc.layer.borderWidth = 0.75; disc.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+        [b addSubview:disc];
+        UIImageView *ch = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.backward" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]]];
+        ch.tintColor = UIColor.whiteColor; ch.contentMode = UIViewContentModeCenter;
+        ch.frame = CGRectMake(-1, 0, TOPBTN, TOPBTN); ch.userInteractionEnabled = NO;
+        [b addSubview:ch];
+        objc_setAssociatedObject(b, kOurBack, back, OBJC_ASSOCIATION_ASSIGN);
+        [b addTarget:[MPBack shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+        AttachJelly(b, disc);
+        objc_setAssociatedObject(back, kOurBack, b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [host addSubview:b];
+    }
+    objc_setAssociatedObject(b, kOurBack, back, OBJC_ASSOCIATION_ASSIGN);
+    if (host.subviews.lastObject != b) [host bringSubviewToFront:b];
+    CGPoint q = [w convertPoint:want toView:host];
+    CGRect bf = CGRectMake(round(q.x - TOPBTN / 2), round(q.y - TOPBTN / 2), TOPBTN, TOPBTN);
+    if (!CGRectEqualToRect(b.frame, bf)) b.frame = bf;
+    if (!back.layer.mask || [back.layer.mask.name isEqualToString:@"mp.glyphonly"]) back.layer.mask = [CALayer layer];
+    [(UIView *)objc_getAssociatedObject(back, kFloatGlass) setHidden:YES];
+    [(UIView *)objc_getAssociatedObject(back, kBackGlass) setHidden:YES];
+    if (gLastBack && gLastBack != b) gLastBack.hidden = YES;
+    gLastBack = b;
+    b.hidden = back.hidden;
+}
+
+// A soft blur behind the status bar, always there (not while the player is up).
+#define STATUSBLUR_TAG 0x4D505342
+static void StatusBlur(UIWindow *w) {
+    UIVisualEffectView *v = (UIVisualEffectView *)[w viewWithTag:STATUSBLUR_TAG];
+    BOOL show = !PlayerIsUp(w, NULL) && w.safeAreaInsets.top > 0;
+    if (!show) { v.hidden = YES; return; }
+    CGFloat H = w.safeAreaInsets.top + 14;
+    if (!v) {
+        v = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+        v.tag = STATUSBLUR_TAG; v.userInteractionEnabled = NO;
+        CAGradientLayer *m = [CAGradientLayer layer];
+        m.colors = @[(id)UIColor.blackColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.clearColor.CGColor];
+        m.locations = @[@0, @0.6, @1];
+        v.layer.mask = m;
+        [w addSubview:v];
+    }
+    v.hidden = NO;
+    CGRect f = CGRectMake(0, 0, w.bounds.size.width, H);
+    if (!CGRectEqualToRect(v.frame, f)) { v.frame = f; v.layer.mask.frame = v.bounds; }
+    UIView *dbg = [w viewWithTag:DEBUG_TAG];
+    if (dbg) [w insertSubview:v belowSubview:dbg]; else if (w.subviews.lastObject != v) [w bringSubviewToFront:v];
+}
+
 static void FloatTick(UIWindow *w) {
     if (!w || !gNavGlass) return;
     CGFloat top = w.safeAreaInsets.top, band = top + 80, W = w.bounds.size.width;
@@ -3538,15 +3635,12 @@ static void FloatTick(UIWindow *w) {
         CGFloat x = CGRectGetMidX([iv convertRect:iv.bounds toView:nil]);
         if (dbg.count < 4) [dbg addObject:[NSString stringWithFormat:@"%@@%.0f(%@)", sym, x, NSStringFromClass([holder class])]];
         if ([d containsString:@"ellipsis"]) more = holder;
-        else if ([d containsString:@"chevron.left"] || [d containsString:@"chevron.backward"] || (x < W / 3 && !back)) back = holder;
+        else if (([d containsString:@"chevron.left"] || [d containsString:@"chevron.backward"]) && x < W / 3) back = holder;
         else if (x > W / 2) dl = holder;   // download in any state: arrow, progress (stop), checkmark
     }
-    if (back) {
-        if (!CGAffineTransformIsIdentity(back.transform)) back.transform = CGAffineTransformIdentity;
-        AlignGlyph(back, TOPMARGIN + TOPBTN / 2, 1);
-        if (![NSStringFromClass([back class]) containsString:@"BarButton"]) GlyphOnly(back);
-        GlassCircleFor((UIControl *)back, TOPBTN);
-    }
+    if (back) PlaceBack(back, w);
+    else gLastBack.hidden = YES;
+    StatusBlur(w);
     // Mid-download Music swaps in a progress view with no image; keep the last one we caught.
     if (!dl && gSlotView && gSlotView.window == w) {
         CGRect sf = [gSlotView convertRect:gSlotView.bounds toView:nil];
