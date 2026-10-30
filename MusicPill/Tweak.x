@@ -1,4 +1,8 @@
-// MusicPill 1.0.4 - made by nano
+// MusicPill 1.0.5 - made by nano
+// 1.0.5: Apple's album buttons are taken over inside Music's own layout pass
+//        (never drawn), share taps no longer land on Music's download button,
+//        plus (add to library) shows in the row with an "Added to Library"
+//        toast and a smooth morph into the download arrow, iOS 26 sizes.
 // 1.0.4: ••• glyph shows (Music's blur inside it is turned off, not masked),
 //        share + ••• share one glass capsule, share builds the ••• menu and runs
 //        its Share action, the row circle draws the download state itself
@@ -869,7 +873,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2067,13 +2071,23 @@ static void Forward(UIControl *c) {
 @interface MPRowTarget : NSObject
 + (instancetype)shared;
 @end
+static CFTimeInterval gAddPendingUntil;
+static void ShowToast(UILabel *label, NSString *icon, NSString *text);
 @implementation MPRowTarget
 + (instancetype)shared { static MPRowTarget *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPRowTarget new]; }); return t; }
 - (void)tap:(UIButton *)b {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     if (b.tag == 1) Forward(gPlayCtl);
     else if (b.tag == 2) Forward(gShuffleCtl);
-    else if (b.tag == 3) { UIView *slot = gSlotView; if (slot) Forward(FirstControl(slot, 0)); }
+    else if (b.tag == 3) {
+        UIView *slot = gSlotView;
+        if (!slot) return;
+        if ([objc_getAssociatedObject(b, @selector(MirrorDownload)) isEqual:@"plus"]) {
+            gAddPendingUntil = CACurrentMediaTime() + 4;
+            ShowToast(nil, @"checkmark", @"Added to Library");
+        }
+        Forward(FirstControl(slot, 0));
+    }
 }
 @end
 
@@ -2145,19 +2159,27 @@ static void MirrorDownload(UIButton *bDL, UIView *slot, CGFloat h) {
     CAShapeLayer *src = FindRing(slot.layer, 0);
     NSString *state;
     if ([d containsString:@"checkmark"]) state = @"done";
+    else if ([d containsString:@"plus"]) state = CACurrentMediaTime() < gAddPendingUntil ? @"idle" : @"add";
     else if ([d containsString:@"arrow.down"] || [d containsString:@"icloud"]) state = src && src.strokeEnd > 0.001 && src.strokeEnd < 0.999 ? @"progress" : @"idle";
     else state = @"progress";   // stop square or no glyph: downloading
     CGFloat p = src ? ((CAShapeLayer *)(src.presentationLayer ?: src)).strokeEnd : -1;
     gDLState = [NSString stringWithFormat:@"%@ p=%.2f glyph=%@", state, p, d ? [d substringFromIndex:MIN(d.length, [d rangeOfString:@"symbol("].location == NSNotFound ? 0 : [d rangeOfString:@"symbol("].location)] : @"none"];
     if (gDLState.length > 70) gDLState = [gDLState substringToIndex:70];
 
-    NSString *sym = [state isEqualToString:@"done"] ? @"checkmark" : [state isEqualToString:@"progress"] ? @"stop.fill" : @"arrow.down";
+    NSString *sym = [state isEqualToString:@"done"] ? @"checkmark" : [state isEqualToString:@"progress"] ? @"stop.fill" : [state isEqualToString:@"add"] ? @"plus" : @"arrow.down";
     CGFloat pt = [state isEqualToString:@"progress"] ? 11 : 18;
-    if (![objc_getAssociatedObject(bDL, @selector(MirrorDownload)) isEqual:sym]) {
+    NSString *prevSym = objc_getAssociatedObject(bDL, @selector(MirrorDownload));
+    if (![prevSym isEqual:sym]) {
         objc_setAssociatedObject(bDL, @selector(MirrorDownload), sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        UIButtonConfiguration *cfg = bDL.configuration;
-        cfg.image = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:pt weight:[state isEqualToString:@"progress"] ? UIImageSymbolWeightBlack : UIImageSymbolWeightSemibold]];
-        bDL.configuration = cfg;
+        UIImage *img = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:pt weight:[state isEqualToString:@"progress"] ? UIImageSymbolWeightBlack : UIImageSymbolWeightSemibold]];
+        void (^apply)(void) = ^{ UIButtonConfiguration *cfg = bDL.configuration; cfg.image = img; bDL.configuration = cfg; };
+        if (prevSym && bDL.window) {
+            // Smooth swap (plus -> arrow -> progress -> checkmark): squish, cross-fade, spring back.
+            [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ bDL.transform = CGAffineTransformMakeScale(0.82, 0.82); } completion:^(BOOL f) {
+                [UIView transitionWithView:bDL duration:0.22 options:UIViewAnimationOptionTransitionCrossDissolve | UIViewAnimationOptionAllowUserInteraction animations:apply completion:nil];
+                [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.8 options:UIViewAnimationOptionAllowUserInteraction animations:^{ bDL.transform = CGAffineTransformIdentity; } completion:nil];
+            }];
+        } else apply();
     }
     CAShapeLayer *track = nil, *ring = nil;
     for (CALayer *l in bDL.layer.sublayers) {
@@ -2292,6 +2314,13 @@ static BOOL gAlbumPending;
 
 static void ScheduleAlbum(UIWindow *w) {
     if (w) gAlbumWindow = w;
+    static BOOL inside;
+    if (w && !inside) {
+        // Build our row right now (same layout pass), so Music's buttons never show.
+        inside = YES;
+        @try { AlbumTick(w); } @catch (__unused id e) {}
+        inside = NO;
+    }
     if (gAlbumPending) return;
     gAlbumPending = YES;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -2332,7 +2361,11 @@ static BOOL IsHeaderTitle(NSString *s) {
 
 // iOS 26 style pop-up: Music's big square HUD is hidden, a small glass capsule
 // with a star and the word shows above the pill instead.
+static void ShowToast(UILabel *label, NSString *icon, NSString *text);
 static void ShowFavToast(UILabel *label, BOOL fav) {
+    ShowToast(label, fav ? @"star.fill" : @"star.slash", fav ? @"Favorited" : @"Unfavorited");
+}
+static void ShowToast(UILabel *label, NSString *icon, NSString *text) {
     UIWindow *w = label.window ?: gLastTabBar.window;
     if (!w) return;
     // Hide Music's HUD box (the label's biggest ancestor smaller than the screen).
@@ -2341,9 +2374,9 @@ static void ShowFavToast(UILabel *label, BOOL fav) {
         if (p.bounds.size.width < w.bounds.size.width * 0.9 && p.bounds.size.height < w.bounds.size.height * 0.7) box = p;
         else break;
     }
-    if (box) { box.layer.mask = [CALayer layer]; }
+    if (box && label) { box.layer.mask = [CALayer layer]; }
     static CFTimeInterval last; static NSString *lastKind;
-    NSString *kind = fav ? @"f" : @"u";
+    NSString *kind = text;
     if (CACurrentMediaTime() - last < 0.6 && [kind isEqualToString:lastKind]) return;
     last = CACurrentMediaTime(); lastKind = kind;
     static __weak UIView *current;
@@ -2353,12 +2386,12 @@ static void ShowFavToast(UILabel *label, BOOL fav) {
     UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
     g.clipsToBounds = YES; g.layer.cornerCurve = kCACornerCurveContinuous;
     [cap addSubview:g];
-    UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:fav ? @"star.fill" : @"star.slash"
+    UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:icon
                                                     withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]];
     iv.tintColor = UIColor.whiteColor; iv.contentMode = UIViewContentModeCenter;
     [cap addSubview:iv];
     UILabel *l = [UILabel new];
-    l.text = fav ? @"Favorited" : @"Unfavorited";
+    l.text = text;
     l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
     l.textColor = UIColor.whiteColor;
     [cap addSubview:l];
@@ -2774,7 +2807,7 @@ static void PlaceSharePair(UIView *more) {
     AttachJelly(more, g);
     StripMusicCircle(more);
     CGPoint c = GlyphCenter(more, host);
-    CGFloat H = 44, half = 50;
+    CGFloat H = 46, half = 54;
     b.hidden = NO; g.hidden = NO;
     CGRect bf = CGRectMake(round(c.x - half - H / 2), round(c.y - H / 2), H, H);
     if (!CGRectEqualToRect(b.frame, bf)) b.frame = bf;
@@ -2785,6 +2818,7 @@ static void PlaceSharePair(UIView *more) {
 // Music's top download button is hidden for good (still tappable from our row).
 static void HideTopDownload(UIView *dl) {
     if (dl && !dl.layer.mask) dl.layer.mask = [CALayer layer];
+    if (dl.userInteractionEnabled) dl.userInteractionEnabled = NO;
 }
 
 static BOOL IsMusicRed(UIColor *c);
@@ -2869,7 +2903,7 @@ static void FloatTick(UIWindow *w) {
         else if ([d containsString:@"chevron.left"] || [d containsString:@"chevron.backward"] || (x < W / 3 && !back)) back = holder;
         else if (x > W / 2) dl = holder;   // download in any state: arrow, progress (stop), checkmark
     }
-    if (back) GlassCircleFor((UIControl *)back, 44);
+    if (back) GlassCircleFor((UIControl *)back, 46);
     // Mid-download Music swaps in a progress view with no image; keep the last one we caught.
     if (!dl && gSlotView && gSlotView.window == w) {
         CGRect sf = [gSlotView convertRect:gSlotView.bounds toView:nil];
@@ -2889,16 +2923,28 @@ static void FloatTick(UIWindow *w) {
 static IMP gSymLayoutOrig;
 static void SymLayoutHook(UIView *self, SEL _cmd) {
     if (gSymLayoutOrig) ((void (*)(id, SEL))gSymLayoutOrig)(self, _cmd);
+    static BOOL busy;
+    if (busy || !gAlbum) return;
     @try {
         UIWindow *w = self.window;
-        if (!w || !gRowParent || gRowParent.window != w || self == gSlotView) return;
+        if (!w) return;
         CGRect f = [self convertRect:self.bounds toView:nil];
         if (CGRectGetMidY(f) > w.safeAreaInsets.top + 80 || CGRectGetMidX(f) < w.bounds.size.width / 2) return;
         UIView *g = GlyphIn(self, 0);
-        if ([((UIImageView *)g).image.description containsString:@"ellipsis"]) return;
-        gSlotView = self;
-        dispatch_async(dispatch_get_main_queue(), ^{ @try { AlbumTick(w); FloatTick(w); } @catch (__unused id e) {} });
-    } @catch (__unused id e) {}
+        BOOL more = [((UIImageView *)g).image.description containsString:@"ellipsis"];
+        // Done right here, inside Music's own layout pass, so Apple's version is
+        // never put on screen, not even for one frame.
+        if (more) StripMusicCircle(self);
+        else {
+            if (!self.layer.mask) self.layer.mask = [CALayer layer];
+            self.userInteractionEnabled = NO;   // taps go to our share button
+            if (self == gSlotView && gRowParent.window == w) return;
+            gSlotView = self;
+        }
+        busy = YES;
+        @try { AlbumTick(w); FloatTick(w); } @catch (__unused id e) {}
+        busy = NO;
+    } @catch (__unused id e) { busy = NO; }
 }
 static void HookSymbolButton(void) {
     Class sym = objc_getClass("MusicApplication.SymbolButton");
