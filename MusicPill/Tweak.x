@@ -1,4 +1,6 @@
-// MusicPill 1.0.30 - made by nano
+// MusicPill 1.0.31 - made by nano
+// 1.0.31: player artwork found by any picture-holding square view; motion
+//         status shown in the player's debug box.
 // 1.0.30: motion cover looked for across the whole album page (+ debug of
 //         any video layers seen).
 // 1.0.29: no black box behind the album buttons on animated covers; animated
@@ -972,7 +974,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.30 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.31 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -4304,18 +4306,22 @@ static void MotionTick(UIWindow *w) {
     // 2. Full player up: put the video on its artwork when the album matches.
     UIView *pv = nil;
     BOOL up = PlayerIsUp(w, &pv);
-    UIImageView *art = nil;
+    UIView *art = nil;
+    NSMutableString *cands = [NSMutableString string];
     if (up) {
+        // The artwork: the biggest square-ish view showing a picture (an image view,
+        // or a view whose layer holds the image).
         CGFloat best = 0;
         NSMutableArray *st = [NSMutableArray arrayWithObject:pv];
         int g = 0;
-        while (st.count && g++ < 600) {
+        while (st.count && g++ < 900) {
             UIView *v = st.lastObject; [st removeLastObject];
-            if (v.hidden || v.alpha < 0.01 || v.tag == MOTION_TAG) continue;
-            if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) {
-                CGSize s = v.bounds.size;
-                if (s.width > w.bounds.size.width * 0.3 && fabs(s.width - s.height) < 8 && s.width * s.height > best) { best = s.width * s.height; art = (UIImageView *)v; }
-            }
+            if (v.hidden || v.alpha < 0.01 || v.tag == MOTION_TAG || v.tag == PLAYERDEBUG_TAG) continue;
+            CGSize s = v.bounds.size;
+            BOOL square = s.width > w.bounds.size.width * 0.3 && fabs(s.width - s.height) < 12;
+            BOOL pic = ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) || v.layer.contents != nil || [NSStringFromClass([v class]) containsString:@"Artwork"];
+            if (square && cands.length < 140) [cands appendFormat:@"%@%@ %.0f ", NSStringFromClass([v class]), pic ? @"*" : @"", s.width];
+            if (square && pic && s.width * s.height >= best) { best = s.width * s.height; art = v; }
             [st addObjectsFromArray:v.subviews];
         }
     }
@@ -4324,7 +4330,7 @@ static void MotionTick(UIWindow *w) {
     BOOL match = up && art && mp && gMotionPage && PageHasLabel(gMotionPage, gNowAlbum);
     if (!match) {
         [shown removeFromSuperview];
-        gMotionDebug = [NSString stringWithFormat:@"player=%d art=%d video=%d album=%@ seen=%@", up, art != nil, mp != nil, gNowAlbum, videoDebug];
+        gMotionDebug = [NSString stringWithFormat:@"player=%d art=%d video=%d album=%@ page=%d match=%d seen=%@ cands=%@", up, art != nil, mp != nil, gNowAlbum, gMotionPage != nil, gMotionPage ? PageHasLabel(gMotionPage, gNowAlbum) : 0, videoDebug, cands];
         return;
     }
     UIView *mv = [art viewWithTag:MOTION_TAG];
@@ -4353,7 +4359,7 @@ static void MotionTick(UIWindow *w) {
             [mp play];
         }
     }
-    gMotionDebug = @"showing";
+    gMotionDebug = [NSString stringWithFormat:@"showing on %@ rate=%.1f", NSStringFromClass([art class]), mp.rate];
 }
 
 static void FloatTick(UIWindow *w) {
@@ -4767,7 +4773,7 @@ static void PlayerDebug(UIView *player, UIWindow *w) {
     }
     NSMutableArray *lines = [NSMutableArray array];
     MapPlayer(player, w, 0, lines);
-    NSString *text = [NSString stringWithFormat:@" MusicPill player map (open the queue, screenshot this)\n queue: %@\n %@", gQueueDebug, [lines componentsJoinedByString:@"\n "]];
+    NSString *text = [NSString stringWithFormat:@" MusicPill player map (open the queue, screenshot this)\n motion: %@\n queue: %@\n %@", gMotionDebug, gQueueDebug, [lines componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 16;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
