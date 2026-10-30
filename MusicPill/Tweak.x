@@ -1,4 +1,7 @@
-// MusicPill 1.0.19 - made by nano
+// MusicPill 1.0.20 - made by nano
+// 1.0.20: Apple Music/Library switch narrow and centred, hides the moment the
+//         list scrolls (squash + pulled up into the search bar, jelly back
+//         at the top), account picture from a plain image bar button too.
 // 1.0.19: artist fade covers the photo's last line again (8pt), search bar
 //         styled on every tick (was square on first open), X centred and
 //         smaller, Apple Music/Library a proper rounded glass switch that
@@ -943,7 +946,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.19 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.20 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1836,7 +1839,28 @@ static void PageScrolled(UIScrollView *sv, CGFloat dy, CGFloat y) {
     else if (acc > 12) SetPillExpanded(NO);
 }
 
+static const void *kNarrowSeg = &kNarrowSeg;
+#define SEG_W 236.0
+%hook UISegmentedControl
+- (void)setFrame:(CGRect)f {
+    if (objc_getAssociatedObject(self, kNarrowSeg) && f.size.width > SEG_W) {
+        f = CGRectMake(round(CGRectGetMidX(f) - SEG_W / 2), f.origin.y, SEG_W, f.size.height);
+    }
+    %orig(f);
+}
+- (void)setBounds:(CGRect)b {
+    if (objc_getAssociatedObject(self, kNarrowSeg) && b.size.width > SEG_W) b.size.width = SEG_W;
+    %orig(b);
+}
+%end
+
+static void ScopeEval(BOOL animated);
+static __weak UIScrollView *gScopeList;
 %hook UIScrollView
+- (void)setContentOffset:(CGPoint)o {
+    %orig;
+    if (self == gScopeList) { @try { ScopeEval(YES); } @catch (__unused id e) {} }
+}
 - (void)setContentInset:(UIEdgeInsets)inset {
     // Queue list is slid down 54pt; add 54pt at the bottom so the last song
     // can still scroll fully into view above the trimmed edge.
@@ -2658,6 +2682,8 @@ static void StyleSegment(UISegmentedControl *seg) {
     if (h < 10) return;
     if (!objc_getAssociatedObject(seg, @selector(StyleSegment:))) {
         objc_setAssociatedObject(seg, @selector(StyleSegment:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(seg, kNarrowSeg, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        seg.frame = seg.frame;   // apply the narrow width now
         NSDictionary *ta = @{NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: [UIFont systemFontOfSize:15 weight:UIFontWeightMedium]};
         [seg setTitleTextAttributes:ta forState:UIControlStateNormal];
         [seg setTitleTextAttributes:ta forState:UIControlStateSelected];
@@ -2761,6 +2787,11 @@ static UIView *AccountView(UIWindow *w, UIBarButtonItem **outItem) {
         if (acc) { if (outItem) *outItem = nil; gAccountDebug = [NSString stringWithFormat:@"acc %@", NSStringFromClass([acc class])]; return acc; }
         for (UIBarButtonItem *it in [ni.rightBarButtonItems arrayByAddingObjectsFromArray:ni.leftBarButtonItems ?: @[]]) {
             if (dbg.length < 60) [dbg appendFormat:@"%@ ", it.customView ? NSStringFromClass([it.customView class]) : @"img"];
+            if (!it.customView && it.image && it.image.size.width >= 20) {
+                if (outItem) *outItem = it;
+                gAccountDebug = [NSString stringWithFormat:@"image item in %@", NSStringFromClass([v class])];
+                return nil;
+            }
             if (it.customView && ([NSStringFromClass([it.customView class]) localizedCaseInsensitiveContainsString:@"account"] || [NSStringFromClass([it.customView class]) localizedCaseInsensitiveContainsString:@"profile"] || [NSStringFromClass([it.customView class]) localizedCaseInsensitiveContainsString:@"avatar"])) {
                 if (outItem) *outItem = it;
                 gAccountDebug = [NSString stringWithFormat:@"item %@", NSStringFromClass([it.customView class])];
@@ -2793,6 +2824,37 @@ static __weak UIView *gAccountView;
 }
 @end
 #define AVATAR_TAG 0x4D504156
+static __weak UISegmentedControl *gScopeSeg;
+static __weak UISearchBar *gScopeBar;
+static void ScopeEval(BOOL animated) {
+    UISegmentedControl *seg = gScopeSeg;
+    UIScrollView *list = gScopeList;
+    UISearchBar *sb = gScopeBar;
+    if (!seg.window || !list.window) return;
+    BOOL atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 2;
+    NSNumber *state = objc_getAssociatedObject(seg, &gScopeSeg);
+    BOOL shown = !state || state.boolValue;
+    if (atTop == shown) return;
+    objc_setAssociatedObject(seg, &gScopeSeg, @(atTop), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Where the search field is, relative to the switch: it shrinks up into it.
+    CGPoint fc = [sb.searchTextField convertPoint:CGPointMake(CGRectGetMidX(sb.searchTextField.bounds), CGRectGetMidY(sb.searchTextField.bounds)) toView:seg.superview];
+    CGFloat dy = fc.y - seg.center.y;
+    CGAffineTransform gone = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy * 0.85), 0.35, 0.18);
+    UIViewAnimationOptions o = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
+    if (!atTop) {
+        // Squash, then get pulled up into the search bar.
+        [UIView animateKeyframesWithDuration:0.38 delay:0 options:UIViewKeyframeAnimationOptionBeginFromCurrentState | UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
+            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.3 animations:^{ seg.transform = CGAffineTransformMakeScale(1.04, 0.82); }];
+            [UIView addKeyframeWithRelativeStartTime:0.3 relativeDuration:0.7 animations:^{ seg.transform = gone; seg.alpha = 0; }];
+        } completion:nil];
+    } else {
+        // Drops back out of the search bar with a jelly bounce.
+        if (!animated) { seg.transform = CGAffineTransformIdentity; seg.alpha = 1; return; }
+        [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.9 options:o animations:^{
+            seg.transform = CGAffineTransformIdentity; seg.alpha = 1;
+        } completion:nil];
+    }
+}
 static void ScopeAutoHide(UISearchBar *sb, UINavigationBar *nb) {
     UISegmentedControl *seg = nil;
     NSMutableArray *st = [NSMutableArray arrayWithObject:sb];
@@ -2803,7 +2865,6 @@ static void ScopeAutoHide(UISearchBar *sb, UINavigationBar *nb) {
         [st addObjectsFromArray:v.subviews];
     }
     if (!seg.window) return;
-    // The list under the search: results page if showing, else the page itself.
     UISearchController *sc = nb.topItem.searchController;
     UIView *page = sc.searchResultsController.view;
     if (!page.window || page.hidden || page.alpha < 0.01) {
@@ -2823,14 +2884,8 @@ static void ScopeAutoHide(UISearchBar *sb, UINavigationBar *nb) {
         }
         [s2 addObjectsFromArray:v.subviews];
     }
-    if (!list) return;
-    BOOL atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 6;
-    BOOL hidden = seg.alpha < 0.5;
-    if (atTop == !hidden) return;
-    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.3 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
-        seg.alpha = atTop ? 1 : 0;
-        seg.transform = atTop ? CGAffineTransformIdentity : CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -10), 0.94, 0.94);
-    } completion:nil];
+    gScopeSeg = seg; gScopeBar = sb; gScopeList = list;
+    ScopeEval(YES);
 }
 
 static void SearchPage(UINavigationBar *nb) {
