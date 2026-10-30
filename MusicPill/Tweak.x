@@ -1,4 +1,7 @@
-// MusicPill 1.0.5 - made by nano
+// MusicPill 1.0.6 - made by nano
+// 1.0.6: no freeze when opening an artist / Show Complete Album (layout work is
+//        queued, share button belongs to its own page), one glass on back, no
+//        gray bar background on album pages, bigger •••, page tinted white.
 // 1.0.5: Apple's album buttons are taken over inside Music's own layout pass
 //        (never drawn), share taps no longer land on Music's download button,
 //        plus (add to library) shows in the row with an "Added to Library"
@@ -873,7 +876,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2315,7 +2318,9 @@ static BOOL gAlbumPending;
 static void ScheduleAlbum(UIWindow *w) {
     if (w) gAlbumWindow = w;
     static BOOL inside;
-    if (w && !inside) {
+    static CFTimeInterval lastSync;
+    if (w && !inside && CACurrentMediaTime() - lastSync > 0.05) {
+        lastSync = CACurrentMediaTime();
         // Build our row right now (same layout pass), so Music's buttons never show.
         inside = YES;
         @try { AlbumTick(w); } @catch (__unused id e) {}
@@ -2567,6 +2572,13 @@ static void NavTick(UINavigationBar *nb) {
     if (!nb || !nb.window) return;
     if (!gNavGlass) { RemoveGlass(nb, 0); gNavDebug = @"off"; return; }
     if (![nb.tintColor isEqual:UIColor.whiteColor]) nb.tintColor = UIColor.whiteColor;
+    // Album page: no gray bar background behind the floating buttons.
+    BOOL albumPage = gAlbum && gRowParent.window == nb.window;
+    for (UIView *s in nb.subviews) {
+        if (![NSStringFromClass([s class]) containsString:@"BarBackground"]) continue;
+        if (albumPage && !s.layer.mask) { s.layer.mask = [CALayer layer]; objc_setAssociatedObject(s, kClearedBG, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+        else if (!albumPage && s.layer.mask && objc_getAssociatedObject(s, kClearedBG)) { s.layer.mask = nil; objc_setAssociatedObject(s, kClearedBG, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    }
 
     NSMutableArray *buttons = [NSMutableArray array];
     CollectBarButtons(nb, 0, buttons);
@@ -2580,6 +2592,11 @@ static void NavTick(UINavigationBar *nb) {
         CGRect inNav = [(g ?: b) convertRect:(g ?: b).bounds toView:nb];
         if (CGRectGetMidX(inNav) < mid) {
             if (!g) continue;
+            if (gAlbum && gRowParent.window) {
+                // Album page: the big floating circle (FloatTick) is the only glass.
+                for (UIView *s in [g.superview.subviews copy]) if (s.tag == NAVGLASS_TAG) [s removeFromSuperview];
+                continue;
+            }
             // Nudge the back button right so its circle doesn't hit the edge.
             CGFloat untransformedMid = CGRectGetMidX(inNav) - b.transform.tx;
             CGFloat tx = MAX(0, round(edge + H / 2 - untransformedMid));
@@ -2678,7 +2695,7 @@ static void StripMusicCircle(UIView *c) {
         }
         [stack addObjectsFromArray:s.subviews];
     }
-    if (![c.tintColor isEqual:UIColor.whiteColor]) c.tintColor = UIColor.whiteColor;
+    if (!objc_getAssociatedObject(c, kNoEffect)) { objc_setAssociatedObject(c, kNoEffect, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); c.tintColor = UIColor.whiteColor; }
 }
 
 static UIView *FloatGlassIn(id owner, UIView *host, UIView *below, const void *key) {
@@ -2784,16 +2801,21 @@ static NSString *gShareDebug = @"-";
     } else if ([more isKindOfClass:[UIControl class]]) [(UIControl *)more sendActionsForControlEvents:UIControlEventTouchUpInside];
 }
 @end
+static const void *kShareBtn = &kShareBtn;
 static void PlaceSharePair(UIView *more) {
-    static __weak UIButton *btn;
-    UIButton *b = btn;
-    static __weak UIView *pair;
-    if (!more || !more.superview) { b.hidden = YES; pair.hidden = YES; return; }
+    static __weak UIView *lastMore;
+    UIView *prev = lastMore;
+    if (prev && prev != more) {
+        [(UIView *)objc_getAssociatedObject(prev, kShareBtn) setHidden:YES];
+        [(UIView *)objc_getAssociatedObject(prev, kPairGlass) setHidden:YES];
+    }
+    lastMore = more;
+    if (!more || !more.superview) return;
     UIView *host = more.superview;
+    UIButton *b = objc_getAssociatedObject(more, kShareBtn);
     // The single circle from outside albums goes away; the capsule replaces it.
     [(UIView *)objc_getAssociatedObject(more, kBackGlass) setHidden:YES];
     UIView *g = FloatGlassIn(more, host, more, kPairGlass);
-    pair = g;
     if (!b || b.superview != host) {
         [b removeFromSuperview];
         b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -2801,11 +2823,13 @@ static void PlaceSharePair(UIView *more) {
         [b setImage:[UIImage systemImageNamed:@"square.and.arrow.up" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
         [b addTarget:[MPShare shared] action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
         [host addSubview:b];
-        btn = b;
+        objc_setAssociatedObject(more, kShareBtn, b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     AttachJelly(b, g);
     AttachJelly(more, g);
     StripMusicCircle(more);
+    UIView *dots = GlyphIn(more, 0);
+    if (dots && CGAffineTransformIsIdentity(dots.transform)) dots.transform = CGAffineTransformMakeScale(1.3, 1.3);
     CGPoint c = GlyphCenter(more, host);
     CGFloat H = 46, half = 54;
     b.hidden = NO; g.hidden = NO;
@@ -2828,6 +2852,9 @@ static void RedToWhite(UIView *rowParent) {
 
     UIView *root = rowParent;
     for (UIView *p = rowParent; p; p = p.superview) if ([p isKindOfClass:[UIScrollView class]]) { root = p; break; }
+    if (!objc_getAssociatedObject(root, kNoEffect)) { objc_setAssociatedObject(root, kNoEffect, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); root.tintColor = UIColor.whiteColor; }
+    int labels = 0;
+    NSMutableString *redOther = [NSMutableString string];
     NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
     int guard = 0;
     while (stack.count && guard++ < 4000) {
@@ -2835,6 +2862,7 @@ static void RedToWhite(UIView *rowParent) {
         if (v.hidden) continue;
         if ([v isKindOfClass:[UILabel class]]) {
             UILabel *l = (UILabel *)v;
+            labels++;
             if ([l.text containsString:@"Complete"]) {
                 CGFloat r = 0, g = 0, b = 0, a = 0;
                 [[l.textColor resolvedColorWithTraitCollection:l.traitCollection] getRed:&r green:&g blue:&b alpha:&a];
@@ -2861,8 +2889,11 @@ static void RedToWhite(UIView *rowParent) {
             if ([bt respondsToSelector:@selector(configuration)]) cfg = bt.configuration;
             if (cfg && IsMusicRed(cfg.baseForegroundColor)) { cfg.baseForegroundColor = UIColor.whiteColor; bt.configuration = cfg; }
         }
+        if (redOther.length < 120 && ![v isKindOfClass:[UIImageView class]] && IsMusicRed(v.tintColor) && v.subviews.count == 0) [redOther appendFormat:@"%@ ", NSStringFromClass([v class])];
         [stack addObjectsFromArray:v.subviews];
     }
+    if (![gRedDebug containsString:@"rgb"] || redOther.length)
+        gRedDebug = [NSString stringWithFormat:@"%@ root=%@ labels=%d redviews=%@", [gRedDebug containsString:@"rgb"] ? gRedDebug : @"", NSStringFromClass([root class]), labels, redOther];
 }
 
 static void FloatTick(UIWindow *w) {
@@ -2941,9 +2972,21 @@ static void SymLayoutHook(UIView *self, SEL _cmd) {
             if (self == gSlotView && gRowParent.window == w) return;
             gSlotView = self;
         }
-        busy = YES;
-        @try { AlbumTick(w); FloatTick(w); } @catch (__unused id e) {}
-        busy = NO;
+        // The rest waits for the next run-loop turn (once), so moving our views
+        // can never re-trigger this layout in a loop.
+        static BOOL queued;
+        if (!queued) {
+            queued = YES;
+            __weak UIWindow *ww = w;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                queued = NO;
+                UIWindow *win = ww;
+                if (!win) return;
+                busy = YES;
+                @try { AlbumTick(win); FloatTick(win); } @catch (__unused id e) {}
+                busy = NO;
+            });
+        }
     } @catch (__unused id e) { busy = NO; }
 }
 static void HookSymbolButton(void) {
