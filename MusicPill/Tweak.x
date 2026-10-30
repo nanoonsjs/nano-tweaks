@@ -1,4 +1,6 @@
-// MusicPill 1.0.48 - made by nano
+// MusicPill 1.1.0 - made by nano
+// 1.1.0: release build: arm64 + arm64e (every iPhone that runs iOS 16), rootless
+//        and rootful packages, works on iOS 15.0 - 16.x.
 // 1.0.48: the account picture was taken for an album's download button and
 //         hidden for good; our own buttons are skipped and un-hidden now.
 // 1.0.47: account picture drawn by its own image view (UIKit cleared the
@@ -1189,7 +1191,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.48 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.1.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];

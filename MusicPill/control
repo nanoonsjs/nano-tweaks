@@ -1,10 +1,10 @@
 Package: com.user.musicpill
 Name: MusicPill
-Version: 1.0.48
+Version: 1.1.0
 Architecture: iphoneos-arm64
 Description: Apple Music, iOS 26 style: small round now-playing pill with swipe to skip and scrolling title, new album buttons, glass top buttons, Home tab. Made by nano.
 Maintainer: nano
 Author: nano
 Section: Tweaks
-Depends: mobilesubstrate, preferenceloader
+Depends: mobilesubstrate (>= 0.9.5000), preferenceloader, firmware (>= 15.0)
 Icon: file:///var/jb/usr/share/MusicPill/icon.png

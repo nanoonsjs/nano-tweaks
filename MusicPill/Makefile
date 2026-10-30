@@ -1,7 +1,9 @@
 TARGET := iphone:clang:latest:15.0
-# Music is an Apple app (arm64e), so this must be arm64e to load there.
-ARCHS = arm64e
-THEOS_PACKAGE_SCHEME = rootless
+# arm64e: iPhone XS and newer (A12+); arm64: iPhone 8 / 8 Plus / X (A11), which
+# also run iOS 16 (palera1n). Both slices go in one dylib.
+ARCHS = arm64 arm64e
+# Rootless by default (Dopamine, palera1n rootless); CI also makes a rootful deb.
+THEOS_PACKAGE_SCHEME ?= rootless
 THEOS_PLATFORM_DEB_COMPRESSION_TYPE = xz
 
 include $(THEOS)/makefiles/common.mk
