@@ -2751,7 +2751,7 @@ static void StyleSegment(UISegmentedControl *seg) {
             CGFloat bh = s.bounds.size.height, bw = s.bounds.size.width;
             if (s.layer.cornerRadius != bh / 2) { s.layer.cornerRadius = bh / 2; s.layer.cornerCurve = kCACornerCurveContinuous; s.clipsToBounds = YES; }
             // Fill the whole half (UIKit insets it, which left a gray rim).
-            if (bw > 0 && bh > 0 && segW > 0 && ![s.layer animationForKeyPath:@"wx"]) {
+            if (bw > 0 && bh > 0 && segW > 0 && ![s.layer animationForKey:@"wx"]) {
                 CGAffineTransform want = CGAffineTransformMakeScale(segW / bw, h / bh);
                 if (!CGAffineTransformEqualToTransform(s.transform, want)) s.transform = want;
             }
