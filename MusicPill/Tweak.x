@@ -1,4 +1,6 @@
-// MusicPill 0.9.1 - made by nano
+// MusicPill 0.9.2 - made by nano
+// 0.9.2: no flash of the full player when a swipe-down closes it (the player
+//        is hidden before its size is reset, not after).
 // 0.9.1: swipe-down to close follows your finger (the player slides, shrinks
 //        and rounds its corners with the drag), then glides into the pill
 //        from where you let go with your flick's speed, or springs back up.
@@ -332,8 +334,15 @@ static void FixTabItems(UITabBar *tb) {
     if (!player || !gCollapse || !gRound || !gLastTabBar || gLastTabBar.window != win) { %orig; return; }
     UIView *snap = [presented.view snapshotViewAfterScreenUpdates:NO];
     CGRect from = [presented.view convertRect:presented.view.bounds toView:win];
-    presented.view.transform = CGAffineTransformIdentity;
+    // Hide it before undoing the drag's shrink, so it never flashes full size.
+    UIView *pv = presented.view;
+    pv.hidden = YES;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    pv.transform = CGAffineTransformIdentity;
+    pv.layer.cornerRadius = 0;
+    [CATransaction commit];
     %orig(NO, completion);
+    dispatch_async(dispatch_get_main_queue(), ^{ pv.hidden = NO; });
     @try { PlayerClosedOurWay(win, snap, from); } @catch (__unused id e) {}
 }
 %end
@@ -635,7 +644,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1339,8 +1348,6 @@ static UIScrollView *ScrollUnder(UIView *v) {
     if (close && vc) {
         gCloseVelocity = MAX(0, vy);
         [vc dismissViewControllerAnimated:YES completion:nil];
-        v.transform = CGAffineTransformIdentity;
-        v.layer.cornerRadius = 0;
     } else {
         [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{
             v.transform = CGAffineTransformIdentity;
