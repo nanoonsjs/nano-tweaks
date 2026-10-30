@@ -1,4 +1,6 @@
-// MusicPill 1.2.11 - made by nano
+// MusicPill 1.2.12 - made by nano
+// 1.2.12: Apple Music / Library switch in light mode: white selected pill on a
+//         faint grey track (was black).
 // 1.2.11: fixes the crash on launch in 1.2.9/1.2.10 (the light/dark glass colour
 //         called itself forever).
 // 1.2.10: fixes 1.2.9 freezing / closing Music (light-mode colours were re-set
@@ -1227,7 +1229,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.11 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.12 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3044,7 +3046,10 @@ static void StyleSegment(UISegmentedControl *seg) {
         [seg addTarget:[MPSegBounce shared] action:@selector(changed:) forControlEvents:UIControlEventValueChanged];
         seg.layer.cornerCurve = kCACornerCurveContinuous;
     }
-    if (seg.backgroundColor && ![seg.backgroundColor isEqual:UIColor.clearColor]) seg.backgroundColor = UIColor.clearColor;
+    // Track: nothing in dark mode, a faint grey in light mode so the switch reads.
+    static UIColor *track;
+    if (!track) track = Dyn([UIColor colorWithWhite:0 alpha:0.07], UIColor.clearColor);
+    if (seg.backgroundColor != track) seg.backgroundColor = track;
     // UISegmentedControl resets its corners on layout, so this runs every time.
     if (seg.layer.cornerRadius != h / 2) seg.layer.cornerRadius = h / 2;
     if (seg.layer.borderWidth != 0) seg.layer.borderWidth = 0;
@@ -3058,14 +3063,22 @@ static void StyleSegment(UISegmentedControl *seg) {
         if (f.size.width <= 2) { if (!s.hidden) s.hidden = YES; continue; }                       // dividers
         if (f.size.width >= seg.bounds.size.width - 4) { if (s.alpha != 0) s.alpha = 0; continue; } // Apple's gray background
         if (!CGAffineTransformIsIdentity(s.transform) && ![s.layer animationForKey:@"wx"]) s.transform = CGAffineTransformIdentity;   // undo 1.0.24
-        if (f.size.height > 10) {                                                                // selected pill
+        if (f.size.height > 10) {
+            // Only the pill under the selected half is the selection; light mode also
+            // gives each half its own background view, which stays see-through.
+            CGFloat segW = seg.numberOfSegments ? seg.bounds.size.width / seg.numberOfSegments : seg.bounds.size.width;
+            NSInteger idx = (NSInteger)floor(CGRectGetMidX(f) / MAX(1, segW));
+            BOOL selected = idx == seg.selectedSegmentIndex;
+            UIImageView *iv = (UIImageView *)s;
+            if (!selected) { if (iv.alpha != 0) iv.alpha = 0; continue; }
+            if (iv.alpha != 1) iv.alpha = 1;
             CGFloat bh = s.bounds.size.height;
             if (s.layer.cornerRadius != bh / 2) { s.layer.cornerRadius = bh / 2; s.layer.cornerCurve = kCACornerCurveContinuous; s.clipsToBounds = YES; }
-            // Plain dark fill instead of Apple's pill image (its lighter rim showed as gray).
-            UIImageView *iv = (UIImageView *)s;
+            // Plain fill instead of Apple's pill image: white pill in light mode, dark in dark.
             if (iv.image) iv.image = nil;
-            UIColor *fill = [UIColor colorWithWhite:0.02 alpha:0.95];
-            if (![iv.backgroundColor isEqual:fill]) iv.backgroundColor = fill;
+            static UIColor *fill;
+            if (!fill) fill = Dyn([UIColor colorWithWhite:1 alpha:0.98], [UIColor colorWithWhite:0.02 alpha:0.95]);
+            if (iv.backgroundColor != fill) iv.backgroundColor = fill;
             if (iv.layer.shadowOpacity != 0) iv.layer.shadowOpacity = 0;
         }
     }
