@@ -1,4 +1,8 @@
-// MusicPill 1.0.0 - made by nano
+// MusicPill 1.0.1 - made by nano
+// 1.0.1: album page top buttons (Music's floating back / download / ... over
+//        the artwork): back and ... in 44pt liquid glass circles with jelly,
+//        the download button moves into the album row's right circle (live
+//        progress), and Music's red artist name / "Show Complete Album" are white.
 // 1.0.0: the Favorited / Unfavorited pop-up is the small iOS 26 one: a glass
 //        capsule above the pill with a small star (filled) or crossed-out
 //        star and the word, instead of Music's big square.
@@ -850,7 +854,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2312,7 +2316,22 @@ static void ShowFavToast(UILabel *label, BOOL fav) {
     } completion:^(BOOL d) { [cap removeFromSuperview]; }];
 }
 
+static BOOL IsMusicRed(UIColor *c) {
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if (![c getRed:&r green:&g blue:&b alpha:&a] || a < 0.5) return NO;
+    return r > 0.8 && g < 0.4 && b > 0.1 && b < 0.55;
+}
+static BOOL InBars(UIView *v) {
+    for (UIView *p = v.superview; p; p = p.superview) if ([p isKindOfClass:[UITabBar class]] || p.tag == COLLAPSE_TAG) return YES;
+    return NO;
+}
+
 %hook UILabel
+- (void)setTextColor:(UIColor *)c {
+    // iOS 26: the artist name and "Show Complete Album" are white, not red.
+    if (gAlbum && IsMusicRed(c) && !InBars(self)) { %orig(UIColor.whiteColor); return; }
+    %orig;
+}
 - (void)setText:(NSString *)text {
     NSString *mapped = MapQueueText(text);
     %orig(mapped);
@@ -2458,7 +2477,9 @@ static void NavTick(UINavigationBar *nb) {
         return x < y ? NSOrderedAscending : (x > y ? NSOrderedDescending : NSOrderedSame);
     }];
     // Leftmost of 2+ right-hand buttons is the add/download/checkmark slot.
-    gSlotView = right.count >= 2 ? right.firstObject : nil;
+    if (right.count >= 2) gSlotView = right.firstObject;
+    else if (gSlotView && ![gSlotView isDescendantOfView:nb] && gSlotView.window) {}   // floating album button (FloatTick)
+    else gSlotView = nil;
     if (gPortalLive && right.count >= 2) [right removeObjectAtIndex:0]; // shown in the album row instead
 
     UIView *host = nil, *single = nil;
@@ -2484,6 +2505,102 @@ static void NavTick(UINavigationBar *nb) {
         SetFrameIfNew(GlassIn(host), CGRectMake(round(CGRectGetMidX(u) - w / 2), round(CGRectGetMidY(u) - H / 2), round(w), H), H / 2);
     }
     gNavDebug = [NSString stringWithFormat:@"%lu buttons, %lu right, slot=%d", (unsigned long)buttons.count, (unsigned long)right.count, gSlotView != nil];
+}
+
+#pragma mark - album page floating buttons
+
+static const void *kFloatGlass = &kFloatGlass;
+@interface MPFloatJelly : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+@implementation MPFloatJelly
++ (instancetype)shared { static MPFloatJelly *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPFloatJelly new]; }); return t; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+- (void)press:(UILongPressGestureRecognizer *)g {
+    UIView *glass = objc_getAssociatedObject(g.view, kFloatGlass);
+    if (!glass) return;
+    UIViewAnimationOptions o = UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState;
+    if (g.state == UIGestureRecognizerStateBegan) {
+        [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.8 options:o animations:^{ glass.transform = CGAffineTransformMakeScale(1.18, 1.18); } completion:nil];
+    } else if (g.state == UIGestureRecognizerStateChanged) {
+        CGPoint p = [g locationInView:glass];
+        CGFloat ox = tanh((p.x - glass.bounds.size.width / 2) / 40) * 7, oy = tanh((p.y - glass.bounds.size.height / 2) / 40) * 7;
+        [UIView animateWithDuration:0.18 delay:0 options:o animations:^{
+            glass.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(ox, oy), 1.18 + fabs(ox) * 0.01, 1.18 + fabs(oy) * 0.01);
+        } completion:nil];
+    } else if (g.state >= UIGestureRecognizerStateEnded) {
+        [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.38 initialSpringVelocity:0.9 options:o animations:^{ glass.transform = CGAffineTransformIdentity; } completion:nil];
+    }
+}
+@end
+
+static NSString *GlyphName(UIView *v) {
+    UIView *g = GlyphIn(v, 0);
+    return [((UIImageView *)g).image.description lowercaseString] ?: @"";
+}
+static void GlassCircleFor(UIControl *c, CGFloat D) {
+    UIView *g = objc_getAssociatedObject(c, kFloatGlass);
+    if (!g || g.superview != c) {
+        UIVisualEffectView *e = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+        e.userInteractionEnabled = NO; e.clipsToBounds = YES;
+        e.layer.cornerCurve = kCACornerCurveContinuous;
+        e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
+        e.tag = NAVGLASS_TAG;
+        [c insertSubview:e atIndex:0];
+        g = e;
+        objc_setAssociatedObject(c, kFloatGlass, g, OBJC_ASSOCIATION_ASSIGN);
+        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPFloatJelly shared] action:@selector(press:)];
+        lp.minimumPressDuration = 0; lp.cancelsTouchesInView = NO; lp.delaysTouchesEnded = NO;
+        lp.delegate = [MPFloatJelly shared];
+        [c addGestureRecognizer:lp];
+    }
+    if (c.clipsToBounds) c.clipsToBounds = NO;
+    // Music's own gray circle goes away.
+    ClearCircles(c, 0);
+    if (c.backgroundColor && CGColorGetAlpha(c.backgroundColor.CGColor) > 0.01) { objc_setAssociatedObject(c, kClearedBG, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); c.backgroundColor = UIColor.clearColor; }
+    for (UIView *s in c.subviews) if ([s isKindOfClass:[UIVisualEffectView class]] && s != g && !s.layer.mask) s.layer.mask = [CALayer layer];
+    UIView *glyph = GlyphIn(c, 0);
+    CGPoint ctr = glyph ? [glyph.superview convertPoint:glyph.center toView:c] : CGPointMake(c.bounds.size.width / 2, c.bounds.size.height / 2);
+    if (CGAffineTransformIsIdentity(g.transform)) {
+        CGRect f = CGRectMake(round(ctr.x - D / 2), round(ctr.y - D / 2), D, D);
+        if (!CGRectEqualToRect(g.frame, f)) g.frame = f;
+    }
+    if (g.layer.cornerRadius != D / 2) g.layer.cornerRadius = D / 2;
+    [c sendSubviewToBack:g];
+}
+
+static NSString *gFloatDebug = @"-";
+static void FloatTick(UIWindow *w) {
+    if (!w || !gNavGlass) return;
+    CGFloat topBand = w.safeAreaInsets.top + 70, W = w.bounds.size.width;
+    NSMutableArray *ctls = [NSMutableArray array];
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
+    int guard = 0;
+    while (stack.count && guard++ < 6000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || [v isKindOfClass:[UINavigationBar class]] || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG) continue;
+        if ([v isKindOfClass:[UIControl class]] && v.bounds.size.width >= 24 && v.bounds.size.width <= 64 && v.bounds.size.height <= 64) {
+            CGRect f = [v convertRect:v.bounds toView:nil];
+            if (CGRectGetMidY(f) < topBand && CGRectGetMidY(f) > w.safeAreaInsets.top - 10) { [ctls addObject:v]; continue; }
+        }
+        if ([v isKindOfClass:[UIControl class]]) continue;
+        CGRect f = [v convertRect:v.bounds toView:nil];
+        if (f.origin.y > topBand) continue;   // nothing deeper can be in the top band... unless it extends up
+        [stack addObjectsFromArray:v.subviews];
+    }
+    UIControl *back = nil, *more = nil, *dl = nil;
+    for (UIControl *c in ctls) {
+        NSString *gn = GlyphName(c);
+        CGFloat x = CGRectGetMidX([c convertRect:c.bounds toView:nil]);
+        if ([gn containsString:@"ellipsis"]) more = c;
+        else if (x < W / 2) { if (!back || x < CGRectGetMidX([back convertRect:back.bounds toView:nil])) back = c; }
+        else dl = c;
+    }
+    if (back) GlassCircleFor(back, 44);
+    if (more) GlassCircleFor(more, 44);
+    // The download button: shown live in the album row's right circle instead.
+    if (dl && gRowParent && gRowParent.window == w) gSlotView = dl;
+    gFloatDebug = [NSString stringWithFormat:@"%lu ctls back=%d more=%d dl=%d", (unsigned long)ctls.count, back != nil, more != nil, dl != nil];
 }
 
 static UINavigationBar *TopNavBar(UIWindow *w) {
@@ -2800,6 +2917,7 @@ static void StartWatchdog(void) {
         if (w && !playerUp) {
             @try { AlbumTick(w); } @catch (__unused id e) {}
             @try { NavTick(TopNavBar(w)); } @catch (__unused id e) {}
+            @try { FloatTick(w); } @catch (__unused id e) {}
         }
         // Full player: round queue button (backup for the hook) + debug map.
         UIView *player = nil;
