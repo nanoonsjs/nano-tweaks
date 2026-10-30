@@ -1,4 +1,5 @@
-// MusicPill 1.0.45 - made by nano
+// MusicPill 1.0.46 - made by nano
+// 1.0.46: account picture / Edit come back after returning from an album.
 // 1.0.45: zoom page transition turned off (back to the normal slide).
 // 1.0.44: iOS 26 zoom: tapping an album / playlist / song tile grows its page
 //         out of the tile (back shrinks it into the tile) instead of iOS 16's
@@ -1184,7 +1185,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.45 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.46 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3271,7 +3272,15 @@ static void AvatarEval(void) {
     BOOL atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 4;
     NSNumber *st = objc_getAssociatedObject(b, &gAvatarList);
     BOOL shown = !st || st.boolValue;
-    if (atTop == shown) return;
+    if (atTop == shown) {
+        // Settled but left invisible (an interrupted pop-away): put it back.
+        if (shown && !b.layer.animationKeys.count && (b.alpha < 0.99 || !CGAffineTransformIsIdentity(b.transform))) {
+            b.alpha = 1; b.transform = CGAffineTransformIdentity;
+            UIButton *eb = gEditBtn;
+            if (eb && !eb.layer.animationKeys.count) { eb.alpha = 1; eb.transform = CGAffineTransformIdentity; }
+        }
+        return;
+    }
     objc_setAssociatedObject(b, &gAvatarList, @(atTop), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     LiquidPop(b, atTop, 0);
     UIButton *eb = gEditBtn;
@@ -3505,6 +3514,9 @@ static void SearchPage(UINavigationBar *nb) {
         CGRect fw = [nb convertRect:f toView:nil];
         b.hidden = large.hidden || large.alpha < 0.5 || asc.isActive || CGRectGetMinY(fw) < nb.window.safeAreaInsets.top;
         @try { LibraryEdit(nb, f, b.hidden, [pt isEqualToString:@"Library"]); } @catch (__unused id e) {}
+        // Re-check every tick: opening a page scrolls the list behind the scenes and
+        // coming back doesn't always report a scroll, which left the picture popped away.
+        if (!b.hidden) { @try { AvatarEval(); } @catch (__unused id e) {} }
     }
     if (!isSearch) { gSearchDebug = [NSString stringWithFormat:@"%@ avatar=%d", pt, img != nil]; return; }
     // "Browse Categories" goes, category cards get iOS 26 rounding.
