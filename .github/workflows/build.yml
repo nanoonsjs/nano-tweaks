@@ -58,6 +58,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="build-${{ github.run_number }}"
-          gh release create "$tag" out/*.deb \
+          if ! gh release create "$tag" out/*.deb \
             --title "Build ${{ github.run_number }}" \
-            --notes "Built with Xcode on GitHub Actions. Tap a .deb, then open it in Sileo or Filza."
+            --notes "Built with Xcode on GitHub Actions. Tap a .deb, then open it in Sileo or Filza." > rel.log 2>&1; then
+            cat rel.log; sed 's/^/::error::/' rel.log | head -10; exit 1
+          fi
