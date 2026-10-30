@@ -1,4 +1,6 @@
-// MusicPill 1.0.37 - made by nano
+// MusicPill 1.0.38 - made by nano
+// 1.0.38: queue History visible again (pills step aside while it's open),
+//         Library glass Edit shows before editing too (Apple's untitled item).
 // 1.0.37: queue pills stay when scrolling up into history (no flicker back to
 //         Music's), star / ••• placed every frame and hidden until placed,
 //         Library: Edit is a glass checklist circle left of the picture, both
@@ -991,7 +993,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.37 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.38 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2959,9 +2961,11 @@ static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidd
     UIBarButtonItem *item = nil;
     if (isLibrary) for (UIBarButtonItem *it in [nb.topItem.rightBarButtonItems arrayByAddingObjectsFromArray:nb.topItem.leftBarButtonItems ?: @[]])
         if ([it.title isEqualToString:@"Edit"] || [it.title isEqualToString:@"Done"] || it.style == UIBarButtonItemStyleDone) { item = it; break; }
+    // Apple's system Edit item has no title: take the plain (non-custom) right item.
+    if (!item && isLibrary) for (UIBarButtonItem *it in nb.topItem.rightBarButtonItems) if (!it.customView) { item = it; break; }
     if (!item) { eb.hidden = YES; return; }
     gEditItem = item;
-    BOOL editing = [item.title isEqualToString:@"Done"];
+    __block BOOL editing = [item.title isEqualToString:@"Done"] || item.style == UIBarButtonItemStyleDone;
     // Music's "Edit" text goes (its view stays for the system).
     NSMutableArray *st = [NSMutableArray arrayWithArray:nb.subviews];
     int g = 0;
@@ -2969,6 +2973,7 @@ static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidd
         UIView *v = st.lastObject; [st removeLastObject];
         if (v.tag == EDIT_TAG || v.tag == AVATAR_TAG) continue;
         if ([v isKindOfClass:[UILabel class]] && ([((UILabel *)v).text isEqualToString:@"Edit"] || [((UILabel *)v).text isEqualToString:@"Done"])) {
+            if ([((UILabel *)v).text isEqualToString:@"Done"]) editing = YES;
             UIView *btn = v;
             for (UIView *p = v.superview; p && p != nb; p = p.superview) { btn = p; if ([p isKindOfClass:[UIControl class]]) break; }
             if (!btn.layer.mask) btn.layer.mask = [CALayer layer];
@@ -4735,13 +4740,20 @@ static void PositionQueueRow(UIScrollView *list) {
     CGFloat anchor;
     if (more.window == w) anchor = [more convertPoint:CGPointMake(0, more.bounds.size.height / 2) toView:nil].y + 36;
     else anchor = [list convertPoint:CGPointMake(0, list.bounds.origin.y) toView:nil].y + 50;
+    if (more.window == w && anchor > w.safeAreaInsets.top + 220) {
+        // Scrolled up into History: the song row slides down with it. Pills hide,
+        // the whole list shows; everything comes back when scrolled down again.
+        if (!row.hidden) [UIView animateWithDuration:0.15 animations:^{ row.alpha = 0; } completion:^(BOOL d) { row.hidden = YES; }];
+        if ([list.layer.mask.name isEqualToString:@"mp.queue"]) list.layer.mask = nil;
+        return;
+    }
+    if (row.hidden || row.alpha < 1) { row.hidden = NO; [UIView animateWithDuration:0.15 animations:^{ row.alpha = 1; }]; }
     CGRect rw = CGRectMake(0, anchor, w.bounds.size.width, QUEUE_EXTRA);
     CGRect rf = [host convertRect:rw fromView:nil];
     rf.origin.x = list.frame.origin.x; rf.size.width = list.frame.size.width;
     if (!CGRectEqualToRect(row.frame, rf)) row.frame = rf;
     if ([host.subviews indexOfObject:row] < [host.subviews indexOfObject:list]) [host insertSubview:row aboveSubview:list];
-    row.hidden = list.hidden || list.alpha < 0.05;
-    row.alpha = list.alpha;
+    if (list.hidden || list.alpha < 0.05) row.hidden = YES;
     LayoutPillButtons(row);
 
     // Slide the list so its first header ("Continue Playing") starts below the pills.
