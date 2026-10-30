@@ -1,0 +1,9 @@
+Package: com.nano.lockstar
+Name: LockStar
+Version: 0.1.0
+Architecture: iphoneos-arm
+Description: iOS 26 favorite star on the Lock Screen and Dynamic Island music player. Made by nano. (Test build.)
+Maintainer: nano
+Author: nano
+Section: Tweaks
+Depends: mobilesubstrate, preferenceloader
