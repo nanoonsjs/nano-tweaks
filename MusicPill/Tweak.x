@@ -1,4 +1,8 @@
-// MusicPill 1.0.6 - made by nano
+// MusicPill 1.0.7 - made by nano
+// 1.0.7: share button works (it was outside its parent so taps never landed),
+//        back circle and share/••• capsule placed like iOS 26, artist page in
+//        the iOS 26 look (centered name, big white play, favorite star with a
+//        burst, share/••• capsule, rounded latest-release card with a + circle).
 // 1.0.6: no freeze when opening an artist / Show Complete Album (layout work is
 //        queued, share button belongs to its own page), one glass on back, no
 //        gray bar background on album pages, bigger •••, page tinted white.
@@ -876,7 +880,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2592,8 +2596,8 @@ static void NavTick(UINavigationBar *nb) {
         CGRect inNav = [(g ?: b) convertRect:(g ?: b).bounds toView:nb];
         if (CGRectGetMidX(inNav) < mid) {
             if (!g) continue;
-            if (gAlbum && gRowParent.window) {
-                // Album page: the big floating circle (FloatTick) is the only glass.
+            if (gAlbum) {
+                // The big floating circle (FloatTick) is the only glass on back.
                 for (UIView *s in [g.superview.subviews copy]) if (s.tag == NAVGLASS_TAG) [s removeFromSuperview];
                 continue;
             }
@@ -2739,13 +2743,15 @@ static void GlassCircleFor(UIControl *c, CGFloat D) {
 
 // Share + ••• share one glass capsule, like iOS 26.
 static __weak UIView *gMoreBtn;
-static UIAction *FindShareAction(NSArray *kids) {
+// ---- Music's ••• menu, built off-screen so its actions can be run directly ----
+static NSString *MenuKind(UIMenuElement *e);
+static UIAction *FindKind(NSArray *kids, NSArray *kinds) {
     for (UIMenuElement *e in kids) {
-        if ([e isKindOfClass:[UIMenu class]]) { UIAction *a = FindShareAction(((UIMenu *)e).children); if (a) return a; }
-        else if ([e isKindOfClass:[UIAction class]]) {
-            NSString *l = e.title.lowercaseString;
-            if ([l hasPrefix:@"share"] && ![l containsString:@"lyric"] && ![l containsString:@"shareplay"] && ![l containsString:@"playlist"]) return (UIAction *)e;
-        }
+        if ([e isKindOfClass:[UIMenu class]]) { UIAction *a = FindKind(((UIMenu *)e).children, kinds); if (a) return a; continue; }
+        if (![e isKindOfClass:[UIAction class]]) continue;
+        NSString *k = MenuKind(e);
+        if (k && [kinds containsObject:k]) return (UIAction *)e;
+        if ([kinds containsObject:@"share"] && [e.title.lowercaseString hasPrefix:@"share"] && ![e.title.lowercaseString containsString:@"shareplay"] && ![e.title.lowercaseString containsString:@"lyric"]) return (UIAction *)e;
     }
     return nil;
 }
@@ -2761,19 +2767,13 @@ static UIContextMenuInteraction *MenuInteractionNear(UIView *v) {
         for (id i in p.interactions) if ([i isKindOfClass:[UIContextMenuInteraction class]] && p.bounds.size.width < 80) return i;
     return nil;
 }
-static NSString *gShareDebug = @"-";
-@interface MPShare : NSObject
-+ (instancetype)shared;
-- (void)tap;
-@end
-@implementation MPShare
-+ (instancetype)shared { static MPShare *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPShare new]; }); return t; }
-- (void)tap {
-    UIView *more = gMoreBtn;
-    if (!more) { gShareDebug = @"no more btn"; return; }
+static UIMenu *MenuOf(UIView *more, UIContextMenuInteraction **outMi) {
+    if (!more) return nil;
     UIMenu *menu = nil;
-    if ([more isKindOfClass:[UIButton class]]) menu = ((UIButton *)more).menu;
+    UIControl *ctl = [more isKindOfClass:[UIControl class]] ? (UIControl *)more : nil;
+    if ([ctl isKindOfClass:[UIButton class]]) menu = ((UIButton *)ctl).menu;
     UIContextMenuInteraction *mi = MenuInteractionNear(more);
+    if (outMi) *outMi = mi;
     if (!menu && mi && [mi.delegate respondsToSelector:@selector(contextMenuInteraction:configurationForMenuAtLocation:)]) {
         @try {
             CGPoint loc = [more convertPoint:CGPointMake(CGRectGetMidX(more.bounds), CGRectGetMidY(more.bounds)) toView:mi.view];
@@ -2783,25 +2783,62 @@ static NSString *gShareDebug = @"-";
             if (prov) menu = prov(@[]);
         } @catch (__unused id e) {}
     }
-    UIAction *a = FindShareAction(menu.children);
-    gShareDebug = [NSString stringWithFormat:@"menu=%lu mi=%d share=%@", (unsigned long)menu.children.count, mi != nil, a.title];
-    if (a) {
+    return menu;
+}
+static BOOL RunAction(UIAction *a, id sender) {
+    if (!a) return NO;
+    @try {
         SEL perf = NSSelectorFromString(@"performWithSender:target:");
-        @try {
-            if ([a respondsToSelector:perf]) { ((void (*)(id, SEL, id, id))objc_msgSend)(a, perf, more, nil); return; }
-            void (^h)(UIAction *) = [a valueForKey:@"handler"];
-            if (h) { h(a); return; }
-        } @catch (__unused id e) {}
-    }
-    // Fallback: open the ••• menu (Share is in it).
+        if ([a respondsToSelector:perf]) { ((void (*)(id, SEL, id, id))objc_msgSend)(a, perf, sender, nil); return YES; }
+        void (^h)(UIAction *) = [a valueForKey:@"handler"];
+        if (h) { h(a); return YES; }
+    } @catch (__unused id e) {}
+    return NO;
+}
+static void OpenMenu(UIView *more, UIContextMenuInteraction *mi) {
     SEL pres = NSSelectorFromString(@"_presentMenuAtLocation:");
     if (mi && [mi respondsToSelector:pres]) {
         CGPoint loc = [more convertPoint:CGPointMake(CGRectGetMidX(more.bounds), CGRectGetMidY(more.bounds)) toView:mi.view];
         ((void (*)(id, SEL, CGPoint))objc_msgSend)(mi, pres, loc);
     } else if ([more isKindOfClass:[UIControl class]]) [(UIControl *)more sendActionsForControlEvents:UIControlEventTouchUpInside];
 }
+
+static __weak UIView *gMoreBtn;
+static NSString *gShareDebug = @"-";
+@interface MPShare : NSObject
++ (instancetype)shared;
+- (void)tap:(UIButton *)b;
 @end
+@implementation MPShare
++ (instancetype)shared { static MPShare *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPShare new]; }); return t; }
+- (void)tap:(UIButton *)b {
+    UIView *more = gMoreBtn;
+    if (!more) { gShareDebug = @"tap, no ••• button"; return; }
+    UIContextMenuInteraction *mi = nil;
+    UIMenu *menu = MenuOf(more, &mi);
+    UIAction *a = FindKind(menu.children, @[@"share"]);
+    gShareDebug = [NSString stringWithFormat:@"tap menu=%lu mi=%d share=%@", (unsigned long)menu.children.count, mi != nil, a.title];
+    if (RunAction(a, b ?: more)) return;
+    OpenMenu(more, mi);   // fallback: the ••• menu (Share is in it)
+}
+@end
+
+// Moves a Music button sideways so its icon sits at a fixed x on screen. Skipped
+// while the page is sliding in or out (big offsets), so pushes still look right.
+static void AlignX(UIView *c, CGFloat targetX) {
+    if (!c.window) return;
+    CGPoint gc = GlyphCenter(c, nil);
+    CGFloat untrans = gc.x - c.transform.tx;
+    CGFloat tx = round(targetX - untrans);
+    if (fabs(tx) > 40) return;
+    if (fabs(c.transform.tx - tx) > 0.5) c.transform = CGAffineTransformMakeTranslation(tx, 0);
+}
+
+#define TOPBTN 46.0
+#define TOPMARGIN 18.0
+#define PAIRW 117.0
 static const void *kShareBtn = &kShareBtn;
+// Share + ••• share one glass capsule, like iOS 26 (album and artist pages).
 static void PlaceSharePair(UIView *more) {
     static __weak UIView *lastMore;
     UIView *prev = lastMore;
@@ -2810,39 +2847,398 @@ static void PlaceSharePair(UIView *more) {
         [(UIView *)objc_getAssociatedObject(prev, kPairGlass) setHidden:YES];
     }
     lastMore = more;
-    if (!more || !more.superview) return;
+    if (!more || !more.superview || !more.window) return;
+    UIWindow *w = more.window;
     UIView *host = more.superview;
-    UIButton *b = objc_getAssociatedObject(more, kShareBtn);
-    // The single circle from outside albums goes away; the capsule replaces it.
     [(UIView *)objc_getAssociatedObject(more, kBackGlass) setHidden:YES];
-    UIView *g = FloatGlassIn(more, host, more, kPairGlass);
-    if (!b || b.superview != host) {
-        [b removeFromSuperview];
-        b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.tintColor = UIColor.whiteColor; b.tag = SHARE_TAG;
-        [b setImage:[UIImage systemImageNamed:@"square.and.arrow.up" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
-        [b addTarget:[MPShare shared] action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
-        [host addSubview:b];
-        objc_setAssociatedObject(more, kShareBtn, b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    AttachJelly(b, g);
-    AttachJelly(more, g);
     StripMusicCircle(more);
     UIView *dots = GlyphIn(more, 0);
     if (dots && CGAffineTransformIsIdentity(dots.transform)) dots.transform = CGAffineTransformMakeScale(1.3, 1.3);
+    AlignX(more, w.bounds.size.width - TOPMARGIN - 28);
+
+    UIView *g = FloatGlassIn(more, host, more, kPairGlass);
+    AttachJelly(more, g);
     CGPoint c = GlyphCenter(more, host);
-    CGFloat H = 46, half = 54;
-    b.hidden = NO; g.hidden = NO;
-    CGRect bf = CGRectMake(round(c.x - half - H / 2), round(c.y - H / 2), H, H);
+    SetGlassFrame(g, CGRectMake(round(c.x + 28 - PAIRW), round(c.y - TOPBTN / 2), PAIRW, TOPBTN));
+    g.hidden = more.hidden;
+
+    // The share button lives in a big ancestor: Music's ••• sits in a tiny view,
+    // and a button outside its parent's bounds never gets the tap.
+    CGPoint sc = [host convertPoint:CGPointMake(c.x - 61, c.y) toView:nil];
+    UIView *bigHost = nil;
+    for (UIView *p = host; p && p != w; p = p.superview) {
+        CGPoint q = [w convertPoint:sc toView:p];
+        if (CGRectContainsRect(p.bounds, CGRectMake(q.x - 22, q.y - 22, 44, 44)) && p.userInteractionEnabled) { bigHost = p; break; }
+    }
+    if (!bigHost) bigHost = w;
+    UIButton *b = objc_getAssociatedObject(more, kShareBtn);
+    if (!b || b.superview != bigHost) {
+        [b removeFromSuperview];
+        b = [UIButton buttonWithType:UIButtonTypeSystem];
+        b.tintColor = UIColor.whiteColor; b.tag = SHARE_TAG;
+        [b setImage:[UIImage systemImageNamed:@"square.and.arrow.up" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+        [b addTarget:[MPShare shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+        objc_setAssociatedObject(more, kShareBtn, b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        AttachJelly(b, g);
+    }
+    if (bigHost.subviews.lastObject != b) [bigHost addSubview:b];
+    CGPoint bc = [w convertPoint:sc toView:bigHost];
+    CGRect bf = CGRectMake(round(bc.x - 26), round(bc.y - 23), 52, 46);
     if (!CGRectEqualToRect(b.frame, bf)) b.frame = bf;
-    if ([host.subviews indexOfObject:b] < [host.subviews indexOfObject:g]) [host insertSubview:b aboveSubview:g];
-    SetGlassFrame(g, CGRectMake(round(c.x - half - H / 2 - 4), round(c.y - H / 2), half + H + 8, H));
+    b.hidden = more.hidden;
 }
 
 // Music's top download button is hidden for good (still tappable from our row).
 static void HideTopDownload(UIView *dl) {
     if (dl && !dl.layer.mask) dl.layer.mask = [CALayer layer];
     if (dl.userInteractionEnabled) dl.userInteractionEnabled = NO;
+}
+
+#pragma mark - artist page (iOS 26 look)
+
+#define ARTIST_TAG 0x4D504152
+#define CARD_TAG 0x4D504344
+#define PLUS_TAG 0x4D50504C
+static __weak UIView *gArtistPlay;
+static __weak UILabel *gArtistName;
+static NSString *gArtistDebug = @"-";
+static BOOL gArtistFav, gArtistFavKnown;
+static CFTimeInterval gArtistFavLock;
+
+static void Unmask(UIView *v) { if (v.layer.mask) v.layer.mask = nil; }
+static void MaskOut(UIView *v) { if (v && !v.layer.mask) v.layer.mask = [CALayer layer]; }
+
+static BOOL HasText(UIView *v, int depth) {
+    if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) return YES;
+    if (depth > 4) return NO;
+    for (UIView *s in v.subviews) if (HasText(s, depth + 1)) return YES;
+    return NO;
+}
+static BOOL InTag(UIView *v, NSInteger tag) {
+    for (UIView *p = v; p; p = p.superview) if (p.tag == tag) return YES;
+    return NO;
+}
+// Music's round red play button at the bottom right of the artist photo.
+static BOOL LooksLikeArtistPlay(UIView *b) {
+    UIWindow *w = b.window;
+    if (!w || b.hidden) return NO;
+    CGRect f = [b convertRect:b.bounds toView:nil];
+    CGFloat W = w.bounds.size.width;
+    if (f.size.width < 24 || f.size.width > 72 || f.size.height < 24 || f.size.height > 72) return NO;
+    if (CGRectGetMidX(f) < W * 0.6 || CGRectGetMidY(f) < w.safeAreaInsets.top + 100 || CGRectGetMidY(f) > w.bounds.size.height * 0.7) return NO;
+    UIView *g = GlyphIn(b, 0);
+    if (![g isKindOfClass:[UIImageView class]]) return NO;
+    NSString *d = ((UIImageView *)g).image.description.lowercaseString;
+    if (![d containsString:@"play"] && ![d containsString:@"pause"]) return NO;
+    if (HasText(b, 0) || InBottomBars(b) || InTag(b, ROW_TAG) || InTag(b, ARTIST_TAG) || InTag(b, CARD_TAG)) return NO;
+    return YES;
+}
+static UILabel *ArtistNameNear(UIView *play) {
+    CGRect pf = [play convertRect:play.bounds toView:nil];
+    UIView *a = play.superview;
+    for (int lvl = 0; a && lvl < 6; lvl++, a = a.superview) {
+        NSMutableArray *stack = [NSMutableArray arrayWithObject:a];
+        int guard = 0;
+        while (stack.count && guard++ < 400) {
+            UIView *v = stack.lastObject; [stack removeLastObject];
+            if (v.tag == ARTIST_TAG) continue;
+            if ([v isKindOfClass:[UILabel class]]) {
+                UILabel *l = (UILabel *)v;
+                if (l.text.length && l.font.pointSize >= 26) {
+                    CGRect lf = [l convertRect:l.bounds toView:nil];
+                    if (fabs(CGRectGetMidY(lf) - CGRectGetMidY(pf)) < 70 && CGRectGetMinX(lf) < CGRectGetMinX(pf)) return l;
+                }
+                continue;
+            }
+            [stack addObjectsFromArray:v.subviews];
+        }
+    }
+    return nil;
+}
+
+static UIView *GlassDisc(CGFloat D) {
+    UIVisualEffectView *e = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+    e.userInteractionEnabled = NO; e.clipsToBounds = YES;
+    e.frame = CGRectMake(0, 0, D, D); e.layer.cornerRadius = D / 2;
+    e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+    e.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    return e;
+}
+
+static void RefreshArtistFav(void) {
+    if (CACurrentMediaTime() < gArtistFavLock) return;
+    UIAction *a = FindKind(MenuOf(gMoreBtn, NULL).children, @[@"love", @"unlove"]);
+    if (!a) { gArtistFavKnown = NO; return; }
+    gArtistFavKnown = YES;
+    gArtistFav = [MenuKind(a) isEqualToString:@"unlove"];
+}
+
+static void SetStar(UIButton *star, BOOL on, BOOL animated) {
+    UIImage *img = [UIImage systemImageNamed:on ? @"star.fill" : @"star" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightSemibold]];
+    NSNumber *cur = objc_getAssociatedObject(star, kNoEffect);
+    if (cur && cur.boolValue == on) return;
+    objc_setAssociatedObject(star, kNoEffect, @(on), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [star setImage:img forState:UIControlStateNormal];
+    if (!animated) return;
+    // Pop + spring back, and a little burst of sparks when it turns on.
+    star.imageView.transform = CGAffineTransformMakeScale(0.45, 0.45);
+    [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.42 initialSpringVelocity:1.2 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        star.imageView.transform = CGAffineTransformIdentity;
+    } completion:nil];
+    if (!on) return;
+    CGPoint c = CGPointMake(star.bounds.size.width / 2, star.bounds.size.height / 2);
+    UIView *ring = [[UIView alloc] initWithFrame:CGRectMake(c.x - 20, c.y - 20, 40, 40)];
+    ring.userInteractionEnabled = NO; ring.layer.cornerRadius = 20;
+    ring.layer.borderWidth = 2; ring.layer.borderColor = UIColor.whiteColor.CGColor;
+    [star addSubview:ring];
+    ring.transform = CGAffineTransformMakeScale(0.4, 0.4);
+    [UIView animateWithDuration:0.5 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ ring.transform = CGAffineTransformMakeScale(1.6, 1.6); ring.alpha = 0; } completion:^(BOOL f) { [ring removeFromSuperview]; }];
+    for (int i = 0; i < 8; i++) {
+        UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(c.x - 2.5, c.y - 2.5, 5, 5)];
+        dot.userInteractionEnabled = NO; dot.layer.cornerRadius = 2.5; dot.backgroundColor = UIColor.whiteColor;
+        [star addSubview:dot];
+        CGFloat ang = i * M_PI / 4 + M_PI / 8;
+        [UIView animateWithDuration:0.55 delay:0.04 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            dot.center = CGPointMake(c.x + cos(ang) * 38, c.y + sin(ang) * 38);
+            dot.transform = CGAffineTransformMakeScale(0.3, 0.3); dot.alpha = 0;
+        } completion:^(BOOL f) { [dot removeFromSuperview]; }];
+    }
+}
+
+@interface MPArtist : NSObject
++ (instancetype)shared;
+@end
+@implementation MPArtist
++ (instancetype)shared { static MPArtist *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPArtist new]; }); return t; }
+- (void)play:(UIButton *)b {
+    UIView *p = gArtistPlay;
+    UIControl *c = [p isKindOfClass:[UIControl class]] ? (UIControl *)p : FirstControl(p, 0);
+    Forward(c);
+    b.transform = CGAffineTransformMakeScale(0.88, 0.88);
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.45 initialSpringVelocity:1 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
+}
+- (void)star:(UIButton *)b {
+    UIView *more = gMoreBtn;
+    UIContextMenuInteraction *mi = nil;
+    UIAction *a = FindKind(MenuOf(more, &mi).children, @[@"love", @"unlove"]);
+    if (!a) { gArtistDebug = @"no Favorite in the ••• menu"; OpenMenu(more, mi); return; }
+    BOOL willBeFav = ![MenuKind(a) isEqualToString:@"unlove"];
+    RunAction(a, b);
+    gArtistFav = willBeFav; gArtistFavKnown = YES;
+    gArtistFavLock = CACurrentMediaTime() + 1.5;
+    SetStar(b, willBeFav, YES);
+}
+@end
+
+// Builds / updates our header over Music's (name centered, play big and white,
+// favorite star). Safe to call from Music's layout pass.
+static void ArtistTick(UIView *play) {
+    if (!play.window) return;
+    UILabel *name = gArtistName;
+    if (!name || !name.window || ![name isDescendantOfView:play.window]) name = ArtistNameNear(play);
+    if (!name) { gArtistDebug = [NSString stringWithFormat:@"play=%@ (no name)", NSStringFromClass([play class])]; return; }
+    UIView *container = CommonParent(play, name);
+    if (!container) return;
+    gArtistPlay = play; gArtistName = name;
+    MaskOut(play); MaskOut(name);
+
+    MPPassHost *ov = nil;
+    for (UIView *s in container.subviews) if (s.tag == ARTIST_TAG) ov = (MPPassHost *)s;
+    const CGFloat OH = 260, PD = 78, SD = 52;
+    if (!ov) {
+        ov = [MPPassHost new];
+        ov.tag = ARTIST_TAG;
+        CAGradientLayer *gl = [CAGradientLayer layer];
+        gl.name = @"mp.fade";
+        gl.colors = @[(id)[UIColor colorWithWhite:0 alpha:0].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.92].CGColor];
+        gl.locations = @[@0, @0.45, @1];
+        [ov.layer addSublayer:gl];
+        UILabel *l = [UILabel new];
+        l.tag = 1; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.whiteColor;
+        l.font = [UIFont systemFontOfSize:44 weight:UIFontWeightBold];
+        l.adjustsFontSizeToFitWidth = YES; l.minimumScaleFactor = 0.5;
+        [ov addSubview:l];
+        UIButton *info = [UIButton buttonWithType:UIButtonTypeCustom];
+        info.tag = 2; info.userInteractionEnabled = NO; info.alpha = 0.45;
+        [info addSubview:GlassDisc(SD)];
+        [info setImage:[UIImage systemImageNamed:@"info" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
+        info.tintColor = UIColor.whiteColor;
+        [ov addSubview:info];
+        UIButton *pb = [UIButton buttonWithType:UIButtonTypeCustom];
+        pb.tag = 3; pb.backgroundColor = UIColor.whiteColor; pb.tintColor = UIColor.blackColor;
+        pb.layer.cornerRadius = PD / 2;
+        [pb setImage:[[UIImage systemImageNamed:@"play.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightBold]] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
+        pb.imageEdgeInsets = UIEdgeInsetsMake(0, 4, 0, 0);
+        [pb addTarget:[MPArtist shared] action:@selector(play:) forControlEvents:UIControlEventTouchUpInside];
+        [ov addSubview:pb];
+        UIButton *st = [UIButton buttonWithType:UIButtonTypeCustom];
+        st.tag = 4; st.tintColor = UIColor.whiteColor;
+        [st addSubview:GlassDisc(SD)];
+        [st addTarget:[MPArtist shared] action:@selector(star:) forControlEvents:UIControlEventTouchUpInside];
+        [ov addSubview:st];
+        [container addSubview:ov];
+        SetStar(st, NO, NO);
+    }
+    if (container.subviews.lastObject != ov) [container bringSubviewToFront:ov];
+    CGRect pf = [play convertRect:play.bounds toView:container], lf = [name convertRect:name.bounds toView:container];
+    CGFloat bottom = MAX(CGRectGetMaxY(pf), CGRectGetMaxY(lf)) + 12, W = container.bounds.size.width;
+    CGRect of = CGRectMake(0, bottom - OH, W, OH);
+    if (!CGRectEqualToRect(ov.frame, of)) {
+        ov.frame = of;
+        for (CALayer *l in ov.layer.sublayers) if ([l.name isEqualToString:@"mp.fade"]) { [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = ov.bounds; [CATransaction commit]; }
+        CGFloat rowY = OH - 14 - PD / 2;
+        [ov viewWithTag:1].frame = CGRectMake(20, rowY - PD / 2 - 66, W - 40, 54);
+        [ov viewWithTag:3].frame = CGRectMake(W / 2 - PD / 2, rowY - PD / 2, PD, PD);
+        [ov viewWithTag:2].frame = CGRectMake(W / 2 - 91 - SD / 2, rowY - SD / 2, SD, SD);
+        [ov viewWithTag:4].frame = CGRectMake(W / 2 + 91 - SD / 2, rowY - SD / 2, SD, SD);
+    }
+    UILabel *l = (UILabel *)[ov viewWithTag:1];
+    if (![l.text isEqualToString:name.text]) l.text = name.text;
+    UIButton *pb = (UIButton *)[ov viewWithTag:3];
+    UIView *g = GlyphIn(play, 0);
+    BOOL pausing = [g isKindOfClass:[UIImageView class]] && [((UIImageView *)g).image.description containsString:@"pause"];
+    NSString *ps = pausing ? @"pause.fill" : @"play.fill";
+    if (![objc_getAssociatedObject(pb, kNoEffect) isEqual:ps]) {
+        objc_setAssociatedObject(pb, kNoEffect, ps, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [pb setImage:[[UIImage systemImageNamed:ps withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightBold]] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
+        pb.imageEdgeInsets = UIEdgeInsetsMake(0, pausing ? 0 : 4, 0, 0);
+    }
+    if (gArtistFavKnown && CACurrentMediaTime() > gArtistFavLock) SetStar((UIButton *)[ov viewWithTag:4], gArtistFav, NO);
+    gArtistDebug = [NSString stringWithFormat:@"ok play=%@ name=%@ fav=%d/%d", NSStringFromClass([play class]), NSStringFromClass([name class]), gArtistFavKnown, gArtistFav];
+}
+
+// Latest release: a rounded card, and a round + instead of "+ Add".
+@interface MPArtistAdd : NSObject
++ (instancetype)shared;
+@end
+static const void *kAddCtl = &kAddCtl;
+@implementation MPArtistAdd
++ (instancetype)shared { static MPArtistAdd *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPArtistAdd new]; }); return t; }
+- (void)tap:(UIButton *)b {
+    UIControl *c = objc_getAssociatedObject(b, kAddCtl);
+    if (!c) return;
+    BOOL adding = [objc_getAssociatedObject(b, kNoEffect) isEqual:@"plus"];
+    Forward(c);
+    if (adding) {
+        ShowToast(nil, @"checkmark", @"Added to Library");
+        objc_setAssociatedObject(b, kClearedBG, @(CACurrentMediaTime() + 4), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+@end
+static NSString *ControlText(UIView *v) {
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:v];
+    int guard = 0;
+    while (stack.count && guard++ < 40) {
+        UIView *s = stack.lastObject; [stack removeLastObject];
+        if ([s isKindOfClass:[UILabel class]] && ((UILabel *)s).text.length) return ((UILabel *)s).text;
+        [stack addObjectsFromArray:s.subviews];
+    }
+    return nil;
+}
+static void SetPlusSymbol(UIButton *b, NSString *sym) {
+    if ([objc_getAssociatedObject(b, kNoEffect) isEqual:sym]) return;
+    BOOL had = objc_getAssociatedObject(b, kNoEffect) != nil;
+    objc_setAssociatedObject(b, kNoEffect, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIImage *img = [UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]];
+    if (!had) { [b setImage:img forState:UIControlStateNormal]; return; }
+    [UIView animateWithDuration:0.12 animations:^{ b.transform = CGAffineTransformMakeScale(0.8, 0.8); } completion:^(BOOL f) {
+        [UIView transitionWithView:b duration:0.22 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ [b setImage:img forState:UIControlStateNormal]; } completion:nil];
+        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.8 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
+    }];
+}
+static void ArtistAddTick(UIView *root) {
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
+    NSMutableSet *live = [NSMutableSet set];
+    int guard = 0;
+    while (stack.count && guard++ < 3000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v.tag == ARTIST_TAG || v.tag == PLUS_TAG || v.tag == CARD_TAG) continue;
+        if ([v isKindOfClass:[UILabel class]]) {
+            NSString *tx = ((UILabel *)v).text;
+            if (!([tx isEqualToString:@"Add"] || [tx isEqualToString:@"Added"])) continue;
+            UIControl *c = ControlAbove(v);
+            UIView *cell = nil;
+            for (UIView *p = c.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionViewCell class]]) { cell = p; break; }
+            if (!c || !cell) continue;
+            UIView *cv = ((UICollectionViewCell *)cell).contentView;
+            [live addObject:[NSValue valueWithNonretainedObject:cv]];
+            MaskOut(c);
+            // Artwork = the biggest image in the cell.
+            UIImageView *art = nil; CGFloat best = 0;
+            NSMutableArray *st2 = [NSMutableArray arrayWithObject:cv];
+            int g2 = 0;
+            while (st2.count && g2++ < 200) {
+                UIView *s = st2.lastObject; [st2 removeLastObject];
+                if (s.tag == PLUS_TAG || s.tag == CARD_TAG) continue;
+                if ([s isKindOfClass:[UIImageView class]]) {
+                    CGFloat a = s.bounds.size.width * s.bounds.size.height;
+                    if (a > best) { best = a; art = (UIImageView *)s; }
+                }
+                [st2 addObjectsFromArray:s.subviews];
+            }
+            UIView *card = [cv viewWithTag:CARD_TAG];
+            UIButton *plus = (UIButton *)[cv viewWithTag:PLUS_TAG];
+            if (!card) {
+                card = [UIView new];
+                card.tag = CARD_TAG; card.userInteractionEnabled = NO;
+                card.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+                card.layer.cornerRadius = 28; card.layer.cornerCurve = kCACornerCurveContinuous;
+                card.layer.borderWidth = 0.75; card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.09].CGColor;
+                [cv insertSubview:card atIndex:0];
+            }
+            if (!plus) {
+                plus = [UIButton buttonWithType:UIButtonTypeCustom];
+                plus.tag = PLUS_TAG; plus.tintColor = UIColor.whiteColor;
+                UIView *disc = GlassDisc(44);
+                [plus addSubview:disc];
+                [plus addTarget:[MPArtistAdd shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+                [cv addSubview:plus];
+            }
+            objc_setAssociatedObject(plus, kAddCtl, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            CGRect af = art ? [art convertRect:art.bounds toView:cv] : CGRectInset(cv.bounds, 10, 10);
+            CGFloat pad = 10, W = cv.bounds.size.width;
+            CGFloat cardX = MAX(4, CGRectGetMinX(af) - pad);
+            CGRect cf = CGRectMake(cardX, CGRectGetMinY(af) - pad, W - 2 * cardX, af.size.height + 2 * pad);
+            if (!CGRectEqualToRect(card.frame, cf)) card.frame = cf;
+            if (art && art.layer.cornerRadius < 13) { art.layer.cornerRadius = 14; art.layer.cornerCurve = kCACornerCurveContinuous; art.clipsToBounds = YES; }
+            CGRect pf = CGRectMake(CGRectGetMaxX(cf) - 39 - 22, CGRectGetMidY(cf) - 22, 44, 44);
+            if (!CGRectEqualToRect(plus.frame, pf)) plus.frame = pf;
+            [cv bringSubviewToFront:plus];
+            NSNumber *pending = objc_getAssociatedObject(plus, kClearedBG);
+            BOOL added = ![ControlText(c) isEqualToString:@"Add"] || (pending && CACurrentMediaTime() < pending.doubleValue);
+            SetPlusSymbol(plus, added ? @"checkmark" : @"plus");
+            continue;
+        }
+        [stack addObjectsFromArray:v.subviews];
+    }
+}
+
+static void ArtistScan(UIWindow *w) {
+    UIView *play = gArtistPlay;
+    if (play && play.window == w) { ArtistTick(play); }
+    else {
+        static CFTimeInterval last;
+        if (CACurrentMediaTime() - last < 0.25) return;
+        last = CACurrentMediaTime();
+        gArtistPlay = nil;
+        NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
+        int guard = 0;
+        UIView *found = nil;
+        while (stack.count && guard++ < 6000 && !found) {
+            UIView *v = stack.lastObject; [stack removeLastObject];
+            if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || v.tag == COLLAPSE_TAG || v.tag == ARTIST_TAG) continue;
+            if ([v isKindOfClass:[UIControl class]] && LooksLikeArtistPlay(v)) {
+                ArtistTick(v);
+                if (gArtistPlay == v) { found = v; break; }
+                continue;
+            }
+            [stack addObjectsFromArray:v.subviews];
+        }
+        if (!found) { if (![gArtistDebug containsString:@"no name"]) gArtistDebug = @"none"; return; }
+    }
+    UIView *root = gArtistPlay;
+    for (UIView *p = root; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]]) { root = p; break; }
+    if (root && root != gArtistPlay) ArtistAddTick(root);
 }
 
 static BOOL IsMusicRed(UIColor *c);
@@ -2934,7 +3330,7 @@ static void FloatTick(UIWindow *w) {
         else if ([d containsString:@"chevron.left"] || [d containsString:@"chevron.backward"] || (x < W / 3 && !back)) back = holder;
         else if (x > W / 2) dl = holder;   // download in any state: arrow, progress (stop), checkmark
     }
-    if (back) GlassCircleFor((UIControl *)back, 46);
+    if (back) { AlignX(back, TOPMARGIN + TOPBTN / 2); GlassCircleFor((UIControl *)back, TOPBTN); }
     // Mid-download Music swaps in a progress view with no image; keep the last one we caught.
     if (!dl && gSlotView && gSlotView.window == w) {
         CGRect sf = [gSlotView convertRect:gSlotView.bounds toView:nil];
@@ -2943,10 +3339,14 @@ static void FloatTick(UIWindow *w) {
     gMoreBtn = more;
     BOOL album = gRowParent && gRowParent.window == w;
     if (dl && album) { gSlotView = dl; HideTopDownload(dl); }
-    PlaceSharePair(album ? more : nil);
-    if (!album && more) GlassCircleFor((UIControl *)more, 44);
+    @try { ArtistScan(w); } @catch (__unused id e) {}
+    BOOL artist = gArtistPlay && gArtistPlay.window == w;
+    PlaceSharePair(album || artist ? more : nil);
+    static __weak UIView *favMore;
+    if (artist && more && more != favMore) { favMore = more; @try { RefreshArtistFav(); } @catch (__unused id e) {} }
+    if (!album && !artist && more) GlassCircleFor((UIControl *)more, TOPBTN);
     if (gRowParent && gRowParent.window == w) RedToWhite(gRowParent);
-    gFloatDebug = [NSString stringWithFormat:@"share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
+    gFloatDebug = [NSString stringWithFormat:@"artist: %@ | share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gArtistDebug, gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
 }
 
 // Music's top buttons (Swift SymbolButton): when the download one changes state
@@ -2960,7 +3360,11 @@ static void SymLayoutHook(UIView *self, SEL _cmd) {
         UIWindow *w = self.window;
         if (!w) return;
         CGRect f = [self convertRect:self.bounds toView:nil];
-        if (CGRectGetMidY(f) > w.safeAreaInsets.top + 80 || CGRectGetMidX(f) < w.bounds.size.width / 2) return;
+        if (CGRectGetMidY(f) > w.safeAreaInsets.top + 80) {
+            if (LooksLikeArtistPlay(self)) { busy = YES; @try { ArtistTick(self); } @catch (__unused id e) {} busy = NO; }
+            return;
+        }
+        if (CGRectGetMidX(f) < w.bounds.size.width / 2) return;
         UIView *g = GlyphIn(self, 0);
         BOOL more = [((UIImageView *)g).image.description containsString:@"ellipsis"];
         // Done right here, inside Music's own layout pass, so Apple's version is
