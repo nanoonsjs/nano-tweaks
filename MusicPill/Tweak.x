@@ -1,4 +1,7 @@
-// MusicPill 1.2.12 - made by nano
+// MusicPill 1.2.13 - made by nano
+// 1.2.13: light mode: frosted glass with a visible rim and soft shadow, back
+//         button no longer dark, queue bar white with Increase Contrast, search
+//         switch drawn by iOS (both titles show), liquid drop on tapping search.
 // 1.2.12: Apple Music / Library switch in light mode: white selected pill on a
 //         faint grey track (was black).
 // 1.2.11: fixes the crash on launch in 1.2.9/1.2.10 (the light/dark glass colour
@@ -288,7 +291,22 @@ static UIColor *Dyn(UIColor *light, UIColor *dark) {
 static UIColor *GlassIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackColor, UIColor.whiteColor); return c; }
 static UIColor *GlassIconDim(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:0 alpha:0.55], [UIColor colorWithWhite:1 alpha:0.62]); return c; }
 static BOOL HighContrast(void);
-static UIColor *GlassFillDyn(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:1 alpha:0.72], [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94]); return c; }
+// Light mode glass needs a visible rim and shadow (white on white disappeared).
+// Applied each pass: CGColors don't follow light / dark on their own.
+static void GlassEdge(UIView *g) {
+    if (!g) return;
+    BOOL light = g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+    NSNumber *was = objc_getAssociatedObject(g, @selector(traitCollection));
+    if (was && was.boolValue == light) return;
+    objc_setAssociatedObject(g, @selector(traitCollection), @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    g.layer.borderWidth = light ? 0.8 : 0.75;
+    g.layer.borderColor = (light ? [UIColor colorWithWhite:0 alpha:0.10] : [UIColor colorWithWhite:1 alpha:0.18]).CGColor;
+    g.layer.shadowColor = UIColor.blackColor.CGColor;
+    g.layer.shadowOpacity = light ? 0.10 : 0;
+    g.layer.shadowRadius = 10; g.layer.shadowOffset = CGSizeMake(0, 3);
+    if (light && g.clipsToBounds && !g.subviews.count) g.clipsToBounds = NO;   // plain fills: let the shadow show
+}
+static UIColor *GlassFillDyn(void) { static UIColor *c; if (!c) c = Dyn([UIColor colorWithWhite:1 alpha:0.58], [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94]); return c; }
 static UIView *GlyphIn(UIView *v, int depth);
 
 // UIKit's private live-mirror view: draws another view's current contents
@@ -1229,7 +1247,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.12 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.13 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -3018,9 +3036,28 @@ static UIColor *GlassFill(void) { return GlassFillDyn(); }
 static void Wobble(UIView *v, CGFloat sx, CGFloat sy, CFTimeInterval delay);
 @interface MPSegBounce : NSObject
 + (instancetype)shared;
+- (void)searchTapped:(UIView *)tf;
 @end
 @implementation MPSegBounce
 + (instancetype)shared { static MPSegBounce *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPSegBounce new]; }); return t; }
+- (void)searchTapped:(UIView *)tf {
+    // Liquid drop: the field dips and swells, then settles with a wobble.
+    CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform"];
+    k.values = @[[NSValue valueWithCATransform3D:CATransform3DIdentity],
+                 [NSValue valueWithCATransform3D:CATransform3DMakeScale(0.96, 1.08, 1)],
+                 [NSValue valueWithCATransform3D:CATransform3DMakeScale(1.04, 0.94, 1)],
+                 [NSValue valueWithCATransform3D:CATransform3DMakeScale(0.99, 1.02, 1)],
+                 [NSValue valueWithCATransform3D:CATransform3DIdentity]];
+    k.keyTimes = @[@0, @0.25, @0.5, @0.75, @1]; k.duration = 0.55;
+    k.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    [tf.layer addAnimation:k forKey:@"drop"];
+    // A ripple of glass spreading out from where it landed.
+    UIView *r = [[UIView alloc] initWithFrame:tf.bounds];
+    r.userInteractionEnabled = NO; r.layer.cornerRadius = tf.bounds.size.height / 2;
+    r.layer.borderWidth = 1.5; r.layer.borderColor = [UIColor colorWithWhite:tf.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? 1 : 0 alpha:0.18].CGColor;
+    [tf addSubview:r];
+    [UIView animateWithDuration:0.5 delay:0.05 options:UIViewAnimationOptionCurveEaseOut animations:^{ r.transform = CGAffineTransformMakeScale(1.06, 1.35); r.alpha = 0; } completion:^(BOOL d) { [r removeFromSuperview]; }];
+}
 - (void)changed:(UISegmentedControl *)seg {
     // Jelly bounce on the switch, and the selected pill pops.
     Wobble(seg, 1.05, 0.9, 0);
@@ -3063,7 +3100,7 @@ static void StyleSegment(UISegmentedControl *seg) {
         if (f.size.width <= 2) { if (!s.hidden) s.hidden = YES; continue; }                       // dividers
         if (f.size.width >= seg.bounds.size.width - 4) { if (s.alpha != 0) s.alpha = 0; continue; } // Apple's gray background
         if (!CGAffineTransformIsIdentity(s.transform) && ![s.layer animationForKey:@"wx"]) s.transform = CGAffineTransformIdentity;   // undo 1.0.24
-        if (f.size.height > 10) {
+        if (f.size.height > 10 && seg.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
             // Only the pill under the selected half is the selection; light mode also
             // gives each half its own background view, which stays see-through.
             CGFloat segW = seg.numberOfSegments ? seg.bounds.size.width / seg.numberOfSegments : seg.bounds.size.width;
@@ -3094,11 +3131,17 @@ static void StyleSearchBar(UISearchBar *sb) {
         UISearchTextField *tf = sb.searchTextField;
         if (tf.borderStyle != UITextBorderStyleNone) tf.borderStyle = UITextBorderStyleNone;
         static char kFillSet;
+        {
+            BOOL light = tf.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+            UIColor *rim = light ? [UIColor colorWithWhite:0 alpha:0.10] : [UIColor colorWithWhite:1 alpha:0.16];
+            if (!CGColorEqualToColor(tf.layer.borderColor, rim.CGColor)) tf.layer.borderColor = rim.CGColor;
+        }
         if (!objc_getAssociatedObject(tf, &kFillSet)) { objc_setAssociatedObject(tf, &kFillSet, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); tf.backgroundColor = GlassFill(); }
         CGFloat h = tf.bounds.size.height;
         if (h > 0 && tf.layer.cornerRadius != h / 2) {
             tf.layer.cornerRadius = h / 2; tf.layer.cornerCurve = kCACornerCurveContinuous; tf.clipsToBounds = YES;
             tf.layer.borderWidth = 0.75; tf.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+            [tf addTarget:[MPSegBounce shared] action:@selector(searchTapped:) forControlEvents:UIControlEventEditingDidBegin];
         }
         // "Apple Music | Library" scope bar: small glass capsule.
         NSMutableArray *st = [NSMutableArray arrayWithObject:sb];
@@ -3311,6 +3354,7 @@ static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidd
         [UIView transitionWithView:eb duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ [eb setImage:img forState:UIControlStateNormal]; } completion:nil];
     }
     UIView *disc = [eb viewWithTag:1];
+    GlassEdge(disc);
     if (!CGRectEqualToRect(disc.frame, CGRectMake(0, 0, D, D))) { disc.frame = CGRectMake(0, 0, D, D); disc.layer.cornerRadius = D / 2; }
     CGPoint c = CGPointMake(CGRectGetMinX(avatarFrame) - 10 - D / 2, CGRectGetMidY(avatarFrame));
     if (!CGRectEqualToRect(eb.bounds, CGRectMake(0, 0, D, D)) || !CGPointEqualToPoint(eb.center, c)) { eb.bounds = CGRectMake(0, 0, D, D); eb.center = c; }
@@ -3790,6 +3834,7 @@ static CGPoint GlyphCenter(UIView *c, UIView *host) {
 }
 
 static void SetGlassFrame(UIView *g, CGRect f) {
+    GlassEdge(g);
     if (CGAffineTransformIsIdentity(g.transform) && !CGRectEqualToRect(g.frame, f)) g.frame = f;
     if (g.layer.cornerRadius != f.size.height / 2) g.layer.cornerRadius = f.size.height / 2;
 }
@@ -4653,7 +4698,7 @@ static void PlaceBack(UIView *back, UIWindow *w) {
         UIView *disc = [UIView new];
         disc.userInteractionEnabled = NO;
         disc.frame = CGRectMake(0, 0, TOPBTN, TOPBTN); disc.layer.cornerRadius = TOPBTN / 2;
-        disc.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.17 alpha:0.94];
+        disc.backgroundColor = GlassFillDyn(); disc.tag = 77;
         disc.layer.borderWidth = 0.75; disc.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
         [b addSubview:disc];
         UIImageView *ch = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.backward" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]]];
@@ -4676,6 +4721,7 @@ static void PlaceBack(UIView *back, UIWindow *w) {
     [(UIView *)objc_getAssociatedObject(back, kBackGlass) setHidden:YES];
     if (gLastBack && gLastBack != b) gLastBack.hidden = YES;
     gLastBack = b;
+    GlassEdge([b viewWithTag:77]);
     b.hidden = back.hidden;
 }
 
@@ -5249,8 +5295,8 @@ static void PositionQueueRow(UIScrollView *list) {
     if (list.hidden || list.alpha < 0.05) row.hidden = YES;
     {
         // Increase Contrast: solid black behind the pills; otherwise see-through.
-        UIColor *want = HighContrast() ? UIColor.blackColor : UIColor.clearColor;
-        if (![row.backgroundColor isEqual:want]) row.backgroundColor = want;
+        UIColor *want = HighContrast() ? UIColor.systemBackgroundColor : UIColor.clearColor;
+        if (row.backgroundColor != want) row.backgroundColor = want;
     }
     LayoutPillButtons(row);
 
