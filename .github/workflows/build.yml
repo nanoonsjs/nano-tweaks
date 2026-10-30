@@ -30,7 +30,7 @@ jobs:
             echo "::group::$p"
             if ! (cd "$p" && gmake clean package FINALPACKAGE=1 > ../build-$p.log 2>&1); then
               cat ../build-$p.log
-              grep -E "error:" ../build-$p.log | head -15 | while read -r l; do echo "::error::$l"; done
+              (grep -E "error|Error" ../build-$p.log || tail -15 ../build-$p.log) | head -15 | while read -r l; do echo "::error::$l"; done || true
               exit 2
             fi
             cp "$p"/packages/*.deb out/
