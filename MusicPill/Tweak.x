@@ -1,4 +1,8 @@
-// MusicPill 1.0.11 - made by nano
+// MusicPill 1.0.12 - made by nano
+// 1.0.12: debug box moves with a two-finger drag; Music's own artist name hidden
+//         wherever it is; only the header play button inside the page is taken
+//         over (not the small one in the top bar, which made a 2nd copy); star
+//         icon drawn above its disc.
 // 1.0.11: artist look only on Music's artist header (never the player/lyrics);
 //         artist name falls back to the page title when it isn't a label.
 // 1.0.10: artist name = the big label level with the play button (not "Similar
@@ -867,6 +871,23 @@ static void CollectCandidates(UIView *view, UIView *root, CGRect tabRect, UITabB
     }
 }
 
+static CGFloat gDebugY = 110;
+@interface MPDebugDrag : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+@implementation MPDebugDrag
++ (instancetype)shared { static MPDebugDrag *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPDebugDrag new]; }); return t; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+- (void)pan:(UIPanGestureRecognizer *)g {
+    UIView *l = [g.view viewWithTag:DEBUG_TAG];
+    if (!l) return;
+    static CGFloat startY;
+    if (g.state == UIGestureRecognizerStateBegan) startY = gDebugY;
+    CGFloat maxY = g.view.bounds.size.height - 60;
+    gDebugY = MAX(0, MIN(maxY, startY + [g translationInView:g.view].y));
+    CGRect f = l.frame; f.origin.y = gDebugY; l.frame = f;
+}
+@end
 static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini) {
     UIWindow *w = tb.window;
     if (!w) return;
@@ -883,6 +904,16 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         l.layer.cornerRadius = 8;
         l.clipsToBounds = YES;
         [w addSubview:l];
+        static const void *kDbgPan = &kDbgPan;
+        if (!objc_getAssociatedObject(w, kDbgPan)) {
+            // Two fingers anywhere move the box up / down; one finger still uses the app.
+            UIPanGestureRecognizer *p = [[UIPanGestureRecognizer alloc] initWithTarget:[MPDebugDrag shared] action:@selector(pan:)];
+            p.minimumNumberOfTouches = 2; p.maximumNumberOfTouches = 2;
+            p.cancelsTouchesInView = NO; p.delaysTouchesBegan = NO; p.delaysTouchesEnded = NO;
+            p.delegate = [MPDebugDrag shared];
+            [w addGestureRecognizer:p];
+            objc_setAssociatedObject(w, kDbgPan, p, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
     }
     NSMutableArray *c = [NSMutableArray array];
     CollectCandidates(root, root, tabRect, tb, 0, c);
@@ -892,14 +923,14 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.11 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.12 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
-    CGRect f = CGRectMake(12, 110, width, s.height + 8);
+    CGRect f = CGRectMake(12, gDebugY, width, s.height + 8);
     if (!CGRectEqualToRect(l.frame, f)) l.frame = f;
     [w bringSubviewToFront:l];
 }
@@ -3138,8 +3169,31 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
 
 // Builds / updates our header over Music's (name centered, play big and white,
 // favorite star). Safe to call from Music's layout pass.
+static BOOL InPageList(UIView *v) {
+    for (UIView *p = v.superview; p; p = p.superview) {
+        if ([p isKindOfClass:[UINavigationBar class]]) return NO;
+        if ([p isKindOfClass:[UICollectionView class]]) return YES;
+    }
+    return NO;
+}
+// Music's own name text anywhere on screen (e.g. a big title label), so it can be hidden.
+static void HideNameCopies(UIWindow *w, NSString *name) {
+    if (!name.length) return;
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
+    int guard = 0;
+    while (stack.count && guard++ < 5000) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v.tag == ARTIST_TAG || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG || [v isKindOfClass:[UITabBar class]] || [v isKindOfClass:NSClassFromString(@"MPMiniPill")]) continue;
+        if ([v isKindOfClass:[UILabel class]]) {
+            UILabel *l = (UILabel *)v;
+            if (l.font.pointSize >= 24 && [l.text caseInsensitiveCompare:name] == NSOrderedSame) MaskOut(l);
+            continue;
+        }
+        [stack addObjectsFromArray:v.subviews];
+    }
+}
 static void ArtistTick(UIView *play) {
-    if (!play.window) return;
+    if (!play.window || !InPageList(play)) return;
     {
         NSNumber *t0 = objc_getAssociatedObject(play, &gAddDebug);
         if (!t0 || CACurrentMediaTime() - t0.doubleValue <= 1.5) MaskOut(play);   // hidden before it's drawn
@@ -3168,7 +3222,16 @@ static void ArtistTick(UIView *play) {
     UIView *container = CommonParent(play, name);
     while (container.superview && container.bounds.size.width < play.window.bounds.size.width * 0.9) container = container.superview;
     if (!container) return;
+    if (gArtistPlay != play || ![gArtistNameText isEqualToString:nameText]) {
+        // A new artist header: drop overlays left from another one.
+        UIView *old = gArtistPlay;
+        for (UIView *p = old.superview; p; p = p.superview) for (UIView *s in [p.subviews copy]) if (s.tag == ARTIST_TAG && old != play) [s removeFromSuperview];
+    }
     gArtistPlay = play; gArtistName = name; gArtistNameText = nameText;
+    {
+        static CFTimeInterval lastHide;
+        if (CACurrentMediaTime() - lastHide > 0.3) { lastHide = CACurrentMediaTime(); HideNameCopies(play.window, nameText); }
+    }
     MaskOut(play); MaskOut(name);
 
     MPPassHost *ov = nil;
@@ -3235,6 +3298,8 @@ static void ArtistTick(UIView *play) {
         }
     }
     if (gArtistFavKnown && CACurrentMediaTime() > gArtistFavLock) SetStar((UIButton *)[ov viewWithTag:4], gArtistFav, NO);
+    UIButton *stb = (UIButton *)[ov viewWithTag:4];
+    if (stb.imageView && stb.subviews.lastObject != stb.imageView) [stb bringSubviewToFront:stb.imageView];
     gArtistDebug = [NSString stringWithFormat:@"ok name='%@' (%@) fav=%d/%d%@", nameText, NSStringFromClass([name class]), gArtistFavKnown, gArtistFav, gAddDebug];
 }
 
@@ -3338,6 +3403,7 @@ static void ArtistAddTick(UIView *root) {
             CGRect pf = CGRectMake(CGRectGetMaxX(cf) - 39 - 22, CGRectGetMidY(cf) - 22, 44, 44);
             if (!CGRectEqualToRect(plus.frame, pf)) plus.frame = pf;
             [cv bringSubviewToFront:plus];
+            if (plus.imageView && plus.subviews.lastObject != plus.imageView) [plus bringSubviewToFront:plus.imageView];
             NSNumber *pending = objc_getAssociatedObject(plus, kClearedBG);
             BOOL added = ![ControlText(c) isEqualToString:@"Add"] || (pending && CACurrentMediaTime() < pending.doubleValue);
             SetPlusSymbol(plus, added ? @"checkmark" : @"plus");
