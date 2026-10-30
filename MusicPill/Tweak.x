@@ -1,4 +1,6 @@
-// MusicPill 1.0.34 - made by nano
+// MusicPill 1.0.35 - made by nano
+// 1.0.35: queue pills sit under the song row again (list content inset instead
+//         of moving the list), Lossless glass only while the badge shows.
 // 1.0.34: player star closer to •••, ••• as big as the star, title/artist fade
 //         out before the star, star follows ••• every frame (lyrics, queue).
 // 1.0.33: full player: favorite star left of ••• (pops + sparks when on),
@@ -983,7 +985,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.34 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.35 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1917,17 +1919,12 @@ static void AvatarEval(void);
 - (void)setContentInset:(UIEdgeInsets)inset {
     // Queue list is slid down 54pt; add 54pt at the bottom so the last song
     // can still scroll fully into view above the trimmed edge.
-    if (objc_getAssociatedObject(self, kQueueTable)) inset.bottom += QUEUE_EXTRA;
+    if (objc_getAssociatedObject(self, kQueueTable)) inset.top += QUEUE_EXTRA;   // room under the pill row
     %orig(inset);
 }
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)event {
     // Touch area follows what's visible: the pill band on top, nothing in the
     // trimmed 54pt at the bottom (so the play controls stay tappable).
-    if (objc_getAssociatedObject(self, kQueueTable)) {
-        CGRect b = self.bounds;
-        return p.x >= CGRectGetMinX(b) && p.x <= CGRectGetMaxX(b) &&
-               p.y >= b.origin.y - QUEUE_EXTRA && p.y < b.origin.y + b.size.height - QUEUE_EXTRA;
-    }
     return %orig;
 }
 - (void)setContentOffset:(CGPoint)offset {
@@ -4595,10 +4592,11 @@ static BOOL RepeatOneOn(UIControl *c) {
     return [MPMusicPlayerController systemMusicPlayer].repeatMode == MPMusicRepeatModeOne;
 }
 
+static const void *kQueueRowObj = &kQueueRowObj;
+static UIView *QueueRowOf(UIScrollView *list) { return objc_getAssociatedObject(list, kQueueRowObj); }
 static void RefreshQueueRow(void) {
     UIScrollView *table = gQueueTable;
-    UIView *row = nil;
-    for (UIView *s in table.subviews) if (s.tag == QUEUEROW_TAG) row = s;
+    UIView *row = QueueRowOf(table);
     if (!row) return;
     BOOL repeatOne = RepeatOneOn(gQRepeat);
     StyleQueuePill([row viewWithTag:11], @"shuffle", ToggleOn(gQShuffle));
@@ -4640,35 +4638,29 @@ static CGAffineTransform QueueShift(void) { return CGAffineTransformMakeTranslat
 // into view. With the list slid down 54pt, that band lands exactly where the
 // top of the list used to be, and it moves/fades with the list.
 static void PositionQueueRow(UIScrollView *list) {
-    UIView *row = nil;
-    for (UIView *s in list.subviews) if (s.tag == QUEUEROW_TAG) row = s;
-    if (!row) return;
-    CGRect b = list.bounds;
-    CGRect f = CGRectMake(0, b.origin.y - QUEUE_EXTRA, b.size.width, QUEUE_EXTRA);
+    UIView *row = QueueRowOf(list);
+    UIView *host = list.superview;
+    if (!row || !host) return;
+    // The pill row sits on top of the list's first 54pt, under the song title row,
+    // and the list's content starts below it (inset). No moving the list itself.
+    if (row.superview != host) { [row removeFromSuperview]; [host addSubview:row]; }
+    if (!CGAffineTransformIsIdentity(list.transform) && CGAffineTransformEqualToTransform(list.transform, QueueShift())) list.transform = CGAffineTransformIdentity;
+    if (list.layer.mask && !list.layer.mask.name) list.layer.mask = nil;
+    CGRect lf = list.frame;
+    CGRect f = CGRectMake(lf.origin.x, lf.origin.y, lf.size.width, QUEUE_EXTRA);
     if (!CGRectEqualToRect(row.frame, f)) row.frame = f;
-    if (list.subviews.lastObject != row) [list bringSubviewToFront:row];
+    if ([host.subviews indexOfObject:row] < [host.subviews indexOfObject:list]) [host insertSubview:row aboveSubview:list];
+    row.hidden = list.hidden || list.alpha < 0.05;
+    row.alpha = list.alpha;
     LayoutPillButtons(row);
-
-    // Slide the list down (only if Music isn't using the transform itself).
-    CGAffineTransform shift = QueueShift();
-    if (CGAffineTransformIsIdentity(list.transform)) list.transform = shift;
-    if (list.clipsToBounds) list.clipsToBounds = NO;
-
-    // Show: the pill band + the list minus its bottom 54pt.
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    CALayer *mask = list.layer.mask;
-    if (!mask) { mask = [CALayer layer]; mask.backgroundColor = UIColor.blackColor.CGColor; list.layer.mask = mask; }
-    CGRect mf = CGRectMake(0, b.origin.y - QUEUE_EXTRA, b.size.width, b.size.height);
-    if (!CGRectEqualToRect(mask.frame, mf)) mask.frame = mf;
-    [CATransaction commit];
 }
 
 static void UnflagQueueTable(UIScrollView *list) {
     if (!list || !objc_getAssociatedObject(list, kQueueTable)) return;
-    for (UIView *s in [list.subviews copy]) if (s.tag == QUEUEROW_TAG) [s removeFromSuperview];
+    [QueueRowOf(list) removeFromSuperview];
+    objc_setAssociatedObject(list, kQueueRowObj, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(list, kQueueTable, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    UIEdgeInsets i = list.contentInset; i.bottom -= QUEUE_EXTRA; list.contentInset = i;
+    UIEdgeInsets i = list.contentInset; i.top -= QUEUE_EXTRA; list.contentInset = i;
     if (CGAffineTransformEqualToTransform(list.transform, QueueShift())) list.transform = CGAffineTransformIdentity;
     list.layer.mask = nil;
     NSNumber *clip = objc_getAssociatedObject(list, kQueuePad);
@@ -4714,7 +4706,7 @@ static void QueueTick(UIView *player) {
     if (!objc_getAssociatedObject(table, kQueueTable)) {
         objc_setAssociatedObject(table, kQueuePad, @(table.clipsToBounds), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(table, kQueueTable, @"shift", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        table.contentInset = table.contentInset;   // through the hook: +54 at the bottom
+        table.contentInset = table.contentInset;   // through the hook: +54 at the top
         UIView *row = [UIView new];
         row.tag = QUEUEROW_TAG;
         // Solid background so the list never shows through behind the pills.
@@ -4726,7 +4718,8 @@ static void QueueTick(UIView *player) {
             [b addTarget:[MPQueueTarget shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
             [row addSubview:b];
         }
-        [table addSubview:row];
+        objc_setAssociatedObject(table, kQueueRowObj, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [table.superview addSubview:row];
     }
     HideOriginal(sh); HideOriginal(rp); if (ap) HideOriginal(ap);
     PositionQueueRow(table);
@@ -4950,8 +4943,11 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
         if (CACurrentMediaTime() - lastRefresh > 2) { lastRefresh = CACurrentMediaTime(); @try { RefreshSongFav(); } @catch (__unused id e) {} }
         if (gSongFavKnown && CACurrentMediaTime() > gSongFavLock) SetStar(star, gSongFav, NO);
     }
-    // Lossless / Dolby badge on liquid glass instead of its outline.
-    if (loss && loss.superview) {
+    // Lossless / Dolby badge on liquid glass instead of its outline (only while it shows).
+    static __weak UIView *lossGlass;
+    BOOL lossShowing = loss && ViewShowing(loss) && (HasText(loss, 0) || GlyphIn(loss, 0));
+    if (!lossShowing) lossGlass.hidden = YES;
+    if (lossShowing && loss.superview) {
         NSMutableArray *ls = [NSMutableArray arrayWithObject:loss.layer];
         int lg = 0;
         while (ls.count && lg++ < 40) {
@@ -4975,7 +4971,9 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
         }
         CGRect lf = CGRectInset(loss.frame, -4, -3);
         if (!CGRectEqualToRect(gl.frame, lf)) { gl.frame = lf; gl.layer.cornerRadius = lf.size.height / 2; }
-        gl.hidden = loss.hidden || loss.alpha < 0.05;
+        gl.hidden = NO;
+        gl.alpha = loss.alpha;
+        lossGlass = gl;
     }
 }
 
