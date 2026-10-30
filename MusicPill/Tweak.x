@@ -4638,7 +4638,6 @@ static void LayoutPillButtons(UIView *row) {
     }
 }
 
-static CGAffineTransform QueueShift(void) { return CGAffineTransformMakeTranslation(0, QUEUE_EXTRA); }
 
 // The pill row lives inside the list, in the 54pt just above what's scrolled
 // into view. With the list slid down 54pt, that band lands exactly where the
