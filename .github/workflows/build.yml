@@ -25,16 +25,18 @@ jobs:
 
       - name: Build debs
         run: |
+          set +e +o pipefail
           mkdir -p out
           for p in MusicPill Control26 Photos26; do  # PhotosGlass replaced by Photos26, Spotlight26 ditched
-            echo "::group::$p"
-            if ! (cd "$p" && gmake clean package FINALPACKAGE=1 > ../build-$p.log 2>&1); then
-              cat ../build-$p.log
-              (grep -E "error|Error" ../build-$p.log || tail -15 ../build-$p.log) | head -15 | while read -r l; do echo "::error::$l"; done || true
+            (cd "$p" && gmake clean package FINALPACKAGE=1) > "build-$p.log" 2>&1
+            rc=$?
+            cat "build-$p.log"
+            if [ $rc -ne 0 ]; then
+              grep -E "error" "build-$p.log" | head -15 | sed 's/^/::error::/'
+              tail -6 "build-$p.log" | sed 's/^/::error::/'
               exit 2
             fi
-            cp "$p"/packages/*.deb out/
-            echo "::endgroup::"
+            cp "$p"/packages/*.deb out/ || { echo "::error::copy failed for $p"; exit 3; }
           done
           ls -la out
 
