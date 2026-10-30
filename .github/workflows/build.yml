@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     # Real macOS + Xcode, so arm64e tweaks are built with Apple's own compiler.
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
