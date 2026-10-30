@@ -1,4 +1,5 @@
-// MusicPill 1.0.27 - made by nano
+// MusicPill 1.0.28 - made by nano
+// 1.0.28: account picture smaller, liquid pop out / wobble back in.
 // 1.0.27: artists without a photo: the page moves down so the centered name,
 //         play and star sit below the top buttons instead of under them.
 // 1.0.26: account picture back on Search (a wrong check hid it), and also on
@@ -964,7 +965,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.27 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.28 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2885,17 +2886,34 @@ static __weak UIView *gAccountView;
 @end
 #define AVATAR_TAG 0x4D504156
 static __weak UIButton *gAvatarBtn;
+static void Wobble(UIView *v, CGFloat sx, CGFloat sy, CFTimeInterval delay);
 static void AvatarEval(void) {
     UIButton *b = gAvatarBtn;
     UIScrollView *list = gAvatarList;
     if (!b || !list.window) return;
     BOOL atTop = list.contentOffset.y <= -list.adjustedContentInset.top + 4;
-    CGFloat want = atTop ? 1 : 0;
-    if (b.alpha == want || objc_getAssociatedObject(b, &gAvatarBtn)) return;
-    objc_setAssociatedObject(b, &gAvatarBtn, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-        b.alpha = want; b.transform = atTop ? CGAffineTransformIdentity : CGAffineTransformMakeScale(0.8, 0.8);
-    } completion:^(BOOL d) { objc_setAssociatedObject(b, &gAvatarBtn, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); AvatarEval(); }];
+    NSNumber *st = objc_getAssociatedObject(b, &gAvatarList);
+    BOOL shown = !st || st.boolValue;
+    if (atTop == shown) return;
+    objc_setAssociatedObject(b, &gAvatarList, @(atTop), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [b.layer removeAllAnimations];
+    UIViewAnimationOptions o = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
+    if (!atTop) {
+        // Liquid pop: squash wide, then pinch into a drop and vanish upward.
+        [UIView animateKeyframesWithDuration:0.36 delay:0 options:UIViewKeyframeAnimationOptionBeginFromCurrentState | UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
+            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.3 animations:^{ b.transform = CGAffineTransformMakeScale(1.18, 0.82); }];
+            [UIView addKeyframeWithRelativeStartTime:0.3 relativeDuration:0.35 animations:^{ b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -3), 0.7, 0.95); }];
+            [UIView addKeyframeWithRelativeStartTime:0.65 relativeDuration:0.35 animations:^{ b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -8), 0.12, 0.2); b.alpha = 0; }];
+        } completion:nil];
+    } else {
+        // Drop swells back into the circle and wobbles to rest.
+        b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -8), 0.15, 0.25);
+        [UIView animateWithDuration:0.14 delay:0 options:o animations:^{ b.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.9 options:o animations:^{
+            b.transform = CGAffineTransformIdentity;
+        } completion:nil];
+        Wobble(b, 1.12, 0.88, 0.12);
+    }
 }
 static __weak UISegmentedControl *gScopeSeg;
 static __weak UISearchBar *gScopeBar;
@@ -3111,7 +3129,7 @@ static void SearchPage(UINavigationBar *nb) {
             [nb addSubview:b];
         }
         if ([b imageForState:UIControlStateNormal] != img) [b setImage:img forState:UIControlStateNormal];
-        CGFloat D = 46;
+        CGFloat D = 38;
         // Level with the title's resting spot, same size always (no stretching on pull-down).
         CGRect tf = title ? [title convertRect:title.bounds toView:nb] : [large convertRect:large.bounds toView:nb];
         CGFloat cy = round(CGRectGetMinY(tf) + MIN(tf.size.height, 41) / 2);
