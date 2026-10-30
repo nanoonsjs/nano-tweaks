@@ -1,4 +1,5 @@
-// MusicPill 1.0.41 - made by nano
+// MusicPill 1.0.42 - made by nano
+// 1.0.42: closing always lands at the bottom pill (a stale frame sent it up).
 // 1.0.41: no frame of the player after swipe-down close, Music's Edit/Done is
 //         hidden inside the bar's layout pass (no flash when tapping Edit).
 // 1.0.40: closing the player animates into the bar when it's expanded too (it
@@ -1003,7 +1004,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.41 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.42 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1690,9 +1691,20 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
     MPMiniPill *pill = nil;
     for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
-    UIView *target = (pill && !pill.hidden && pill.alpha > 0.05) ? pill : objc_getAssociatedObject(tb, kMini);
-    if (!snap || !target.window) return;
-    CGRect to = [target convertRect:target.bounds toView:win];
+    if (!snap) return;
+    // Where it lands: our pill, else Music's bar, else just above the tab bar.
+    // Only a spot in the bottom part of the screen counts (stale frames sent it up).
+    CGFloat WH = win.bounds.size.height, WW = win.bounds.size.width;
+    BOOL (^ok)(CGRect) = ^BOOL(CGRect r) { return r.size.height > 20 && r.size.width > 100 && CGRectGetMidY(r) > WH * 0.6 && CGRectGetMidY(r) < WH; };
+    UIView *target = nil;
+    CGRect to = CGRectZero;
+    UIView *mini = objc_getAssociatedObject(tb, kMini);
+    if (pill && !pill.hidden && pill.alpha > 0.05 && pill.window && ok([pill convertRect:pill.bounds toView:win])) { target = pill; to = [pill convertRect:pill.bounds toView:win]; }
+    else if (mini.window && ok([mini convertRect:mini.bounds toView:win])) { target = mini; to = [mini convertRect:mini.bounds toView:win]; }
+    else {
+        CGRect tr = tb.window ? [tb convertRect:tb.bounds toView:win] : CGRectMake(0, WH - 100, WW, 100);
+        to = CGRectMake(16, CGRectGetMinY(tr) - 64, WW - 32, 56);
+    }
     // The player keeps its shape: it scales down to the pill's width and folds
     // its height into the pill while gliding there.
     UIView *wrap = [[UIView alloc] initWithFrame:from];
@@ -1721,7 +1733,7 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     // The pill gives a little liquid bounce as the player lands in it.
     CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
     k.values = @[@0.92, @0.92, @1.05, @0.98, @1]; k.keyTimes = @[@0, @0.4, @0.65, @0.85, @1]; k.duration = 0.75;
-    [target.layer addAnimation:k forKey:@"land"];
+    if (target) [target.layer addAnimation:k forKey:@"land"];
 }
 
 #pragma mark - drag to close
