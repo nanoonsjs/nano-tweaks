@@ -1,4 +1,7 @@
-// MusicPill 0.9.4 - made by nano
+// MusicPill 0.9.5 - made by nano
+// 0.9.5: 3-second hidden cooldown on opening the player (after it opens or
+//        closes, the pill ignores taps), jelly on the two glass circles, and
+//        the left circle takes you to the tab it shows (Library, Home...).
 // 0.9.4: the pill and circles use the same glass as your tab bar (its own
 //        blur effect is copied), and the search circle always does the same
 //        thing: running animations are cleared first, it grows from a dot at
@@ -129,6 +132,7 @@
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
+static CFTimeInterval gPlayerCooldownUntil;   // no reopening the player before this
 static NSString *gDismissDebug = @"-";
 static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from);
 static void MaybeInstallDrag(UIViewController *vc);
@@ -672,7 +676,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 0.9.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -723,10 +727,11 @@ static void Update(UITabBar *tb) {
 
 #pragma mark - iOS 26 collapse
 
-@interface MPCollapse : NSObject
+@interface MPCollapse : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 - (void)tapTab;
 - (void)tapSearch;
+- (void)jelly:(UILongPressGestureRecognizer *)g;
 @end
 
 
@@ -768,6 +773,11 @@ static UIView *GlassCircle(NSString *ident, UIView *host) {
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:[MPCollapse shared]
                                                                           action:[ident isEqualToString:@"tab"] ? @selector(tapTab) : @selector(tapSearch)];
     [c addGestureRecognizer:tap];
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPCollapse shared] action:@selector(jelly:)];
+    lp.minimumPressDuration = 0;
+    lp.cancelsTouchesInView = NO;
+    lp.delegate = (id<UIGestureRecognizerDelegate>)[MPCollapse shared];
+    [c addGestureRecognizer:lp];
     [host addSubview:c];
     return c;
 }
@@ -1292,6 +1302,9 @@ static void SyncPill(void) {
     gHiddenMini = mini;
     gPillObj = pill;
     if (mini.alpha < 0.01) mini.alpha = 1;
+    // Hidden cooldown: for 3 seconds after the player opens or closes, the pill ignores taps.
+    BOOL cool = CACurrentMediaTime() < gPlayerCooldownUntil;
+    if (mini.userInteractionEnabled == cool) mini.userInteractionEnabled = !cool;
     HideMini(mini, YES);
     if (!gCollapsed && !pill.layer.animationKeys.count) {
         CGRect r = [mini convertRect:mini.bounds toView:host];
@@ -1304,6 +1317,7 @@ static void SyncPill(void) {
 
 // The player (as a snapshot) shrinks straight into the pill.
 static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
+    gPlayerCooldownUntil = CACurrentMediaTime() + 3;
     SyncPill();   // the pill is back right away underneath
     UITabBar *tb = gLastTabBar;
     UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
@@ -1402,6 +1416,11 @@ static UIScrollView *ScrollUnder(UIView *v) {
 
 // When the full player appears: our drag replaces Music's swipe-down.
 static void MaybeInstallDrag(UIViewController *vc) {
+    {
+        NSString *n = NSStringFromClass([vc class]);
+        if (vc.view.window.rootViewController.presentedViewController == vc && ([n containsString:@"Player"] || [n containsString:@"NowPlaying"]))
+            gPlayerCooldownUntil = CACurrentMediaTime() + 3;
+    }
     if (!gCollapse || !gRound) return;
     UIWindow *win = vc.view.window;
     UIViewController *root = win.rootViewController;
@@ -1446,7 +1465,44 @@ static void MaybeInstallDrag(UIViewController *vc) {
 
 @implementation MPCollapse
 + (instancetype)shared { static MPCollapse *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPCollapse new]; }); return t; }
-- (void)tapTab { SetCollapsed(NO, YES); }
+- (void)tapTab {
+    // Go to the tab the circle shows (the current one, or the last one before Search).
+    UITabBar *tb = gLastTabBar;
+    UITabBarItem *it = tb.selectedItem;
+    if (IsSearchItem(tb, it)) it = gLastOtherTab ?: (tb.items.count >= 2 ? tb.items[tb.items.count - 2] : nil);
+    NSUInteger idx = it ? [tb.items indexOfObject:it] : NSNotFound;
+    SetCollapsed(NO, YES);
+    UITabBarController *tc = [tb.delegate isKindOfClass:[UITabBarController class]] ? (UITabBarController *)tb.delegate : nil;
+    if (tc && idx != NSNotFound && idx < tc.viewControllers.count && tc.selectedIndex != idx) {
+        UIViewController *vc = tc.viewControllers[idx];
+        if (![tc.delegate respondsToSelector:@selector(tabBarController:shouldSelectViewController:)] || [tc.delegate tabBarController:tc shouldSelectViewController:vc]) {
+            tc.selectedIndex = idx;
+            if ([tc.delegate respondsToSelector:@selector(tabBarController:didSelectViewController:)]) [tc.delegate tabBarController:tc didSelectViewController:vc];
+        }
+    }
+}
+// iOS 26 jelly on the glass circles: swell under the finger, lean toward it, wobble back.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+- (void)jelly:(UILongPressGestureRecognizer *)g {
+    UIView *c = g.view;
+    UIViewAnimationOptions o = UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState;
+    if (g.state == UIGestureRecognizerStateBegan) {
+        [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.8 options:o animations:^{
+            c.transform = CGAffineTransformMakeScale(1.18, 1.18);
+        } completion:nil];
+    } else if (g.state == UIGestureRecognizerStateChanged) {
+        CGPoint p = [g locationInView:c];
+        CGFloat ox = tanh((p.x - c.bounds.size.width / 2) / 40) * 8, oy = tanh((p.y - c.bounds.size.height / 2) / 40) * 8;
+        CGFloat sx = 1.18 + fabs(ox) * 0.012 - fabs(oy) * 0.006, sy = 1.18 + fabs(oy) * 0.012 - fabs(ox) * 0.006;
+        [UIView animateWithDuration:0.18 delay:0 options:o | UIViewAnimationOptionCurveEaseOut animations:^{
+            c.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(ox, oy), sx, sy);
+        } completion:nil];
+    } else if (g.state >= UIGestureRecognizerStateEnded) {
+        [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.38 initialSpringVelocity:0.9 options:o animations:^{
+            c.transform = CGAffineTransformIdentity;
+        } completion:nil];
+    }
+}
 - (void)tapSearch {
     UITabBar *tb = gLastTabBar;
     UITabBarController *tc = [tb.delegate isKindOfClass:[UITabBarController class]] ? (UITabBarController *)tb.delegate : nil;
