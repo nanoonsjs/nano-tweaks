@@ -1,4 +1,7 @@
-// MusicPill 1.0.1 - made by nano
+// MusicPill 1.0.2 - made by nano
+// 1.0.2: album top buttons are found by their icons (they aren't always
+//        controls), red text also caught in attributed text and buttons, and
+//        a "float:" debug line shows what was found.
 // 1.0.1: album page top buttons (Music's floating back / download / ... over
 //        the artwork): back and ... in 44pt liquid glass circles with jelly,
 //        the download button moves into the album row's right circle (live
@@ -154,6 +157,7 @@
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
+static NSString *gFloatDebug = @"-";
 static CFTimeInterval gPlayerCooldownUntil;   // no reopening the player before this
 static NSString *gDismissDebug = @"-";
 static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from);
@@ -854,9 +858,9 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
-                      CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gCollapseDebug,
+                      CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
@@ -2327,6 +2331,14 @@ static BOOL InBars(UIView *v) {
 }
 
 %hook UILabel
+- (void)tintColorDidChange {
+    %orig;
+    if (gAlbum && IsMusicRed(self.textColor) && !InBars(self)) self.textColor = UIColor.whiteColor;
+}
+- (void)didMoveToSuperview {
+    %orig;
+    if (gAlbum && self.superview && IsMusicRed(self.textColor) && !InBars(self)) self.textColor = UIColor.whiteColor;
+}
 - (void)setTextColor:(UIColor *)c {
     // iOS 26: the artist name and "Show Complete Album" are white, not red.
     if (gAlbum && IsMusicRed(c) && !InBars(self)) { %orig(UIColor.whiteColor); return; }
@@ -2343,6 +2355,13 @@ static BOOL InBars(UIView *v) {
     if (gAlbum && IsHeaderTitle(mapped) && self.window) { @try { PreHide(self); } @catch (__unused id e) {} }
 }
 - (void)setAttributedText:(NSAttributedString *)text {
+    if (gAlbum && text.length && !InBars(self)) {
+        __block NSMutableAttributedString *m = nil;
+        [text enumerateAttribute:NSForegroundColorAttributeName inRange:NSMakeRange(0, text.length) options:0 usingBlock:^(id val, NSRange r, BOOL *stop) {
+            if ([val isKindOfClass:[UIColor class]] && IsMusicRed(val)) { if (!m) m = [text mutableCopy]; [m addAttribute:NSForegroundColorAttributeName value:UIColor.whiteColor range:r]; }
+        }];
+        if (m) text = m;
+    }
     if (gQueueLook && text.length) {
         NSString *m = MapQueueText(text.string);
         if (m != text.string) {
@@ -2534,11 +2553,8 @@ static const void *kFloatGlass = &kFloatGlass;
 }
 @end
 
-static NSString *GlyphName(UIView *v) {
-    UIView *g = GlyphIn(v, 0);
-    return [((UIImageView *)g).image.description lowercaseString] ?: @"";
-}
 static void GlassCircleFor(UIControl *c, CGFloat D) {
+    if (!c) return;
     UIView *g = objc_getAssociatedObject(c, kFloatGlass);
     if (!g || g.superview != c) {
         UIVisualEffectView *e = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
@@ -2569,38 +2585,48 @@ static void GlassCircleFor(UIControl *c, CGFloat D) {
     [c sendSubviewToBack:g];
 }
 
-static NSString *gFloatDebug = @"-";
 static void FloatTick(UIWindow *w) {
     if (!w || !gNavGlass) return;
-    CGFloat topBand = w.safeAreaInsets.top + 70, W = w.bounds.size.width;
-    NSMutableArray *ctls = [NSMutableArray array];
+    CGFloat top = w.safeAreaInsets.top, band = top + 80, W = w.bounds.size.width;
+    // Icons in the top band (any view), then the small square-ish view holding each.
+    NSMutableArray *found = [NSMutableArray array];
     NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
     int guard = 0;
-    while (stack.count && guard++ < 6000) {
+    while (stack.count && guard++ < 8000) {
         UIView *v = stack.lastObject; [stack removeLastObject];
-        if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || [v isKindOfClass:[UINavigationBar class]] || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG) continue;
-        if ([v isKindOfClass:[UIControl class]] && v.bounds.size.width >= 24 && v.bounds.size.width <= 64 && v.bounds.size.height <= 64) {
-            CGRect f = [v convertRect:v.bounds toView:nil];
-            if (CGRectGetMidY(f) < topBand && CGRectGetMidY(f) > w.safeAreaInsets.top - 10) { [ctls addObject:v]; continue; }
-        }
-        if ([v isKindOfClass:[UIControl class]]) continue;
+        if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG || v.tag == NAVGLASS_TAG) continue;
         CGRect f = [v convertRect:v.bounds toView:nil];
-        if (f.origin.y > topBand) continue;   // nothing deeper can be in the top band... unless it extends up
+        if (f.origin.y > band || CGRectGetMaxY(f) < top - 20) continue;
+        if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image && f.size.width <= 40 && f.size.height <= 40 && CGRectGetMidY(f) < band && CGRectGetMidY(f) > top - 10) {
+            [found addObject:v];
+            continue;
+        }
         [stack addObjectsFromArray:v.subviews];
     }
-    UIControl *back = nil, *more = nil, *dl = nil;
-    for (UIControl *c in ctls) {
-        NSString *gn = GlyphName(c);
-        CGFloat x = CGRectGetMidX([c convertRect:c.bounds toView:nil]);
-        if ([gn containsString:@"ellipsis"]) more = c;
-        else if (x < W / 2) { if (!back || x < CGRectGetMidX([back convertRect:back.bounds toView:nil])) back = c; }
-        else dl = c;
+    UIView *back = nil, *more = nil, *dl = nil;
+    NSMutableArray *dbg = [NSMutableArray array];
+    for (UIImageView *iv in found) {
+        UIView *holder = iv;
+        for (UIView *p = iv.superview; p && p != w; p = p.superview) {
+            CGSize z = p.bounds.size;
+            if (z.width > 70 || z.height > 70) break;
+            holder = p;
+            if ([p isKindOfClass:[UIControl class]]) break;
+        }
+        NSString *d = iv.image.description.lowercaseString;
+        NSString *sym = @"?";
+        NSRange r = [d rangeOfString:@"symbol("];
+        if (r.location != NSNotFound) { NSString *rest = [d substringFromIndex:r.location]; sym = [rest substringToIndex:MIN(rest.length, (NSUInteger)40)]; }
+        CGFloat x = CGRectGetMidX([iv convertRect:iv.bounds toView:nil]);
+        if (dbg.count < 4) [dbg addObject:[NSString stringWithFormat:@"%@@%.0f(%@)", sym, x, NSStringFromClass([holder class])]];
+        if ([d containsString:@"ellipsis"]) more = holder;
+        else if ([d containsString:@"chevron.left"] || [d containsString:@"chevron.backward"] || (x < W / 3 && !back)) back = holder;
+        else if (x > W / 2 && ([d containsString:@"arrow.down"] || [d containsString:@"checkmark"] || [d containsString:@"icloud"] || [d containsString:@"plus"])) dl = holder;
     }
-    if (back) GlassCircleFor(back, 44);
-    if (more) GlassCircleFor(more, 44);
-    // The download button: shown live in the album row's right circle instead.
+    if ([back isKindOfClass:[UIControl class]] || back) GlassCircleFor((UIControl *)back, 44);
+    if (more) GlassCircleFor((UIControl *)more, 44);
     if (dl && gRowParent && gRowParent.window == w) gSlotView = dl;
-    gFloatDebug = [NSString stringWithFormat:@"%lu ctls back=%d more=%d dl=%d", (unsigned long)ctls.count, back != nil, more != nil, dl != nil];
+    gFloatDebug = [NSString stringWithFormat:@"%lu icons back=%@ more=%@ dl=%@ | %@", (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
 }
 
 static UINavigationBar *TopNavBar(UIWindow *w) {
