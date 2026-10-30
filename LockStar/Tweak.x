@@ -1,4 +1,5 @@
-// LockStar 0.1.0 - made by nano
+// LockStar 0.2.1 - made by nano
+// 0.2.1: players found by their back / AirPlay buttons (not class names); Apple Music only.
 // iOS 26 favorite star on the Lock Screen / Dynamic Island now-playing player:
 // it sits left of the back button (mirroring AirPlay on the right), shows if the
 // song is favorited, and toggles it with a pop + sparks.
@@ -125,46 +126,66 @@ static void SetStar(UIButton *b, BOOL on, BOOL animated) {
 #pragma mark - placement
 
 static NSString *Cls(UIView *v) { return NSStringFromClass([v class]); }
-static void Collect(UIView *v, int depth, NSMutableArray *route, NSMutableArray *transport) {
+
+// Only Apple Music: its favorites are what the star changes.
+static BOOL MusicIsPlaying(void) {
+    Class mc = objc_getClass("SBMediaController");
+    id m = [mc respondsToSelector:@selector(sharedInstance)] ? [mc performSelector:@selector(sharedInstance)] : nil;
+    id app = nil;
+    @try { app = [m valueForKey:@"nowPlayingApplication"]; } @catch (__unused id e) {}
+    NSString *bid = nil;
+    @try { bid = [app valueForKey:@"bundleIdentifier"]; } @catch (__unused id e) {}
+    return [bid isEqualToString:@"com.apple.Music"];
+}
+static BOOL Showing(UIView *v) {
+    for (UIView *p = v; p; p = p.superview) if (p.hidden || p.alpha < 0.02) return NO;
+    return v.window != nil;
+}
+static BOOL IsPrevious(UIView *v) {
+    NSString *a = v.accessibilityLabel.lowercaseString ?: @"";
+    NSString *i = v.accessibilityIdentifier.lowercaseString ?: @"";
+    return [a containsString:@"previous"] || [a containsString:@"rewind"] || [a isEqualToString:@"back"] || [i containsString:@"previous"] || [i containsString:@"backward"] || [i containsString:@"leftbutton"];
+}
+static BOOL IsRoute(UIView *v) {
+    NSString *n = Cls(v), *a = v.accessibilityLabel.lowercaseString ?: @"";
+    return [n containsString:@"Rout"] || [a containsString:@"airplay"] || [a containsString:@"destination"] || [a containsString:@"route"];
+}
+static void Find(UIView *v, int depth, NSMutableArray *prev, NSMutableArray *route) {
     for (UIView *s in v.subviews) {
-        if (s.hidden || s.alpha < 0.01 || s.tag == STAR_TAG || s.tag == DBG_TAG) continue;
-        NSString *n = Cls(s);
-        if ([s isKindOfClass:[UIControl class]] || [n containsString:@"Button"]) {
-            if ([n containsString:@"Rout"] || [s.accessibilityIdentifier containsString:@"oute"]) [route addObject:s];
-            else if ([n containsString:@"Transport"]) [transport addObject:s];
+        if (s.hidden || s.alpha < 0.02 || s.tag == STAR_TAG || s.tag == DBG_TAG) continue;
+        if ([s isKindOfClass:[UIControl class]] || [Cls(s) containsString:@"Button"]) {
+            if (IsPrevious(s)) [prev addObject:s];
+            else if (IsRoute(s)) [route addObject:s];
         }
-        if (depth < 12) Collect(s, depth + 1, route, transport);
+        if (depth < 28) Find(s, depth + 1, prev, route);
     }
 }
-// Lays the star out inside a now-playing view: same height as the transport
-// row, mirrored from AirPlay (or just left of the back button).
-static void PlaceStar(UIView *np) {
-    if (!np.window) return;
-    UIButton *star = (UIButton *)[np viewWithTag:STAR_TAG];
-    UILabel *dbg = (UILabel *)[np viewWithTag:DBG_TAG];
-    if (!gEnabled) { star.hidden = YES; dbg.hidden = YES; return; }
-    NSMutableArray *route = [NSMutableArray array], *tr = [NSMutableArray array];
-    Collect(np, 0, route, tr);
-    // The back button = leftmost transport button.
-    UIView *back = nil;
-    for (UIView *b in tr) if (!back || [b convertPoint:CGPointZero toView:np].x < [back convertPoint:CGPointZero toView:np].x) back = b;
-    UIView *rt = route.firstObject;
-    NSString *info = [NSString stringWithFormat:@"%@ tr=%lu route=%@ fav=%@:%d %@", Cls(np), (unsigned long)tr.count, rt ? Cls(rt) : @"none", gFavKey, gFav, gLastCmd];
-    if (!back) {
-        star.hidden = YES;
-        if (gDebug) {
-            if (!dbg) { dbg = [UILabel new]; dbg.tag = DBG_TAG; dbg.numberOfLines = 0; dbg.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular]; dbg.textColor = UIColor.yellowColor; dbg.userInteractionEnabled = NO; [np addSubview:dbg]; }
-            dbg.text = [@"no back: " stringByAppendingString:info]; dbg.hidden = NO;
-            dbg.frame = CGRectMake(8, 0, np.bounds.size.width - 16, 40);
-        } else dbg.hidden = YES;
-        return;
-    }
-    CGRect bf = [back convertRect:back.bounds toView:np];
+static UIView *Common(UIView *a, UIView *b) {
+    for (UIView *p = a.superview; p; p = p.superview) if ([b isDescendantOfView:p]) return p;
+    return nil;
+}
+static void Debug(UIView *host, NSString *text) {
+    UILabel *dbg = (UILabel *)[host viewWithTag:DBG_TAG];
+    if (!gDebug) { dbg.hidden = YES; return; }
+    if (!dbg) { dbg = [UILabel new]; dbg.tag = DBG_TAG; dbg.numberOfLines = 0; dbg.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular]; dbg.textColor = UIColor.yellowColor; dbg.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6]; dbg.userInteractionEnabled = NO; [host addSubview:dbg]; }
+    dbg.text = text; dbg.hidden = NO;
+    CGSize sz = [dbg sizeThatFits:CGSizeMake(host.bounds.size.width - 16, 200)];
+    dbg.frame = CGRectMake(8, 0, host.bounds.size.width - 16, sz.height);
+    [host bringSubviewToFront:dbg];
+}
+// Places a star in the container holding one player's back + AirPlay buttons.
+static void PlaceStar(UIView *back, UIView *rt) {
+    UIView *host = rt ? Common(back, rt) : back.superview.superview;
+    if (!host) return;
+    UIButton *star = (UIButton *)[host viewWithTag:STAR_TAG];
+    BOOL music = MusicIsPlaying();
+    if (!gEnabled || !music) { star.hidden = YES; Debug(host, [NSString stringWithFormat:@"LockStar: hidden (enabled=%d appleMusic=%d)", gEnabled, music]); return; }
+    CGRect bf = [back convertRect:back.bounds toView:host];
     CGFloat D = MAX(36, MIN(48, bf.size.height));
     CGFloat cx;
     if (rt) {
-        CGRect rf = [rt convertRect:rt.bounds toView:np];
-        cx = np.bounds.size.width - CGRectGetMidX(rf);   // mirror of AirPlay
+        CGRect rf = [rt convertRect:rt.bounds toView:host];
+        cx = host.bounds.size.width - CGRectGetMidX(rf);   // mirror of AirPlay
         if (cx > CGRectGetMinX(bf) - D / 2) cx = CGRectGetMinX(bf) - D / 2 - 14;
     } else cx = CGRectGetMinX(bf) - D / 2 - 18;
     if (!star) {
@@ -172,48 +193,46 @@ static void PlaceStar(UIView *np) {
         star.tag = STAR_TAG;
         star.adjustsImageWhenHighlighted = NO;
         [star addTarget:[LSTarget shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
-        [np addSubview:star];
+        [host addSubview:star];
         if (!gStars) gStars = [NSHashTable weakObjectsHashTable];
         [gStars addObject:star];
         QueryFav();
     }
-    // Same colour as Music's own buttons there.
     UIColor *tint = back.tintColor ?: UIColor.whiteColor;
-    UIImageView *bi = nil;
-    for (UIView *s in back.subviews) if ([s isKindOfClass:[UIImageView class]]) { bi = (UIImageView *)s; break; }
-    if (bi.tintColor) tint = bi.tintColor;
+    for (UIView *s in back.subviews) if ([s isKindOfClass:[UIImageView class]] && s.tintColor) { tint = s.tintColor; break; }
     if (![star.tintColor isEqual:tint]) star.tintColor = tint;
     CGRect sf = CGRectMake(round(cx - D / 2), round(CGRectGetMidY(bf) - D / 2), D, D);
     if (!CGRectEqualToRect(star.frame, sf) && !star.imageView.layer.animationKeys.count) star.frame = sf;
     star.hidden = NO;
-    if (np.subviews.lastObject != star) [np bringSubviewToFront:star];
+    if (host.subviews.lastObject != star) [host bringSubviewToFront:star];
     if (!objc_getAssociatedObject(star, @selector(SetStar))) SetStar(star, gFav, NO);
-    if (gDebug) {
-        if (!dbg) { dbg = [UILabel new]; dbg.tag = DBG_TAG; dbg.numberOfLines = 0; dbg.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular]; dbg.textColor = UIColor.yellowColor; dbg.userInteractionEnabled = NO; [np addSubview:dbg]; }
-        dbg.text = info; dbg.hidden = NO;
-        dbg.frame = CGRectMake(8, 0, np.bounds.size.width - 16, 30);
-    } else dbg.hidden = YES;
+    Debug(host, [NSString stringWithFormat:@"LockStar: back=%@ '%@' route=%@ host=%@ fav=%@:%d %@", Cls(back), back.accessibilityLabel, rt ? Cls(rt) : @"none", Cls(host), gFavKey, gFav, gLastCmd]);
+}
+// Looks through SpringBoard's windows for now-playing players (Lock Screen,
+// Dynamic Island, Notification Center) and gives each a star.
+static void Scan(void) {
+    NSMutableArray *prev = [NSMutableArray array], *route = [NSMutableArray array];
+    NSMutableArray *wins = [NSMutableArray array];
+    for (UIScene *sc in UIApplication.sharedApplication.connectedScenes)
+        if ([sc isKindOfClass:[UIWindowScene class]]) [wins addObjectsFromArray:((UIWindowScene *)sc).windows];
+    if (!wins.count) [wins addObjectsFromArray:UIApplication.sharedApplication.windows];
+    for (UIWindow *w in wins) if (!w.hidden && w.alpha > 0.02) Find(w, 0, prev, route);
+    for (UIView *b in prev) {
+        if (!Showing(b)) continue;
+        UIView *rt = nil; CGFloat best = 1e9;
+        CGPoint bc = [b convertPoint:CGPointMake(b.bounds.size.width / 2, b.bounds.size.height / 2) toView:nil];
+        for (UIView *r in route) {
+            if (r.window != b.window || !Showing(r)) continue;
+            CGPoint rc = [r convertPoint:CGPointMake(r.bounds.size.width / 2, r.bounds.size.height / 2) toView:nil];
+            CGFloat d = fabs(rc.y - bc.y) * 4 + fabs(rc.x - bc.x);
+            if (fabs(rc.y - bc.y) < 40 && d < best) { best = d; rt = r; }
+        }
+        @try { PlaceStar(b, rt); } @catch (__unused id e) {}
+    }
+    for (UIButton *s in [gStars allObjects]) if (!s.window) [s removeFromSuperview];
 }
 
 #pragma mark - hooks
-
-static UIView *NowPlayingRoot(UIView *v) {
-    UIView *best = nil;
-    for (UIView *p = v; p; p = p.superview) {
-        NSString *n = Cls(p);
-        if ([n containsString:@"NowPlayingView"] || ([n containsString:@"MRUNowPlaying"] && [n hasSuffix:@"View"] && p.bounds.size.width > 200)) best = p;
-        if ([p isKindOfClass:[UIWindow class]]) break;
-    }
-    return best;
-}
-static IMP gTransportLayoutOrig;
-static void TransportLayout(UIView *self, SEL _cmd) {
-    if (gTransportLayoutOrig) ((void (*)(id, SEL))gTransportLayoutOrig)(self, _cmd);
-    @try {
-        UIView *np = NowPlayingRoot(self) ?: self.superview;
-        if (np) PlaceStar(np);
-    } @catch (__unused id e) {}
-}
 
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u) {
     LoadPrefs();
@@ -227,10 +246,8 @@ static void PrefsChanged(CFNotificationCenterRef c, void *o, CFStringRef n, cons
     [[NSNotificationCenter defaultCenter] addObserverForName:@"kMRMediaRemoteNowPlayingInfoDidChangeNotification" object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) { QueryFav(); }];
     void (*reg)(dispatch_queue_t) = (void (*)(dispatch_queue_t))MR("MRMediaRemoteRegisterForNowPlayingNotifications");
     if (reg) reg(dispatch_get_main_queue());
-    // The transport row of every now-playing view (Lock Screen, Dynamic Island).
-    const char *names[] = { "MRUNowPlayingTransportControlsView", "MRUTransportControlsView", "MRUNowPlayingControlsView" };
-    for (int i = 0; i < 3; i++) {
-        Class c = objc_getClass(names[i]);
-        if (c) { MSHookMessageEx(c, @selector(layoutSubviews), (IMP)TransportLayout, &gTransportLayoutOrig); break; }
-    }
+    // Players come and go (lock, Dynamic Island, swipes): look a few times a second.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSTimer scheduledTimerWithTimeInterval:0.3 repeats:YES block:^(NSTimer *tm) { @try { Scan(); } @catch (__unused id e) {} }];
+    });
 }
