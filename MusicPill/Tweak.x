@@ -428,9 +428,9 @@ static NSArray *IOS26MenuChildren(NSArray *children, UIMenuOptions options) {
     NSMutableArray *row = [NSMutableArray array];
     for (NSString *k in @[@"download", @"fav", @"share"]) if (found[k]) [row addObject:found[k]];
     if (row.count < 2) return children;
-    if (@available(iOS 16.0, *)) {
-        UIMenu *top = [UIMenu menuWithTitle:@"" image:nil identifier:MP_ROW_ID options:UIMenuOptionsDisplayInline children:row];
-        top.preferredElementSize = UIMenuElementSizeMedium;   // icon over title, side by side
+    UIMenu *top = [UIMenu menuWithTitle:@"" image:nil identifier:MP_ROW_ID options:UIMenuOptionsDisplayInline children:row];
+    if ([top respondsToSelector:@selector(setPreferredElementSize:)]) {
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(top, @selector(setPreferredElementSize:), 1);   // medium: icon over title, side by side
         return [@[top] arrayByAddingObjectsFromArray:WithoutElements(children, [NSSet setWithArray:row])];
     }
     return children;
