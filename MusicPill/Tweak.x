@@ -1,4 +1,6 @@
-// MusicPill 1.0.33 - made by nano
+// MusicPill 1.0.34 - made by nano
+// 1.0.34: player star closer to •••, ••• as big as the star, title/artist fade
+//         out before the star, star follows ••• every frame (lyrics, queue).
 // 1.0.33: full player: favorite star left of ••• (pops + sparks when on),
 //         ••• without its circle, artist name in Music's pink, Lossless badge
 //         on liquid glass.
@@ -981,7 +983,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.33 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.34 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1789,11 +1791,13 @@ static void MaybeInstallDrag(UIViewController *vc) {
 + (instancetype)shared;
 - (void)tick:(CADisplayLink *)l;
 @end
+static void PlayerStarSync(void);
 @implementation MPPillTicker
 + (instancetype)shared { static MPPillTicker *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPPillTicker new]; }); return t; }
 - (void)tick:(CADisplayLink *)l {
     if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
     @try { SyncPill(); } @catch (__unused id e) {}
+    @try { PlayerStarSync(); } @catch (__unused id e) {}   // star follows ••• every frame (lyrics/queue moves it)
 }
 @end
 
@@ -4801,6 +4805,46 @@ static UIColor *MusicPink(void) { return [UIColor colorWithRed:0.98 green:0.24 b
 #define PSTAR_TAG 0x4D505354
 #define LOSSGLASS_TAG 0x4D504C47
 static __weak UIView *gPlayerMore;
+static __weak UIButton *gPlayerStar;
+static NSHashTable *gMarquees;   // the player's scrolling title / artist rows
+static void FadeBefore(UIView *v, CGFloat stopX) {
+    if (!v.window) return;
+    CGFloat x0 = [v convertPoint:CGPointZero toView:nil].x;
+    CGFloat wdt = MAX(0, stopX - x0);
+    if (wdt >= v.bounds.size.width) { if ([v.layer.mask.name isEqualToString:@"mp.fade"]) v.layer.mask = nil; return; }
+    CAGradientLayer *m = (CAGradientLayer *)v.layer.mask;
+    if (![m isKindOfClass:[CAGradientLayer class]] || ![m.name isEqualToString:@"mp.fade"]) {
+        m = [CAGradientLayer layer]; m.name = @"mp.fade";
+        m.startPoint = CGPointMake(0, 0.5); m.endPoint = CGPointMake(1, 0.5);
+        m.colors = @[(id)UIColor.blackColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.clearColor.CGColor];
+        v.layer.mask = m;
+    }
+    CGFloat w = v.bounds.size.width;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    m.frame = v.bounds;
+    m.locations = @[@0, @(MAX(0, (wdt - 18) / w)), @(wdt / w)];
+    [CATransaction commit];
+}
+static void PlayerStarSync(void) {
+    UIButton *star = gPlayerStar;
+    UIView *more = gPlayerMore;
+    if (!star.window || !more.window) return;
+    BOOL show = ViewShowing(more);
+    if (star.hidden == show) star.hidden = !show;
+    if (!show) return;
+    CGPoint mc = GlyphCenter(more, nil);
+    CGPoint q = [star.superview convertPoint:CGPointMake(mc.x - 40, mc.y) fromView:nil];
+    CGPoint c = CGPointMake(round(q.x), round(q.y));
+    if (!CGPointEqualToPoint(star.center, c)) star.center = c;
+    // Title and artist rows end before the star.
+    CGFloat stopX = [star convertPoint:CGPointZero toView:nil].x - 2;
+    CGFloat sy = [star convertPoint:CGPointMake(22, 22) toView:nil].y;
+    for (UIView *m in [gMarquees allObjects]) {
+        if (!m.window) continue;
+        CGFloat my = [m convertPoint:CGPointMake(0, m.bounds.size.height / 2) toView:nil].y;
+        if (fabs(my - sy) < 45) FadeBefore(m, stopX);
+    }
+}
 static BOOL gSongFav, gSongFavKnown;
 static CFTimeInterval gSongFavLock;
 static void RefreshSongFav(void) {
@@ -4837,11 +4881,20 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
         if (v.hidden || v.alpha < 0.01 || v.tag == PSTAR_TAG || v.tag == PLAYERDEBUG_TAG) continue;
         CGRect f = [v convertRect:v.bounds toView:nil];
         NSString *ax = v.accessibilityLabel;
-        if ([v isKindOfClass:[UIControl class]] && CGRectGetMidY(f) > H * 0.4 && CGRectGetMidY(f) < H * 0.9) {
+        if (!more && [v isKindOfClass:[UIControl class]] && [NSStringFromClass([v class]) containsString:@"SymbolButton"] && [ax isEqualToString:@"More"] && ViewShowing(v)) more = v;
+        else if ([v isKindOfClass:[UIControl class]] && CGRectGetMidY(f) > H * 0.4 && CGRectGetMidY(f) < H * 0.9) {
             NSString *cn = NSStringFromClass([v class]);
-            if (!more && [cn containsString:@"SymbolButton"] && [ax isEqualToString:@"More"]) more = v;
+            if (NO) {}
             else if (!loss && [cn containsString:@"SymbolButton"] && ([ax containsString:@"Lossless"] || [ax containsString:@"Dolby"] || [ax containsString:@"Atmos"] || [ax containsString:@"Hi-Res"])) loss = v;
             else if (!artist && [v isKindOfClass:[UIButton class]] && [NSStringFromClass([v.superview class]) containsString:@"Marquee"]) artist = (UIButton *)v;
+        }
+        if ([NSStringFromClass([v class]) hasSuffix:@"MarqueeView"]) {
+            if (!gMarquees) gMarquees = [NSHashTable weakObjectsHashTable];
+            [gMarquees addObject:v];
+        }
+        if ([v isKindOfClass:[UIButton class]] && [NSStringFromClass([v.superview class]) containsString:@"Marquee"] && ViewShowing(v)) {
+            objc_setAssociatedObject(((UIButton *)v).titleLabel, kKeepRed, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (![[(UIButton *)v titleColorForState:UIControlStateNormal] isEqual:MusicPink()]) [(UIButton *)v setTitleColor:MusicPink() forState:UIControlStateNormal];
         }
         [st addObjectsFromArray:v.subviews];
     }
@@ -4862,8 +4915,10 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
             }
             if (mb.tintColor && ![mb.tintColor isEqual:MusicPink()]) mb.tintColor = MusicPink();
         }
+        UIView *dots = GlyphIn(more, 0);
+        if (dots && fabs(dots.transform.a - 1.35) > 0.01) dots.transform = CGAffineTransformMakeScale(1.35, 1.35);
         CGPoint mc = GlyphCenter(more, nil);
-        CGPoint want = CGPointMake(mc.x - 52, mc.y);
+        CGPoint want = CGPointMake(mc.x - 40, mc.y);
         UIView *host = nil;
         for (UIView *p = more.superview; p && p != w; p = p.superview) {
             CGPoint q = [w convertPoint:want toView:p];
@@ -4872,6 +4927,7 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
         if (!host) host = player;
         UIButton *star = (UIButton *)[host viewWithTag:PSTAR_TAG];
         if (!star) {
+            for (UIView *o in [player.subviews copy]) if (o.tag == PSTAR_TAG) [o removeFromSuperview];
             star = [UIButton buttonWithType:UIButtonTypeCustom];
             star.tag = PSTAR_TAG;
             star.tintColor = MusicPink();
@@ -4884,6 +4940,7 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
         CGRect sf = CGRectMake(round(q.x - 22), round(q.y - 22), 44, 44);
         if (!CGRectEqualToRect(star.frame, sf)) star.frame = sf;
         if (host.subviews.lastObject != star) [host bringSubviewToFront:star];
+        gPlayerStar = star;
         static NSString *lastSong;
         if (gNowTitle && ![gNowTitle isEqualToString:lastSong]) {
             lastSong = gNowTitle;
