@@ -1,4 +1,6 @@
-// Photos26 2.1.1 - made by nano
+// Photos26 2.2.1 - made by nano
+// 2.2.1: works after a reboot: buttons recognised without VoiceOver labels, and
+//        the Photos-class hooks keep retrying until Photos has loaded them.
 // 2.1.1: the Years/Months/Days bar is styled the moment it appears (hooked
 //        directly, no flicker on launch) and the dark backdrop behind it is
 //        hidden too.
@@ -161,6 +163,30 @@ static NSString *ItemKind(UIBarButtonItem *it) {
     if (!img && [it.customView isKindOfClass:[UIButton class]]) img = [(UIButton *)it.customView imageForState:UIControlStateNormal];
     if (img) [s appendString:img.description];
     if (v.accessibilityLabel) [s appendString:v.accessibilityLabel];
+    // After a reboot VoiceOver labels are empty until accessibility loads, so the
+    // system item type and the symbol drawn inside the button count too.
+    @try {
+        NSNumber *sys = [it valueForKey:@"systemItem"];
+        if ([sys isKindOfClass:[NSNumber class]]) switch (sys.integerValue) {
+            case UIBarButtonSystemItemAction: [s appendString:@" share"]; break;
+            case UIBarButtonSystemItemTrash: [s appendString:@" trash"]; break;
+            case UIBarButtonSystemItemPlay: [s appendString:@" play"]; break;
+            case UIBarButtonSystemItemPause: [s appendString:@" pause"]; break;
+            case UIBarButtonSystemItemEdit: [s appendString:@" edit"]; break;
+            default: break;
+        }
+    } @catch (__unused id e) {}
+    if ([v isKindOfClass:[UIView class]]) {
+        NSMutableArray *st = [NSMutableArray arrayWithObject:v];
+        int g = 0;
+        while (st.count && g++ < 40) {
+            UIView *x = st.lastObject; [st removeLastObject];
+            if ([x isKindOfClass:[UIImageView class]] && ((UIImageView *)x).image) [s appendString:((UIImageView *)x).image.description];
+            if ([x isKindOfClass:[UIButton class]] && [(UIButton *)x currentImage]) [s appendString:[(UIButton *)x currentImage].description];
+            if ([x isKindOfClass:[UILabel class]] && ((UILabel *)x).text) [s appendString:((UILabel *)x).text];
+            [st addObjectsFromArray:x.subviews];
+        }
+    }
     NSString *l = s.lowercaseString;
     if ([l containsString:@"square.and.arrow.up"] || [l containsString:@"share"]) return @"share";
     if ([l containsString:@"trash"] || [l containsString:@"delete"]) return @"trash";
@@ -1817,12 +1843,17 @@ static void InitScrubber(void) { static BOOL done; if (done) return; done = YES;
             @try { StyleGridTop(key); StyleSegments(key); } @catch (__unused id e) {}
         }];
     });
+    // Photos' own classes load late on a cold start (right after a reboot it's
+    // slower than 1.5s), so keep checking until both are there.
     if (objc_getClass("PXCuratedLibraryOverlayButton")) InitOverlay();
-    else dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (objc_getClass("PXCuratedLibraryOverlayButton")) InitOverlay();
-    });
     if (objc_getClass("PUScrubberView")) InitScrubber();
-    else dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (objc_getClass("PUScrubberView")) InitScrubber();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __block int tries = 0;
+        [NSTimer scheduledTimerWithTimeInterval:0.3 repeats:YES block:^(NSTimer *tm) {
+            static BOOL ovl, scr;
+            if (!ovl && objc_getClass("PXCuratedLibraryOverlayButton")) { InitOverlay(); ovl = YES; }
+            if (!scr && objc_getClass("PUScrubberView")) { InitScrubber(); scr = YES; }
+            if ((ovl && scr) || ++tries > 400) [tm invalidate];
+        }];
     });
 }
