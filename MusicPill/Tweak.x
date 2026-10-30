@@ -1,4 +1,6 @@
-// MusicPill 1.2.0 - made by nano
+// MusicPill 1.2.1 - made by nano
+// 1.2.1: player ••• / Lossless / album download found by symbol and text too
+//        (VoiceOver labels are empty after a reboot, which broke them).
 // 1.2.0: public release: package id com.nano.musicpill (replaces com.user.musicpill).
 // 1.1.1: rootless and rootful packages kept apart (1.1.0 published the rootful one by mistake).
 // 1.1.0: release build: arm64 + arm64e (every iPhone that runs iOS 16), rootless
@@ -258,6 +260,7 @@
 #import <objc/message.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <AVFoundation/AVFoundation.h>
+static UIView *GlyphIn(UIView *v, int depth);
 
 // UIKit's private live-mirror view: draws another view's current contents
 // (including its animations) somewhere else.
@@ -1193,7 +1196,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.0 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2446,7 +2449,7 @@ static void FindHeaderControls(UIView *v, int depth, UIControl **play, UIControl
             if (!*play && [txt isEqualToString:@"Play"]) { UIControl *c = ControlAbove(s); if (c && !InBottomBars(c)) *play = c; }
             else if (!*shuffle && [txt isEqualToString:@"Shuffle"]) { UIControl *c = ControlAbove(s); if (c && !InBottomBars(c)) *shuffle = c; }
         }
-        if (!*download && [s isKindOfClass:[UIControl class]] && [s.accessibilityLabel isEqualToString:@"Download"] && !InBottomBars(s))
+        if (!*download && [s isKindOfClass:[UIControl class]] && ([s.accessibilityLabel isEqualToString:@"Download"] || [((UIImageView *)GlyphIn(s, 0)).image.description containsString:@"arrow.down"]) && !InBottomBars(s))
             *download = (UIControl *)s;
         if (*play && *shuffle && *download) return;
         if (depth < 30) FindHeaderControls(s, depth + 1, play, shuffle, download);
@@ -5331,6 +5334,7 @@ static void RefreshSongFav(void) {
     SetStar(b, willFav, YES);
 }
 @end
+static NSString *ControlText(UIView *v);
 static void PlayerExtras(UIView *player, UIWindow *w) {
     CGFloat H = w.bounds.size.height;
     UIView *more = nil, *loss = nil; UIButton *artist = nil;
@@ -5341,7 +5345,16 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
         if (v.hidden || v.alpha < 0.01 || v.tag == PSTAR_TAG || v.tag == PLAYERDEBUG_TAG) continue;
         CGRect f = [v convertRect:v.bounds toView:nil];
         NSString *ax = v.accessibilityLabel;
-        if (!more && [v isKindOfClass:[UIControl class]] && [NSStringFromClass([v class]) containsString:@"SymbolButton"] && [ax isEqualToString:@"More"] && ViewShowing(v)) more = v;
+        // VoiceOver labels are empty until accessibility loads (e.g. after a reboot),
+        // so buttons are also recognised by their symbol / text.
+        BOOL symBtn = [v isKindOfClass:[UIControl class]] && [NSStringFromClass([v class]) containsString:@"SymbolButton"];
+        NSString *glyph = symBtn ? ((UIImageView *)GlyphIn(v, 0)).image.description : nil;
+        if (symBtn && !ax.length) {
+            NSString *txt = ControlText(v);
+            if ([glyph containsString:@"ellipsis"]) ax = @"More";
+            else if (txt.length) ax = txt;
+        }
+        if (!more && symBtn && [ax isEqualToString:@"More"] && ViewShowing(v)) more = v;
         else if ([v isKindOfClass:[UIControl class]] && CGRectGetMidY(f) > H * 0.4 && CGRectGetMidY(f) < H * 0.9) {
             NSString *cn = NSStringFromClass([v class]);
             if (NO) {}
