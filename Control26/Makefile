@@ -1,7 +1,8 @@
 TARGET := iphone:clang:latest:15.0
-# SpringBoard is arm64e.
-ARCHS = arm64e
-THEOS_PACKAGE_SCHEME = rootless
+# arm64e: iPhone XS and newer; arm64: iPhone 8 / X (A11).
+ARCHS = arm64 arm64e
+# Rootless by default; CI also makes a rootful deb.
+THEOS_PACKAGE_SCHEME ?= rootless
 THEOS_PLATFORM_DEB_COMPRESSION_TYPE = xz
 
 include $(THEOS)/makefiles/common.mk

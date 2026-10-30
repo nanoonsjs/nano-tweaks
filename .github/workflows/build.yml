@@ -38,11 +38,13 @@ jobs:
             fi
             cp "$p"/packages/*.deb out/ || { echo "::error::copy failed for $p"; exit 3; }
           done
-          # MusicPill also as a rootful package (checkra1n / palera1n rootful).
-          rm -rf MusicPill/packages
-          (cd MusicPill && gmake clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=) > build-MusicPill-rootful.log 2>&1
-          if [ $? -ne 0 ]; then cat build-MusicPill-rootful.log; grep -E "error" build-MusicPill-rootful.log | head -15 | sed 's/^/::error::/'; exit 2; fi
-          cp MusicPill/packages/*_iphoneos-arm.deb out/ || { echo "::error::no rootful deb"; ls MusicPill/packages; exit 3; }
+          # Every tweak also as a rootful package (palera1n rootful, checkra1n).
+          for p in MusicPill Control26 Photos26; do
+            rm -rf "$p/packages"
+            (cd "$p" && gmake clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=) > "build-$p-rootful.log" 2>&1
+            if [ $? -ne 0 ]; then cat "build-$p-rootful.log"; grep -E "error" "build-$p-rootful.log" | head -15 | sed 's/^/::error::/'; exit 2; fi
+            cp "$p"/packages/*_iphoneos-arm.deb out/ || { echo "::error::no rootful deb for $p"; ls "$p/packages"; exit 3; }
+          done
           ls -la out
 
       - name: Upload debs (Actions artifact)

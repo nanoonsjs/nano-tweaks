@@ -1,10 +1,13 @@
-Package: com.user.photos26
+Package: com.nano.photos26
 Name: Photos26
-Version: 2.1.1
-Architecture: iphoneos-arm64
-Description: iOS 26 style Photos viewer: liquid glass buttons and a glass video player. Made by nano.
+Version: 2.2.0
+Architecture: iphoneos-arm
+Description: iOS 26 style Photos viewer: liquid glass buttons and a glass video player. For iOS 15 and 16, every iPhone (A11 and newer). Tested on iPhone 13 Pro Max, iOS 16. Made by nano. (Replaces PhotosGlass.)
 Maintainer: nano
 Author: nano
 Section: Tweaks
 Depends: mobilesubstrate, preferenceloader
+Conflicts: com.user.photos26
+Replaces: com.user.photos26
+Provides: com.user.photos26
 Icon: file:///var/jb/usr/share/Photos26/icon.png
