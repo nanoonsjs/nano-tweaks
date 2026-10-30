@@ -1,4 +1,5 @@
-// MusicPill 1.0.44 - made by nano
+// MusicPill 1.0.45 - made by nano
+// 1.0.45: zoom page transition turned off (back to the normal slide).
 // 1.0.44: iOS 26 zoom: tapping an album / playlist / song tile grows its page
 //         out of the tile (back shrinks it into the tile) instead of iOS 16's
 //         side slide; picture / Edit leave the bar the moment a page opens.
@@ -498,7 +499,7 @@ static void InvisibleLibraryEdit(UINavigationItem *ni) {
 static __weak UIView *gTapCell;
 static CFTimeInterval gTapTime;
 static const void *kZoomCell = &kZoomCell, *kZoomRect = &kZoomRect;
-static BOOL gZoomOn = YES;
+static BOOL gZoomOn = NO;   // zoom turned off (user prefers the normal slide)
 static UIView *CellUnder(UIView *v) {
     for (UIView *p = v; p; p = p.superview) {
         if ([p isKindOfClass:[UICollectionViewCell class]] || [p isKindOfClass:[UITableViewCell class]]) return p;
@@ -1183,7 +1184,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.44 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.45 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
