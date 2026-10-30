@@ -1,4 +1,6 @@
-// MusicPill 1.2.6 - made by nano
+// MusicPill 1.2.7 - made by nano
+// 1.2.7: hooks on Music's own button classes retry until they exist (cold start
+//         after a reboot).
 // 1.2.6: animated cover stops when the next song is from another album (song
 //         info refreshed while the player is open, old video dropped on change).
 // 1.2.5: animated cover also matched by the playing song's title on the album
@@ -1205,7 +1207,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5031,12 +5033,32 @@ static void HeadPlayWinHook(UIView *self, SEL _cmd) {
     if (gHeadPlayWinOrig) ((void (*)(id, SEL))gHeadPlayWinOrig)(self, _cmd);
     @try { if (self.window && !InBottomBars(self)) ArtistTick(self); } @catch (__unused id e) {}
 }
+// Each hook once, and retried until its class exists (a cold start right after
+// a reboot can load Music's classes later than the tweak).
+static BOOL HookSymbolButtonOnce(void) {
+    static BOOL hpDone, symDone;
+    if (!hpDone) {
+        Class hp = objc_getClass("MusicPageHeaderPlayButton") ?: objc_getClass("MusicApplication.MusicPageHeaderPlayButton");
+        if (hp) {
+            MSHookMessageEx(hp, @selector(layoutSubviews), (IMP)HeadPlayLayoutHook, &gHeadPlayLayoutOrig);
+            MSHookMessageEx(hp, @selector(didMoveToWindow), (IMP)HeadPlayWinHook, &gHeadPlayWinOrig);
+            hpDone = YES;
+        }
+    }
+    if (!symDone) {
+        Class sym = objc_getClass("MusicApplication.SymbolButton");
+        if (sym) { MSHookMessageEx(sym, @selector(layoutSubviews), (IMP)SymLayoutHook, &gSymLayoutOrig); symDone = YES; }
+    }
+    return hpDone && symDone;
+}
 static void HookSymbolButton(void) {
-    Class hp = objc_getClass("MusicPageHeaderPlayButton") ?: objc_getClass("MusicApplication.MusicPageHeaderPlayButton");
-    if (hp) MSHookMessageEx(hp, @selector(layoutSubviews), (IMP)HeadPlayLayoutHook, &gHeadPlayLayoutOrig);
-    if (hp) MSHookMessageEx(hp, @selector(didMoveToWindow), (IMP)HeadPlayWinHook, &gHeadPlayWinOrig);
-    Class sym = objc_getClass("MusicApplication.SymbolButton");
-    if (sym) MSHookMessageEx(sym, @selector(layoutSubviews), (IMP)SymLayoutHook, &gSymLayoutOrig);
+    if (HookSymbolButtonOnce()) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __block int tries = 0;
+        [NSTimer scheduledTimerWithTimeInterval:0.3 repeats:YES block:^(NSTimer *tm) {
+            if (HookSymbolButtonOnce() || ++tries > 200) [tm invalidate];
+        }];
+    });
 }
 
 static UINavigationBar *TopNavBar(UIWindow *w) {
