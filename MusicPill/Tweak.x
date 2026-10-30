@@ -1,4 +1,6 @@
-// MusicPill 1.2.5 - made by nano
+// MusicPill 1.2.6 - made by nano
+// 1.2.6: animated cover stops when the next song is from another album (song
+//         info refreshed while the player is open, old video dropped on change).
 // 1.2.5: animated cover also matched by the playing song's title on the album
 //         page; Lossless badge back to Music's own (no glass).
 // 1.2.4: animated cover matched to its album by the header text Music draws
@@ -1203,7 +1205,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -4730,7 +4732,27 @@ static NSString *AlbumKey(NSString *s) {
     return s;
 }
 static NSString *PageTitleOf(UIView *v);
+// The song playing right now (the pill only refreshes when it's showing, so with
+// the player open the album / title went stale and the old video stayed).
+static void RefreshNowPlaying(void) {
+    static CFTimeInterval last;
+    if (CACurrentMediaTime() - last < 0.4) return;
+    last = CACurrentMediaTime();
+    static void (*get)(dispatch_queue_t, void (^)(CFDictionaryRef));
+    if (!get) {
+        void *h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
+        if (h) get = (void (*)(dispatch_queue_t, void (^)(CFDictionaryRef)))dlsym(h, "MRMediaRemoteGetNowPlayingInfo");
+    }
+    if (!get) return;
+    get(dispatch_get_main_queue(), ^(CFDictionaryRef cd) {
+        NSDictionary *d = (__bridge NSDictionary *)cd;
+        NSString *al = d[@"kMRMediaRemoteNowPlayingInfoAlbum"], *ti = d[@"kMRMediaRemoteNowPlayingInfoTitle"];
+        if ([al isKindOfClass:[NSString class]]) gNowAlbum = al;
+        if ([ti isKindOfClass:[NSString class]]) gNowTitle = ti;
+    });
+}
 static void MotionTick(UIWindow *w) {
+    if (PlayerIsUp(w, NULL)) RefreshNowPlaying();
     // 1. On an album page with a motion cover: remember its player.
     UIView *rp = gRowParent;
     static NSString *videoDebug = @"";
@@ -4834,7 +4856,14 @@ static void MotionTick(UIWindow *w) {
         }
     }
     if (byTitle) mp = byTitle;
-    BOOL match = up && art && mp && (byTitle || (gMotionPage && PageHasLabel(gMotionPage, gNowAlbum)));
+    // Song changed: drop the old video at once, then match again.
+    static NSString *lastSong;
+    if (gNowTitle && ![gNowTitle isEqualToString:lastSong]) {
+        lastSong = gNowTitle;
+        [shown removeFromSuperview];
+        if (art) objc_setAssociatedObject(art, &gMotionByAlbum, nil, OBJC_ASSOCIATION_ASSIGN);
+    }
+    BOOL match = up && art && mp && byTitle;
     if (match && objc_getAssociatedObject(art, &gMotionByAlbum) != mp) {
         // A different song's video was showing: swap it.
         [[art viewWithTag:MOTION_TAG] removeFromSuperview];
