@@ -1,4 +1,5 @@
-// LockStar 0.2.1 - made by nano
+// LockStar 0.3.0 - made by nano
+// 0.3.0: all SpringBoard windows scanned, buttons found by their symbols too, floating debug strip.
 // 0.2.1: players found by their back / AirPlay buttons (not class names); Apple Music only.
 // iOS 26 favorite star on the Lock Screen / Dynamic Island now-playing player:
 // it sits left of the back button (mirroring AirPlay on the right), shows if the
@@ -8,6 +9,7 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <substrate.h>
+#import <objc/message.h>
 
 #define DOM CFSTR("com.nano.lockstar")
 #define STAR_TAG 0x4C535452
@@ -141,19 +143,34 @@ static BOOL Showing(UIView *v) {
     for (UIView *p = v; p; p = p.superview) if (p.hidden || p.alpha < 0.02) return NO;
     return v.window != nil;
 }
+// The symbol a button shows (its image, or an image view / layer inside it).
+static NSString *Glyph(UIView *v, int depth) {
+    if ([v isKindOfClass:[UIButton class]] && [(UIButton *)v currentImage]) return [(UIButton *)v currentImage].description.lowercaseString;
+    if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) return ((UIImageView *)v).image.description.lowercaseString;
+    if (depth > 4) return nil;
+    for (UIView *s in v.subviews) { NSString *g = Glyph(s, depth + 1); if (g) return g; }
+    return nil;
+}
 static BOOL IsPrevious(UIView *v) {
     NSString *a = v.accessibilityLabel.lowercaseString ?: @"";
     NSString *i = v.accessibilityIdentifier.lowercaseString ?: @"";
-    return [a containsString:@"previous"] || [a containsString:@"rewind"] || [a isEqualToString:@"back"] || [i containsString:@"previous"] || [i containsString:@"backward"] || [i containsString:@"leftbutton"];
+    NSString *g = Glyph(v, 0) ?: @"";
+    return [a containsString:@"previous"] || [a containsString:@"rewind"] || [a isEqualToString:@"back"] || [i containsString:@"previous"] || [i containsString:@"backward"] || [i containsString:@"leftbutton"] ||
+           [g containsString:@"backward"] || [Cls(v) containsString:@"LeftButton"];
 }
 static BOOL IsRoute(UIView *v) {
     NSString *n = Cls(v), *a = v.accessibilityLabel.lowercaseString ?: @"";
-    return [n containsString:@"Rout"] || [a containsString:@"airplay"] || [a containsString:@"destination"] || [a containsString:@"route"];
+    NSString *g = Glyph(v, 0) ?: @"";
+    return [n containsString:@"Rout"] || [a containsString:@"airplay"] || [a containsString:@"destination"] || [a containsString:@"route"] || [g containsString:@"airplay"];
 }
+static NSMutableOrderedSet *gSeen;
 static void Find(UIView *v, int depth, NSMutableArray *prev, NSMutableArray *route) {
     for (UIView *s in v.subviews) {
         if (s.hidden || s.alpha < 0.02 || s.tag == STAR_TAG || s.tag == DBG_TAG) continue;
         if ([s isKindOfClass:[UIControl class]] || [Cls(s) containsString:@"Button"]) {
+            NSString *cn = Cls(s);
+            if (gSeen.count < 10 && ([cn hasPrefix:@"MRU"] || [cn containsString:@"Transport"] || [cn containsString:@"Media"] || [cn containsString:@"NowPlaying"]))
+                [gSeen addObject:[NSString stringWithFormat:@"%@[%@|%@]", cn, s.accessibilityLabel ?: @"", [Glyph(s, 0) ?: @"" substringToIndex:MIN((NSUInteger)24, (Glyph(s, 0) ?: @"").length)]]];
             if (IsPrevious(s)) [prev addObject:s];
             else if (IsRoute(s)) [route addObject:s];
         }
@@ -212,11 +229,18 @@ static void PlaceStar(UIView *back, UIView *rt) {
 // Dynamic Island, Notification Center) and gives each a star.
 static void Scan(void) {
     NSMutableArray *prev = [NSMutableArray array], *route = [NSMutableArray array];
-    NSMutableArray *wins = [NSMutableArray array];
+    NSMutableOrderedSet *wins = [NSMutableOrderedSet orderedSet];
+    SEL all = NSSelectorFromString(@"allWindowsIncludingInternalWindows:onlyVisibleWindows:");
+    if ([UIWindow respondsToSelector:all]) {
+        NSArray *a = ((NSArray *(*)(id, SEL, BOOL, BOOL))objc_msgSend)([UIWindow class], all, YES, YES);
+        if ([a isKindOfClass:[NSArray class]]) [wins addObjectsFromArray:a];
+    }
     for (UIScene *sc in UIApplication.sharedApplication.connectedScenes)
         if ([sc isKindOfClass:[UIWindowScene class]]) [wins addObjectsFromArray:((UIWindowScene *)sc).windows];
-    if (!wins.count) [wins addObjectsFromArray:UIApplication.sharedApplication.windows];
-    for (UIWindow *w in wins) if (!w.hidden && w.alpha > 0.02) Find(w, 0, prev, route);
+    [wins addObjectsFromArray:UIApplication.sharedApplication.windows];
+    gSeen = [NSMutableOrderedSet orderedSet];
+    int nwin = 0;
+    for (UIWindow *w in wins) if (!w.hidden && w.alpha > 0.02 && w.tag != DBG_TAG) { nwin++; Find(w, 0, prev, route); }
     for (UIView *b in prev) {
         if (!Showing(b)) continue;
         UIView *rt = nil; CGFloat best = 1e9;
@@ -230,6 +254,23 @@ static void Scan(void) {
         @try { PlaceStar(b, rt); } @catch (__unused id e) {}
     }
     for (UIButton *s in [gStars allObjects]) if (!s.window) [s removeFromSuperview];
+    // A floating debug strip at the top of the screen, whatever is showing.
+    static UIWindow *dw;
+    if (!gDebug) { dw.hidden = YES; return; }
+    if (!dw) {
+        UIWindowScene *scene = nil;
+        for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) { scene = (UIWindowScene *)sc; break; }
+        dw = scene ? [[UIWindow alloc] initWithWindowScene:scene] : [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+        dw.tag = DBG_TAG; dw.windowLevel = 10000000; dw.userInteractionEnabled = NO; dw.backgroundColor = UIColor.clearColor;
+        UILabel *l = [UILabel new]; l.tag = 1; l.numberOfLines = 0; l.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
+        l.textColor = UIColor.yellowColor; l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
+        [dw addSubview:l];
+    }
+    dw.frame = UIScreen.mainScreen.bounds; dw.hidden = NO;
+    UILabel *l = (UILabel *)[dw viewWithTag:1];
+    l.text = [NSString stringWithFormat:@" LockStar 0.3.0 | wins=%d prev=%lu route=%lu music=%d fav=%@:%d %@\n %@", nwin, (unsigned long)prev.count, (unsigned long)route.count, MusicIsPlaying(), gFavKey, gFav, gLastCmd, [gSeen.array componentsJoinedByString:@"\n "]];
+    CGSize sz = [l sizeThatFits:CGSizeMake(dw.bounds.size.width - 16, 400)];
+    l.frame = CGRectMake(8, 50, dw.bounds.size.width - 16, sz.height);
 }
 
 #pragma mark - hooks
