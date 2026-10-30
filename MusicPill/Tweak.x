@@ -1,4 +1,7 @@
-// MusicPill 1.0.7 - made by nano
+// MusicPill 1.0.8 - made by nano
+// 1.0.8: top glass is a steady dark disc (no smear while scrolling), ••• icon
+//        itself is moved so the capsule is even, list rows scrolling under the
+//        top no longer get glass / hidden chevrons, artist detection widened.
 // 1.0.7: share button works (it was outside its parent so taps never landed),
 //        back circle and share/••• capsule placed like iOS 26, artist page in
 //        the iOS 26 look (centered name, big white play, favorite star with a
@@ -880,7 +883,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.0.8 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2706,10 +2709,12 @@ static UIView *FloatGlassIn(id owner, UIView *host, UIView *below, const void *k
     UIView *g = objc_getAssociatedObject(owner, key);
     if (!g || g.superview != host) {
         [g removeFromSuperview];
-        UIVisualEffectView *e = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+        // Same look whatever scrolls under it (a blur turned smeary over artwork).
+        UIView *e = [UIView new];
+        e.backgroundColor = [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:0.94];
         e.userInteractionEnabled = NO; e.clipsToBounds = YES;
         e.layer.cornerCurve = kCACornerCurveContinuous;
-        e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
+        e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
         e.tag = FLOATGLASS_TAG;
         g = e;
         objc_setAssociatedObject(owner, key, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2853,12 +2858,19 @@ static void PlaceSharePair(UIView *more) {
     [(UIView *)objc_getAssociatedObject(more, kBackGlass) setHidden:YES];
     StripMusicCircle(more);
     UIView *dots = GlyphIn(more, 0);
-    if (dots && CGAffineTransformIsIdentity(dots.transform)) dots.transform = CGAffineTransformMakeScale(1.3, 1.3);
-    AlignX(more, w.bounds.size.width - TOPMARGIN - 28);
+    CGFloat targetX = w.bounds.size.width - TOPMARGIN - 28;
+    if (dots) {
+        // Music resets its button's transform, so the icon itself is moved (and 30% bigger).
+        CGPoint gc = [dots.superview convertPoint:dots.center toView:nil];
+        CGFloat untrans = gc.x - dots.transform.tx;
+        CGFloat tx = round(targetX - untrans);
+        if (fabs(tx) <= 40 && (fabs(dots.transform.tx - tx) > 0.5 || fabs(dots.transform.a - 1.3) > 0.01))
+            dots.transform = CGAffineTransformMake(1.3, 0, 0, 1.3, tx, 0);
+    }
 
     UIView *g = FloatGlassIn(more, host, more, kPairGlass);
     AttachJelly(more, g);
-    CGPoint c = GlyphCenter(more, host);
+    CGPoint c = dots ? [dots.superview convertPoint:dots.center toView:host] : GlyphCenter(more, host);
     SetGlassFrame(g, CGRectMake(round(c.x + 28 - PAIRW), round(c.y - TOPBTN / 2), PAIRW, TOPBTN));
     g.hidden = more.hidden;
 
@@ -2908,6 +2920,7 @@ static CFTimeInterval gArtistFavLock;
 static void MaskOut(UIView *v) { if (v && !v.layer.mask) v.layer.mask = [CALayer layer]; }
 
 static BOOL HasText(UIView *v, int depth) {
+    if (v.hidden || v.alpha < 0.01) return NO;
     if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) return YES;
     if (depth > 4) return NO;
     for (UIView *s in v.subviews) if (HasText(s, depth + 1)) return YES;
@@ -2918,18 +2931,22 @@ static BOOL InTag(UIView *v, NSInteger tag) {
     return NO;
 }
 // Music's round red play button at the bottom right of the artist photo.
+static NSString *gArtistWhy;
 static BOOL LooksLikeArtistPlay(UIView *b) {
     UIWindow *w = b.window;
+    gArtistWhy = nil;
     if (!w || b.hidden) return NO;
     CGRect f = [b convertRect:b.bounds toView:nil];
     CGFloat W = w.bounds.size.width;
     if (f.size.width < 24 || f.size.width > 72 || f.size.height < 24 || f.size.height > 72) return NO;
     if (CGRectGetMidX(f) < W * 0.6 || CGRectGetMidY(f) < w.safeAreaInsets.top + 100 || CGRectGetMidY(f) > w.bounds.size.height * 0.7) return NO;
-    UIView *g = GlyphIn(b, 0);
+    UIView *g = [b isKindOfClass:[UIImageView class]] ? b : GlyphIn(b, 0);
     if (![g isKindOfClass:[UIImageView class]]) return NO;
     NSString *d = ((UIImageView *)g).image.description.lowercaseString;
     if (![d containsString:@"play"] && ![d containsString:@"pause"]) return NO;
-    if (HasText(b, 0) || InBottomBars(b) || InTag(b, ROW_TAG) || InTag(b, ARTIST_TAG) || InTag(b, CARD_TAG)) return NO;
+    gArtistWhy = [NSString stringWithFormat:@"%@ %.0fx%.0f@%.0f,%.0f", NSStringFromClass([b class]), f.size.width, f.size.height, CGRectGetMidX(f), CGRectGetMidY(f)];
+    if (HasText(b, 0)) { gArtistWhy = [gArtistWhy stringByAppendingString:@" text"]; return NO; }
+    if (InBottomBars(b) || InTag(b, ROW_TAG) || InTag(b, ARTIST_TAG) || InTag(b, CARD_TAG)) { gArtistWhy = [gArtistWhy stringByAppendingString:@" ours/bars"]; return NO; }
     return YES;
 }
 static UILabel *ArtistNameNear(UIView *play) {
@@ -3035,7 +3052,7 @@ static void ArtistTick(UIView *play) {
     if (!play.window) return;
     UILabel *name = gArtistName;
     if (!name || !name.window || ![name isDescendantOfView:play.window]) name = ArtistNameNear(play);
-    if (!name) { gArtistDebug = [NSString stringWithFormat:@"play=%@ (no name)", NSStringFromClass([play class])]; return; }
+    if (!name) { gArtistDebug = [NSString stringWithFormat:@"play=%@ (no name)", gArtistWhy ?: NSStringFromClass([play class])]; return; }
     UIView *container = CommonParent(play, name);
     if (!container) return;
     gArtistPlay = play; gArtistName = name;
@@ -3223,17 +3240,22 @@ static void ArtistScan(UIWindow *w) {
         NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
         int guard = 0;
         UIView *found = nil;
+        NSMutableString *seen = [NSMutableString string];
         while (stack.count && guard++ < 6000 && !found) {
             UIView *v = stack.lastObject; [stack removeLastObject];
             if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || v.tag == COLLAPSE_TAG || v.tag == ARTIST_TAG) continue;
-            if ([v isKindOfClass:[UIControl class]] && LooksLikeArtistPlay(v)) {
+            BOOL tappable = [v isKindOfClass:[UIControl class]] || v.gestureRecognizers.count;
+            BOOL looks = v.bounds.size.width >= 24 && v.bounds.size.width <= 72 && LooksLikeArtistPlay(v);
+            if (looks && !tappable) gArtistWhy = [gArtistWhy stringByAppendingString:@" notap"];
+            if (tappable && looks) {
                 ArtistTick(v);
                 if (gArtistPlay == v) { found = v; break; }
                 continue;
             }
+            if (gArtistWhy && seen.length < 160) { [seen appendFormat:@"[%@] ", gArtistWhy]; gArtistWhy = nil; }
             [stack addObjectsFromArray:v.subviews];
         }
-        if (!found) { if (![gArtistDebug containsString:@"no name"]) gArtistDebug = @"none"; return; }
+        if (!found) { if (![gArtistDebug containsString:@"no name"]) gArtistDebug = [NSString stringWithFormat:@"none %@", seen]; return; }
     }
     UIView *root = gArtistPlay;
     for (UIView *p = root; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]]) { root = p; break; }
@@ -3319,6 +3341,9 @@ static void FloatTick(UIWindow *w) {
             holder = p;
             if ([p isKindOfClass:[UIControl class]]) break;
         }
+        BOOL inList = NO;
+        for (UIView *p = holder; p && p != w; p = p.superview) if ([p isKindOfClass:[UIScrollView class]]) { inList = YES; break; }
+        if (inList) continue;
         NSString *d = iv.image.description.lowercaseString;
         NSString *sym = @"?";
         NSRange r = [d rangeOfString:@"symbol("];
