@@ -1,4 +1,6 @@
-// MusicPill 1.2.3 - made by nano
+// MusicPill 1.2.4 - made by nano
+// 1.2.4: animated cover matched to its album by the header text Music draws
+//         itself (no labels after a reboot meant no match).
 // 1.2.3: animated cover: only the album's own header video is taken (a music
 //         video tile elsewhere was picked before), remembered per album.
 // 1.2.2: an album / artist share button no longer stays behind on Library.
@@ -1199,7 +1201,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -4670,6 +4672,33 @@ static __weak UIView *gMotionPage;
 static NSString *gMotionDebug = @"-";
 static NSMutableString *gVideoSeen;
 static NSString *PageTitleOf(UIView *v);
+// Text a view shows: a label's text, its VoiceOver label, or (for Music's own
+// text-drawing views) the string it keeps inside.
+static NSString *DrawnText(UIView *v) {
+    if ([v isKindOfClass:[UILabel class]]) return ((UILabel *)v).text ?: ((UILabel *)v).attributedText.string;
+    if (v.accessibilityLabel.length) return v.accessibilityLabel;
+    if (![NSStringFromClass([v class]) containsString:@"TextDrawing"]) return nil;
+    for (Class c = [v class]; c && c != [UIView class]; c = class_getSuperclass(c)) {
+        unsigned n = 0;
+        Ivar *iv = class_copyIvarList(c, &n);
+        for (unsigned i = 0; i < n; i++) {
+            const char *enc = ivar_getTypeEncoding(iv[i]);
+            if (!enc || enc[0] != '@') continue;
+            id o = nil;
+            @try { o = object_getIvar(v, iv[i]); } @catch (__unused id e) {}
+            NSString *s = [o isKindOfClass:[NSAttributedString class]] ? ((NSAttributedString *)o).string : ([o isKindOfClass:[NSString class]] ? o : nil);
+            if (s.length) { free(iv); return s; }
+        }
+        free(iv);
+    }
+    for (NSString *k in @[@"attributedText", @"text", @"string"]) {
+        id o = nil;
+        @try { o = [v valueForKey:k]; } @catch (__unused id e) {}
+        if ([o isKindOfClass:[NSAttributedString class]]) return ((NSAttributedString *)o).string;
+        if ([o isKindOfClass:[NSString class]] && [o length]) return o;
+    }
+    return nil;
+}
 static BOOL PageHasLabel(UIView *page, NSString *text) {
     if (!text.length) return NO;
     NSString *pt = PageTitleOf(page);
@@ -4680,7 +4709,7 @@ static BOOL PageHasLabel(UIView *page, NSString *text) {
     int g = 0;
     while (st.count && g++ < 1500) {
         UIView *v = st.lastObject; [st removeLastObject];
-        NSString *l = [v isKindOfClass:[UILabel class]] ? ((UILabel *)v).text : v.accessibilityLabel;
+        NSString *l = DrawnText(v);
         if (l.length) {
             l = l.lowercaseString;
             for (NSString *suf in @[@" - single", @" - ep"]) if ([l hasSuffix:suf]) l = [l substringToIndex:l.length - suf.length];
@@ -4729,13 +4758,25 @@ static void MotionTick(UIWindow *w) {
             }
             if (pick.player) {
                 gMotionPlayer = pick.player; gMotionPage = page;
-                // Remembered per album, so the player finds the right one later.
-                NSString *key = PageTitleOf(rp).lowercaseString;
-                if (key.length) {
-                    if (!gMotionByAlbum) gMotionByAlbum = [NSMapTable strongToWeakObjectsMapTable];
-                    [gMotionByAlbum setObject:pick.player forKey:key];
+                // Remembered per album (every text in the header above the Play row, as
+                // Music draws the title without a label), so the player finds it later.
+                if (!gMotionByAlbum) gMotionByAlbum = [NSMapTable strongToWeakObjectsMapTable];
+                NSMutableArray *keys = [NSMutableArray array];
+                NSString *pt = PageTitleOf(rp);
+                if (pt.length) [keys addObject:pt];
+                NSMutableArray *vs = [NSMutableArray arrayWithObject:page];
+                int gv = 0;
+                while (vs.count && gv++ < 1500 && keys.count < 12) {
+                    UIView *v = vs.lastObject; [vs removeLastObject];
+                    if (v.hidden) continue;
+                    CGRect vf = [v convertRect:v.bounds toView:nil];
+                    if (CGRectGetMinY(vf) > rowTop) continue;
+                    NSString *s = DrawnText(v);
+                    if (s.length > 1 && s.length < 120) { [keys addObject:s]; continue; }
+                    [vs addObjectsFromArray:v.subviews];
                 }
-                [gVideoSeen appendFormat:@"cover '%@'", key];
+                for (NSString *k in keys) [gMotionByAlbum setObject:pick.player forKey:AlbumKey(k)];
+                [gVideoSeen appendFormat:@"cover keys=%@", [keys componentsJoinedByString:@"/"]];
             }
             videoDebug = [gVideoSeen copy];
         }
