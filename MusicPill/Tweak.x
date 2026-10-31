@@ -1,4 +1,5 @@
-// MusicPill 1.2.35 - made by nano
+// MusicPill 1.2.36 - made by nano
+// 1.2.36: holding an artist shows a small iOS 26 card (round photo, name, chevron) with Favorite / Share side by side; favorited artists get a star next to their name in search
 // 1.2.35: minimized pill: tapping or swiping up where the big pill used to be no longer opens the player (only the small pill does)
 // 1.2.34: album color glow updates the Home / Search circles of the minimized pill right away; Album Color Glow and Double-Tap Cover to Favorite are off by default
 // 1.2.33: Album Color Glow (the pill and its circles take a soft tint of the album cover's color) and double-tap the player cover to favorite the song with a star burst
@@ -359,6 +360,20 @@ static UIView *GlyphIn(UIView *v, int depth);
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
+// Artists you favorited (by name), so search can show a star next to them.
+static NSMutableSet *FavArtists(void) {
+    static NSMutableSet *set;
+    if (!set) set = [NSMutableSet setWithArray:[[NSUserDefaults standardUserDefaults] arrayForKey:@"mp.favArtists"] ?: @[]];
+    return set;
+}
+static void SetFavArtist(NSString *name, BOOL fav) {
+    name = [name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!name.length || name.length > 80) return;
+    NSMutableSet *s = FavArtists();
+    if (fav == [s containsObject:name]) return;
+    if (fav) [s addObject:name]; else [s removeObject:name];
+    [[NSUserDefaults standardUserDefaults] setObject:s.allObjects forKey:@"mp.favArtists"];
+}
 static BOOL gAlbumGlow = NO;         // pill + circles tinted with the album cover's color
 static BOOL gDoubleTapFav = NO;      // double-tap the player's artwork to favorite
 static UIColor *gGlowColor;
@@ -812,8 +827,8 @@ static __weak UIView *gMotionTapPage;
 static NSString *MenuKind(UIMenuElement *e) {
     if (![e isKindOfClass:[UIAction class]]) return nil;
     NSString *t = e.title.lowercaseString;
-    if ([t isEqualToString:@"love"] || [t isEqualToString:@"favorite"]) return @"love";
-    if ([t isEqualToString:@"unlove"] || [t isEqualToString:@"undo"] || [t hasPrefix:@"remove from favorites"]) return @"unlove";
+    if ([t isEqualToString:@"love"] || [t isEqualToString:@"favorite"] || [t isEqualToString:@"favorite artist"] || [t isEqualToString:@"add to favorites"]) return @"love";
+    if ([t isEqualToString:@"unlove"] || [t isEqualToString:@"undo"] || [t hasPrefix:@"remove from favorites"] || [t hasPrefix:@"unfavorite"] || [t hasPrefix:@"undo favorite"]) return @"unlove";
     if ([t isEqualToString:@"download"]) return @"download";
     if ([t hasPrefix:@"share song"] || [t hasPrefix:@"share album"] || [t hasPrefix:@"share playlist"] || [t isEqualToString:@"share"] || [t hasPrefix:@"share artist"]) return @"share";
     return nil;
@@ -1293,7 +1308,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.35 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.36 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -4489,6 +4504,7 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
         SetStar(b, gArtistFav, YES);
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
         ShowFavToast(nil, gArtistFav);
+        if (gArtistNameText.length) SetFavArtist(gArtistNameText, gArtistFav);
         return;
     }
     UIView *more = gMoreBtn;
@@ -4502,6 +4518,7 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
     SetStar(b, willBeFav, YES);
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     ShowFavToast(nil, willBeFav);
+    if (gArtistNameText.length) SetFavArtist(gArtistNameText, willBeFav);
 }
 @end
 
@@ -4719,6 +4736,7 @@ static void ArtistTick(UIView *play) {
     if (gArtistFavKnown && CACurrentMediaTime() > gArtistFavLock) SetStar((UIButton *)[ov viewWithTag:4], gArtistFav, NO);
     UIButton *stb = (UIButton *)[ov viewWithTag:4];
     if (stb.imageView && stb.subviews.lastObject != stb.imageView) [stb bringSubviewToFront:stb.imageView];
+    if (gArtistFavKnown && nameText.length) SetFavArtist(nameText, gArtistFav);
     gArtistDebug = [NSString stringWithFormat:@"ok name='%@' side=%@ fav=%d/%d%@", nameText, gSideDebug, gArtistFavKnown, gArtistFav, gAddDebug];
 }
 
@@ -6384,6 +6402,7 @@ static void StartWatchdog(void) {
             @try { AlbumTick(w); } @catch (__unused id e) {}
             @try { NavTick(TopNavBar(w)); } @catch (__unused id e) {}
             @try { FloatTick(w); } @catch (__unused id e) {}
+            @try { FavStarTick(w); } @catch (__unused id e) {}
         }
         // Full player: round queue button (backup for the hook) + debug map.
         UIView *player = nil;
@@ -6400,6 +6419,202 @@ static void StartWatchdog(void) {
         if (gDebug && tb && tick % 4 == 0) { @try { Update(tb); } @catch (__unused id e) {} }
     }];
 }
+
+#pragma mark - artist long-press preview + favorite stars in search
+
+static BOOL MenuHas(NSArray *kids, NSArray *prefixes) {
+    for (UIMenuElement *e in kids) {
+        if ([e isKindOfClass:[UIMenu class]]) { if (MenuHas(((UIMenu *)e).children, prefixes)) return YES; continue; }
+        NSString *t = e.title.lowercaseString ?: @"";
+        for (NSString *p in prefixes) if ([t hasPrefix:p]) return YES;
+    }
+    return NO;
+}
+// An artist's menu: "Create Station", and nothing you'd only do to a song / album.
+static BOOL IsArtistMenu(UIMenu *m) {
+    if (!m) return NO;
+    return MenuHas(m.children, @[@"create station"]) && !MenuHas(m.children, @[@"play next", @"play last", @"add to library", @"add to a playlist", @"add to playlist", @"download", @"delete from library", @"remove"]);
+}
+#define APREV_TAG 0x4D504150
+static NSString *gMenuArtistName;
+// iOS 26 artist preview: a small card, round photo on the left, name and a
+// chevron next to it. Built over Music's own preview (so tapping it still opens
+// the artist), copying the photo and name out of it as they load.
+static void StyleArtistPreview(UIViewController *vc) {
+    UIView *root = vc.view;
+    if (!root || [root viewWithTag:APREV_TAG]) return;
+    CGFloat W = MIN(UIScreen.mainScreen.bounds.size.width - 90, 300), H = 128;
+    vc.preferredContentSize = CGSizeMake(W, H);
+    UIView *card = [[UIView alloc] initWithFrame:root.bounds];
+    card.tag = APREV_TAG;
+    card.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    card.backgroundColor = Dyn(UIColor.whiteColor, [UIColor colorWithRed:0.13 green:0.13 blue:0.14 alpha:1]);
+    UIImageView *photo = [UIImageView new];
+    photo.tag = 1; photo.contentMode = UIViewContentModeScaleAspectFill; photo.clipsToBounds = YES;
+    photo.backgroundColor = Dyn([UIColor colorWithWhite:0 alpha:0.06], [UIColor colorWithWhite:1 alpha:0.08]);
+    [card addSubview:photo];
+    UILabel *name = [UILabel new];
+    name.tag = 2; name.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
+    name.textColor = UIColor.labelColor; name.adjustsFontSizeToFitWidth = YES; name.minimumScaleFactor = 0.7;
+    [card addSubview:name];
+    UIImageView *chev = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]];
+    chev.tag = 3; chev.tintColor = UIColor.secondaryLabelColor; chev.contentMode = UIViewContentModeCenter;
+    [card addSubview:chev];
+    [root addSubview:card];
+    __weak UIViewController *wvc = vc;
+    __weak UIView *wcard = card;
+    __block int n = 0;
+    [NSTimer scheduledTimerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *t) {
+        UIViewController *v = wvc; UIView *c = wcard;
+        if (!v || !c || ++n > 200) { [t invalidate]; return; }
+        @try {
+            UIView *r = v.view;
+            if (!CGSizeEqualToSize(v.preferredContentSize, CGSizeMake(W, H))) v.preferredContentSize = CGSizeMake(W, H);
+            if (r.subviews.lastObject != c) [r bringSubviewToFront:c];
+            c.frame = r.bounds;
+            CGSize S = c.bounds.size;
+            CGFloat d = MIN(S.height - 24, 104);
+            UIImageView *ph = [c viewWithTag:1]; UILabel *nm = [c viewWithTag:2]; UIView *ch = [c viewWithTag:3];
+            ph.frame = CGRectMake(14, (S.height - d) / 2, d, d); ph.layer.cornerRadius = d / 2;
+            ch.frame = CGRectMake(S.width - 36, 0, 24, S.height);
+            nm.frame = CGRectMake(CGRectGetMaxX(ph.frame) + 16, 0, CGRectGetMinX(ch.frame) - CGRectGetMaxX(ph.frame) - 22, S.height);
+            // Copy the photo and the name from Music's preview underneath.
+            UIImage *best = nil; CGFloat area = 0; NSString *txt = nil;
+            NSMutableArray *st = [NSMutableArray arrayWithArray:r.subviews];
+            int g = 0;
+            while (st.count && g++ < 400) {
+                UIView *x = st.lastObject; [st removeLastObject];
+                if (x == c) continue;
+                CGFloat a = x.bounds.size.width * x.bounds.size.height;
+                UIImage *im = [x isKindOfClass:[UIImageView class]] ? ((UIImageView *)x).image : nil;
+                if (!im && x.layer.contents && CFGetTypeID((__bridge CFTypeRef)x.layer.contents) == CGImageGetTypeID())
+                    im = [UIImage imageWithCGImage:(__bridge CGImageRef)x.layer.contents];
+                if (im && a > area && x.bounds.size.width > 60) { area = a; best = im; }
+                NSString *tx = DrawnText(x);
+                if (tx.length && tx.length < 80 && !txt) txt = tx;
+                [st addObjectsFromArray:x.subviews];
+            }
+            if (best && ph.image != best) ph.image = best;
+            if (txt.length && ![nm.text isEqualToString:txt]) { nm.text = txt; gMenuArtistName = txt; }
+        } @catch (__unused id e) {}
+    }];
+}
+%hook UIContextMenuConfiguration
++ (instancetype)configurationWithIdentifier:(id<NSCopying>)identifier previewProvider:(UIContextMenuContentPreviewProvider)previewProvider actionProvider:(UIContextMenuActionProvider)actionProvider {
+    if (!gQueueLook || !previewProvider || !actionProvider) return %orig;
+    UIContextMenuContentPreviewProvider pp = [previewProvider copy];
+    UIContextMenuActionProvider ap = [actionProvider copy];
+    UIContextMenuContentPreviewProvider wrapped = ^UIViewController *{
+        UIViewController *vc = pp();
+        @try {
+            UIMenu *m = ap(@[]);
+            if (vc && IsArtistMenu(m)) {
+                gMenuArtistName = nil;
+                [vc loadViewIfNeeded];
+                StyleArtistPreview(vc);
+                // The menu tells us if this artist is a favorite: remember it for search.
+                UIAction *f = FindKind(m.children, @[@"love", @"unlove"]);
+                if (f) {
+                    BOOL isFav = [MenuKind(f) isEqualToString:@"unlove"];
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        if (gMenuArtistName.length) SetFavArtist(gMenuArtistName, isFav);
+                    });
+                }
+            }
+        } @catch (__unused id e) {}
+        return vc;
+    };
+    UIContextMenuActionProvider wrappedActions = ^UIMenu *(NSArray<UIMenuElement *> *suggested) {
+        UIMenu *m = ap(suggested);
+        @try {
+            if (!IsArtistMenu(m)) return m;
+            // Favorite from this menu: also update the star in search.
+            UIAction *f = FindKind(m.children, @[@"love", @"unlove"]);
+            if (f) {
+                BOOL willFav = ![MenuKind(f) isEqualToString:@"unlove"];
+                UIAction *mine = [UIAction actionWithTitle:f.title image:f.image identifier:nil handler:^(UIAction *a) {
+                    RunAction(f, a);
+                    if (gMenuArtistName.length) SetFavArtist(gMenuArtistName, willFav);
+                    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+                }];
+                mine.attributes = f.attributes;
+                NSMutableArray *kids = [NSMutableArray array];
+                for (UIMenuElement *e in m.children) {
+                    if (e == f) { [kids addObject:mine]; continue; }
+                    if ([e isKindOfClass:[UIMenu class]]) {
+                        UIMenu *sub = (UIMenu *)e;
+                        NSMutableArray *sk = [NSMutableArray array];
+                        for (UIMenuElement *x in sub.children) [sk addObject:x == f ? mine : x];
+                        [kids addObject:[sub menuByReplacingChildren:sk]];
+                        continue;
+                    }
+                    [kids addObject:e];
+                }
+                m = [m menuByReplacingChildren:kids];
+            }
+        } @catch (__unused id e) {}
+        return m;
+    };
+    return %orig(identifier, wrapped, wrappedActions);
+}
+%end
+
+// A star after a favorited artist's name in search results.
+#define FAVSTAR_TAG 0x4D504653
+static void FavStarTick(UIWindow *w) {
+    static CFTimeInterval last;
+    if (CACurrentMediaTime() - last < 0.3) return;
+    last = CACurrentMediaTime();
+    NSSet *favs = FavArtists();
+    NSMutableArray *cells = [NSMutableArray array];
+    NSMutableArray *st = [NSMutableArray arrayWithObject:w];
+    int g = 0;
+    while (st.count && g++ < 4000) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (v.hidden || v.alpha < 0.01) continue;
+        if ([v isKindOfClass:[UICollectionViewCell class]] || [v isKindOfClass:[UITableViewCell class]]) { [cells addObject:v]; continue; }
+        [st addObjectsFromArray:v.subviews];
+    }
+    for (UIView *cell in cells) {
+        UIView *nameView = nil; BOOL isArtist = NO; NSString *nameText = nil;
+        NSMutableArray *cs = [NSMutableArray arrayWithArray:cell.subviews];
+        int gc = 0;
+        while (cs.count && gc++ < 200) {
+            UIView *v = cs.lastObject; [cs removeLastObject];
+            if (v.tag == FAVSTAR_TAG || v.hidden) continue;
+            NSString *t = DrawnText(v);
+            if (t.length) {
+                if ([t isEqualToString:@"Artist"]) isArtist = YES;
+                else if (!nameView && [favs containsObject:t]) { nameView = v; nameText = t; }
+                continue;
+            }
+            [cs addObjectsFromArray:v.subviews];
+        }
+        UIImageView *star = (UIImageView *)[cell viewWithTag:FAVSTAR_TAG];
+        if (!(isArtist && nameView)) { [star removeFromSuperview]; continue; }
+        if (!star) {
+            star = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"star.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold]]];
+            star.tag = FAVSTAR_TAG; star.tintColor = MusicPink(); star.contentMode = UIViewContentModeCenter;
+            star.userInteractionEnabled = NO;
+            [cell addSubview:star];
+            star.alpha = 0; star.transform = CGAffineTransformMakeScale(0.4, 0.4);
+            [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.6 options:0 animations:^{ star.alpha = 1; star.transform = CGAffineTransformIdentity; } completion:nil];
+        }
+        // Right after the name: its text width in the row's font (labels know theirs).
+        CGRect nf = [nameView convertRect:nameView.bounds toView:cell];
+        UIFont *f = [nameView isKindOfClass:[UILabel class]] ? ((UILabel *)nameView).font : [UIFont systemFontOfSize:17];
+        CGFloat tw = MIN(ceil([nameText sizeWithAttributes:@{NSFontAttributeName: f}].width), nf.size.width);
+        CGPoint c = CGPointMake(round(CGRectGetMinX(nf) + tw + 13), round(CGRectGetMidY(nf)));
+        if (!CGPointEqualToPoint(star.center, c)) { star.bounds = CGRectMake(0, 0, 18, 18); star.center = c; }
+        if (cell.subviews.lastObject != star) [cell bringSubviewToFront:star];
+    }
+}
+%hook UICollectionViewCell
+- (void)prepareForReuse { %orig; [[self viewWithTag:FAVSTAR_TAG] removeFromSuperview]; }
+%end
+%hook UITableViewCell
+- (void)prepareForReuse { %orig; [[self viewWithTag:FAVSTAR_TAG] removeFromSuperview]; }
+%end
 
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
