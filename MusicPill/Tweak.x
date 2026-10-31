@@ -1,4 +1,5 @@
-// MusicPill 1.2.44 - made by nano
+// MusicPill 1.2.45 - made by nano
+// 1.2.45: the liquid neck fades out when you let go instead of vanishing
 // 1.2.44: a pressed circle no longer slides over the pill; it stops just short and the liquid neck joins them seamlessly
 // 1.2.43: the liquid neck only fills the space between the circle and the pill (no more darker half circle over them)
 // 1.2.42: pressing a circle next to the minimized pill joins them with a smooth liquid neck (curved in at the middle, iOS 26), following the bounce live
@@ -1330,7 +1331,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.44 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.45 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1385,6 +1386,7 @@ static __weak UIView *gGooCircle;
 static CADisplayLink *gGooLink;
 static UIVisualEffectView *gGooBridge;
 static CFTimeInterval gGooEnd;
+static CGFloat gGooReleaseAlpha;
 // The neck between two circles that are about to merge (metaball): two curves
 // leaving each circle's edge and pinching in toward the middle. nil when apart.
 static UIBezierPath *GooPath(CGFloat r1, CGFloat r2, CGPoint c1, CGPoint c2, CGFloat maxDist) {
@@ -2455,7 +2457,8 @@ static void PlayerStarSync(void);
         [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.38 initialSpringVelocity:0.9 options:o animations:^{
             c.transform = CGAffineTransformIdentity;
         } completion:nil];
-        gGooEnd = CACurrentMediaTime() + 0.9;   // keep following while it springs back
+        gGooEnd = CACurrentMediaTime() + 0.5;   // fade the neck out while it springs back
+        gGooReleaseAlpha = gGooBridge && !gGooBridge.hidden ? gGooBridge.alpha : 0;
     }
 }
 // Liquid connection (iOS 26): while a circle is pressed it swells, and a smooth
@@ -2492,8 +2495,12 @@ static void PlayerStarSync(void);
         BOOL right = CGRectGetMidX(pf) > c1.x;
         CGPoint c2 = CGPointMake(right ? CGRectGetMinX(pf) + r2 : CGRectGetMaxX(pf) - r2, CGRectGetMidY(pf));
         CGFloat press = MAX(0, MIN(1, (cf.size.width / MAX(c.bounds.size.width, 1) - 1) / 0.18));
-        UIBezierPath *path = GooPath(r1, r2, c1, c2, r1 + r2 + 26 * press);
-        if (!path || press < 0.03) { gGooBridge.hidden = YES; return; }
+        BOOL released = gGooEnd > 0;
+        // Let go: the neck stays joined and just fades out over half a second.
+        CGFloat fade = released ? MAX(0, (gGooEnd - CACurrentMediaTime()) / 0.5) : 1;
+        UIBezierPath *path = GooPath(r1, r2, c1, c2, r1 + r2 + 26 * (released ? 1 : press));
+        if (released && !path) { if (gGooBridge) gGooBridge.alpha = gGooReleaseAlpha * fade; return; }   // keep the last shape, fading
+        if (!path || (!released && press < 0.03)) { gGooBridge.hidden = YES; return; }
         UIVisualEffectView *b = gGooBridge;
         if (!b) {
             b = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
@@ -2511,9 +2518,9 @@ static void PlayerStarSync(void);
         CAShapeLayer *m = [b.layer.mask isKindOfClass:[CAShapeLayer class]] ? (CAShapeLayer *)b.layer.mask : nil;
         if (!m) { m = [CAShapeLayer layer]; b.layer.mask = m; }
         m.frame = b.bounds; m.path = path.CGPath;
-        b.alpha = MIN(1, press * 1.6);
+        b.alpha = released ? gGooReleaseAlpha * fade : MIN(1, press * 1.6);
         UIView *cg = [c viewWithTag:1];
-        CGFloat rimA = 0.22 * (1 - MIN(1, press * 1.6));
+        CGFloat rimA = 0.22 * (1 - b.alpha);
         cg.layer.borderColor = [UIColor colorWithWhite:(cg.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? 1 : 0) alpha:(cg.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? rimA : rimA * 0.4)].CGColor;
         [CATransaction commit];
     } @catch (__unused id e) { [self stopGoo]; }
