@@ -1,4 +1,5 @@
-// MusicPill 1.2.24 - made by nano
+// MusicPill 1.2.25 - made by nano
+// 1.2.25: title swipe listens on the whole window (it never got the touch before)
 // 1.2.24: title swipe fixed (the player's own scroll gesture was taking it first)
 // 1.2.23: swipe the song title on the player left for the next song or right for the previous one (the title follows your finger); new setting "Swipe Title to Skip"
 // 1.2.22: Animated Album Covers is off by default (turn it on in MusicPill settings)
@@ -1275,7 +1276,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.24 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.25 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5848,6 +5849,13 @@ static void TitleSkip(BOOL next) {
     self.rows = rows;
     return YES;
 }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)t {
+    if (!gTitleSwipe) return NO;
+    UIWindow *w = g.view.window;
+    if (!w || !PlayerIsUp(w, NULL)) return NO;   // only on the full player
+    gSwipeDebug = [NSString stringWithFormat:@"touch on %@", NSStringFromClass([t.view class])];
+    return YES;
+}
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)o {
     // Music's own pans (closing the player) wait a moment for ours to decide.
     // (Scroll views too: the player's content is a scroll view, whose pan used to
@@ -5903,6 +5911,7 @@ static void TitleSkip(BOOL next) {
 @end
 static void InstallTitleSwipe(UIView *player) {
     static const char kTS = 0;
+    player = player.window;   // the window sees every touch, whatever view the title is in
     if (!player || objc_getAssociatedObject(player, &kTS)) return;
     UIPanGestureRecognizer *g = [[UIPanGestureRecognizer alloc] initWithTarget:[MPTitleSwipe shared] action:@selector(pan:)];
     g.delegate = [MPTitleSwipe shared];
