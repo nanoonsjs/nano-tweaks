@@ -1,4 +1,5 @@
-// MusicPill 1.2.42 - made by nano
+// MusicPill 1.2.43 - made by nano
+// 1.2.43: the liquid neck only fills the space between the circle and the pill (no more darker half circle over them)
 // 1.2.42: pressing a circle next to the minimized pill joins them with a smooth liquid neck (curved in at the middle, iOS 26), following the bounce live
 // 1.2.41: another app playing (YouTube...) no longer shows in the pill, and the pill buttons control Music; squishing a circle into the pill joins them with a liquid glass neck that snaps when you let go
 // 1.2.40: removed the favorite stars in search
@@ -1328,7 +1329,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.42 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.43 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1410,12 +1411,16 @@ static UIBezierPath *GooPath(CGFloat r1, CGFloat r2, CGPoint c1, CGPoint c2, CGF
     CGPoint k3 = CGPointMake(p3.x + h2 * cos(a3 + M_PI_2), p3.y + h2 * sin(a3 + M_PI_2));
     CGPoint k4 = CGPointMake(p4.x + h2 * cos(a4 - M_PI_2), p4.y + h2 * sin(a4 - M_PI_2));
     UIBezierPath *b = [UIBezierPath bezierPath];
+    // Only the neck itself: its ends follow each circle's own edge (the side facing
+    // the other one), so it never lies over the circles (that showed as a darker
+    // half circle). The circles stay whole and the neck joins their edges.
+    CGFloat e2 = a4; while (e2 < a3) e2 += 2 * M_PI;
+    CGFloat e1 = a1; while (e1 < a2) e1 += 2 * M_PI;
     [b moveToPoint:p1];
     [b addCurveToPoint:p3 controlPoint1:k1 controlPoint2:k3];
-    [b addLineToPoint:c2];
-    [b addLineToPoint:p4];
+    [b addArcWithCenter:c2 radius:r2 startAngle:a3 endAngle:e2 clockwise:YES];
     [b addCurveToPoint:p2 controlPoint1:k4 controlPoint2:k2];
-    [b addLineToPoint:c1];
+    [b addArcWithCenter:c1 radius:r1 startAngle:a2 endAngle:e1 clockwise:YES];
     [b closePath];
     return b;
 }
