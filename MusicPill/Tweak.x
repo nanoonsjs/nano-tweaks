@@ -1,4 +1,5 @@
-// MusicPill 1.2.41 - made by nano
+// MusicPill 1.2.42 - made by nano
+// 1.2.42: pressing a circle next to the minimized pill joins them with a smooth liquid neck (curved in at the middle, iOS 26), following the bounce live
 // 1.2.41: another app playing (YouTube...) no longer shows in the pill, and the pill buttons control Music; squishing a circle into the pill joins them with a liquid glass neck that snaps when you let go
 // 1.2.40: removed the favorite stars in search
 // 1.2.39: search stars read rows another way (their text views and spoken descriptions)
@@ -1327,7 +1328,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.41 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.42 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1378,6 +1379,46 @@ static void Update(UITabBar *tb) {
 
 #pragma mark - iOS 26 collapse
 
+static __weak UIView *gGooCircle;
+static CADisplayLink *gGooLink;
+static UIVisualEffectView *gGooBridge;
+static CFTimeInterval gGooEnd;
+// The neck between two circles that are about to merge (metaball): two curves
+// leaving each circle's edge and pinching in toward the middle. nil when apart.
+static UIBezierPath *GooPath(CGFloat r1, CGFloat r2, CGPoint c1, CGPoint c2, CGFloat maxDist) {
+    CGFloat d = hypot(c2.x - c1.x, c2.y - c1.y);
+    if (r1 <= 0 || r2 <= 0 || d > maxDist || d <= fabs(r1 - r2)) return nil;
+    CGFloat v = 0.5, handle = 2.4;
+    CGFloat u1 = 0, u2 = 0;
+    if (d < r1 + r2) {
+        u1 = acos(MAX(-1, MIN(1, (r1 * r1 + d * d - r2 * r2) / (2 * r1 * d))));
+        u2 = acos(MAX(-1, MIN(1, (r2 * r2 + d * d - r1 * r1) / (2 * r2 * d))));
+    }
+    CGFloat ang = atan2(c2.y - c1.y, c2.x - c1.x);
+    CGFloat spread = acos(MAX(-1, MIN(1, (r1 - r2) / d)));
+    CGFloat a1 = ang + u1 + (spread - u1) * v, a2 = ang - u1 - (spread - u1) * v;
+    CGFloat a3 = ang + M_PI - u2 - (M_PI - u2 - spread) * v, a4 = ang - M_PI + u2 + (M_PI - u2 - spread) * v;
+    CGPoint p1 = CGPointMake(c1.x + r1 * cos(a1), c1.y + r1 * sin(a1));
+    CGPoint p2 = CGPointMake(c1.x + r1 * cos(a2), c1.y + r1 * sin(a2));
+    CGPoint p3 = CGPointMake(c2.x + r2 * cos(a3), c2.y + r2 * sin(a3));
+    CGPoint p4 = CGPointMake(c2.x + r2 * cos(a4), c2.y + r2 * sin(a4));
+    CGFloat total = r1 + r2;
+    CGFloat d2 = MIN(v * handle, hypot(p3.x - p1.x, p3.y - p1.y) / total) * MIN(1, d * 2 / total);
+    CGFloat h1 = r1 * d2, h2 = r2 * d2;
+    CGPoint k1 = CGPointMake(p1.x + h1 * cos(a1 - M_PI_2), p1.y + h1 * sin(a1 - M_PI_2));
+    CGPoint k2 = CGPointMake(p2.x + h1 * cos(a2 + M_PI_2), p2.y + h1 * sin(a2 + M_PI_2));
+    CGPoint k3 = CGPointMake(p3.x + h2 * cos(a3 + M_PI_2), p3.y + h2 * sin(a3 + M_PI_2));
+    CGPoint k4 = CGPointMake(p4.x + h2 * cos(a4 - M_PI_2), p4.y + h2 * sin(a4 - M_PI_2));
+    UIBezierPath *b = [UIBezierPath bezierPath];
+    [b moveToPoint:p1];
+    [b addCurveToPoint:p3 controlPoint1:k1 controlPoint2:k3];
+    [b addLineToPoint:c2];
+    [b addLineToPoint:p4];
+    [b addCurveToPoint:p2 controlPoint1:k4 controlPoint2:k2];
+    [b addLineToPoint:c1];
+    [b closePath];
+    return b;
+}
 @interface MPCollapse : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 - (void)tapTab;
@@ -2383,6 +2424,7 @@ static void PlayerStarSync(void);
         [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.8 options:o animations:^{
             c.transform = CGAffineTransformMakeScale(1.18, 1.18);
         } completion:nil];
+        [self startGoo:c];
     } else if (g.state == UIGestureRecognizerStateChanged) {
         CGPoint p = [g locationInView:c];
         UIView *pill = nil;
@@ -2395,63 +2437,65 @@ static void PlayerStarSync(void);
         [UIView animateWithDuration:0.18 delay:0 options:o | UIViewAnimationOptionCurveEaseOut animations:^{
             c.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(ox, oy), sx, sy);
         } completion:nil];
-        [self bridge:c toPill:pill circleOffset:CGPointMake(ox, oy) scale:CGSizeMake(sx, sy)];
+        (void)pill;
     } else if (g.state >= UIGestureRecognizerStateEnded) {
         [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.38 initialSpringVelocity:0.9 options:o animations:^{
             c.transform = CGAffineTransformIdentity;
         } completion:nil];
-        [self snapBridge:c];
+        gGooEnd = CACurrentMediaTime() + 0.9;   // keep following while it springs back
     }
 }
-// Liquid connection: when the stretched circle reaches the pill, a glass neck
-// grows between them (thicker the closer they are), like two drops joining.
-#define BRIDGE_TAG 0x4D504252
-- (void)bridge:(UIView *)c toPill:(UIView *)pill circleOffset:(CGPoint)off scale:(CGSize)sc {
-    UIView *host = c.superview;
-    UIVisualEffectView *b = (UIVisualEffectView *)objc_getAssociatedObject(c, @selector(bridge:toPill:circleOffset:scale:));
-    if (!pill || !host) { [b removeFromSuperview]; return; }
-    CGFloat cw = c.bounds.size.width * sc.width, ch = c.bounds.size.height * sc.height;
-    CGPoint cc = CGPointMake(c.center.x + off.x, c.center.y + off.y);
-    CGRect pf = pill.frame;
-    BOOL right = CGRectGetMidX(pf) > cc.x;
-    CGFloat cEdge = right ? cc.x + cw / 2 : cc.x - cw / 2;
-    CGFloat pEdge = right ? CGRectGetMinX(pf) : CGRectGetMaxX(pf);
-    CGFloat gap = right ? pEdge - cEdge : cEdge - pEdge;
-    CGFloat t = MAX(0, MIN(1, (10 - gap) / 12));   // 0 apart ... 1 squeezed together
-    if (t <= 0) {
-        if (b && b.alpha > 0) [UIView animateWithDuration:0.15 animations:^{ b.alpha = 0; }];
-        return;
+// Liquid connection (iOS 26): while a circle is pressed it swells, and a smooth
+// glass neck (a "metaball" bridge, curved in at the middle) joins it to the pill
+// next to it; let go and the neck thins and lets go as the circle shrinks back.
+// Follows the live animation every frame.
+- (void)startGoo:(UIView *)c {
+    gGooCircle = c; gGooEnd = 0;
+    if (!gGooLink) {
+        gGooLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(gooTick:)];
+        [gGooLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     }
-    if (!b) {
-        b = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
-        b.tag = BRIDGE_TAG; b.userInteractionEnabled = NO; b.clipsToBounds = YES;
-        b.layer.cornerCurve = kCACornerCurveContinuous;
-        b.alpha = 0;
-        objc_setAssociatedObject(c, @selector(bridge:toPill:circleOffset:scale:), b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    if (b.superview != host) [host insertSubview:b atIndex:0];
-    FrostGlass(b, nil);
-    ApplyGlow(b, NO);
-    b.layer.borderWidth = 0;
-    CGFloat neck = MIN(ch, pf.size.height) * (0.42 + 0.4 * t);
-    CGFloat x0 = MIN(cEdge, pEdge) - 14, x1 = MAX(cEdge, pEdge) + 14;
-    CGFloat cy = (cc.y + CGRectGetMidY(pf)) / 2;
-    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{
-        b.frame = CGRectMake(x0, cy - neck / 2, x1 - x0, neck);
-        b.layer.cornerRadius = neck / 2;
-        b.alpha = 1;
-    } completion:nil];
 }
-// Let go: the neck thins out and snaps, each drop springs back on its own.
-- (void)snapBridge:(UIView *)c {
-    UIVisualEffectView *b = (UIVisualEffectView *)objc_getAssociatedObject(c, @selector(bridge:toPill:circleOffset:scale:));
-    if (!b.superview) return;
-    CGRect f = b.frame;
-    [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0.6 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-        b.frame = CGRectMake(CGRectGetMidX(f) - 4, CGRectGetMidY(f) - 1, 8, 2);
-        b.layer.cornerRadius = 1;
-        b.alpha = 0;
-    } completion:^(__unused BOOL d) { [b removeFromSuperview]; }];
+- (void)stopGoo {
+    [gGooLink invalidate]; gGooLink = nil;
+    [gGooBridge removeFromSuperview]; gGooBridge = nil;
+    gGooCircle = nil;
+}
+- (void)gooTick:(CADisplayLink *)link {
+    @try {
+        UIView *c = gGooCircle, *host = c.superview;
+        UIView *pill = nil;
+        for (UIView *v in host.subviews) if ([v isKindOfClass:NSClassFromString(@"MPMiniPill")] && !v.hidden && v.alpha > 0.01) pill = v;
+        if (!c || !pill || (gGooEnd > 0 && CACurrentMediaTime() > gGooEnd)) { [self stopGoo]; return; }
+        CALayer *cl = c.layer.presentationLayer ?: c.layer, *pl = pill.layer.presentationLayer ?: pill.layer;
+        CGRect cf = cl.frame, pf = pl.frame;
+        CGFloat r1 = MIN(cf.size.width, cf.size.height) / 2, r2 = pf.size.height / 2;
+        CGPoint c1 = CGPointMake(CGRectGetMidX(cf), CGRectGetMidY(cf));
+        BOOL right = CGRectGetMidX(pf) > c1.x;
+        CGPoint c2 = CGPointMake(right ? CGRectGetMinX(pf) + r2 : CGRectGetMaxX(pf) - r2, CGRectGetMidY(pf));
+        CGFloat press = MAX(0, MIN(1, (cf.size.width / MAX(c.bounds.size.width, 1) - 1) / 0.18));
+        UIBezierPath *path = GooPath(r1, r2, c1, c2, r1 + r2 + 26 * press);
+        if (!path || press < 0.03) { gGooBridge.hidden = YES; return; }
+        UIVisualEffectView *b = gGooBridge;
+        if (!b) {
+            b = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+            b.userInteractionEnabled = NO;
+            gGooBridge = b;
+        }
+        if (b.superview != host) [host insertSubview:b atIndex:0];
+        FrostGlass(b, nil); ApplyGlow(b, NO);
+        b.layer.borderWidth = 0;
+        CGRect box = CGRectInset(path.bounds, -2, -2);
+        [CATransaction begin]; [CATransaction setDisableActions:YES];
+        b.hidden = NO;
+        b.frame = box;
+        [path applyTransform:CGAffineTransformMakeTranslation(-box.origin.x, -box.origin.y)];
+        CAShapeLayer *m = [b.layer.mask isKindOfClass:[CAShapeLayer class]] ? (CAShapeLayer *)b.layer.mask : nil;
+        if (!m) { m = [CAShapeLayer layer]; b.layer.mask = m; }
+        m.frame = b.bounds; m.path = path.CGPath;
+        b.alpha = MIN(1, press * 1.6);
+        [CATransaction commit];
+    } @catch (__unused id e) { [self stopGoo]; }
 }
 - (void)tapSearch {
     UITabBar *tb = gLastTabBar;
