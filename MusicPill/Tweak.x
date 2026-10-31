@@ -1,4 +1,5 @@
-// MusicPill 1.2.22 - made by nano
+// MusicPill 1.2.23 - made by nano
+// 1.2.23: swipe the song title on the player left for the next song or right for the previous one (the title follows your finger); new setting "Swipe Title to Skip"
 // 1.2.22: Animated Album Covers is off by default (turn it on in MusicPill settings)
 // 1.2.21: no more wrong animated covers: covers are no longer guessed from the album page's song list (it also lists other albums), a tie only happens when you press Play / a song on that same album page while it's on screen. Saved covers are cleared once more.
 // 1.2.20: animated covers made safer and lighter: the cover video pauses when the player is closed or Music is in the background, an expired saved cover is forgotten instead of showing black, text reading never touches freed objects, fewer page scans, and memory is freed on low memory
@@ -345,6 +346,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
+static BOOL gTitleSwipe = YES;   // swipe the player title left / right to skip
 static BOOL gMotionCovers = NO;    // animated album covers in the player (saved per album)
 static NSString *gFloatDebug = @"-";
 static NSString *gNowAlbum;   // album of the song playing (MediaRemote)
@@ -431,6 +433,7 @@ static void LoadPrefs(void) {
     gQueueLook = PrefBool(file, @"queuelook", YES);
     gCollapse = PrefBool(file, @"collapse", YES);
     gMotionCovers = PrefBool(file, @"motioncovers", NO);
+    gTitleSwipe = PrefBool(file, @"titleswipe", YES);
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers"];
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers2"];   // 1.2.19/20's list (some wrong)   // 1.2.18's list (could hold wrong covers)
     // Turned off: forget every saved cover.
@@ -1270,7 +1273,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.22 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.23 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5782,7 +5785,127 @@ static void RefreshSongFav(void) {
 }
 @end
 static NSString *ControlText(UIView *v);
+// Swipe the title / artist left (next song) or right (previous song) on the full
+// player. The text follows your finger, slides out when you let go past the
+// threshold, and the new song's title slides in from the other side.
+static NSArray *TitleRows(void) {
+    UIButton *star = gPlayerStar;
+    NSMutableArray *rows = [NSMutableArray array];
+    CGFloat sy = star.window ? [star convertPoint:CGPointMake(22, 22) toView:nil].y : -1;
+    for (UIView *m in [gMarquees allObjects]) {
+        if (!m.window || m.hidden || m.alpha < 0.01) continue;
+        CGFloat my = [m convertPoint:CGPointMake(0, m.bounds.size.height / 2) toView:nil].y;
+        if (sy < 0 || fabs(my - sy) < 45) [rows addObject:m];
+    }
+    return rows;
+}
+static void SetRowsOffset(NSArray *rows, CGFloat dx, CGFloat alpha) {
+    for (UIView *m in rows) {
+        m.transform = CGAffineTransformMakeTranslation(dx, 0);
+        m.alpha = alpha;
+    }
+}
+static void SkipTrack(BOOL next) {
+    Class C = NSClassFromString(@"MPMusicPlayerController");
+    id mp = [C respondsToSelector:@selector(systemMusicPlayer)] ? [C performSelector:@selector(systemMusicPlayer)] : nil;
+    SEL sel = next ? @selector(skipToNextItem) : @selector(skipToPreviousItem);
+    if ([mp respondsToSelector:sel]) { ((void (*)(id, SEL))objc_msgSend)(mp, sel); return; }
+    // Fallback: the same command the lock screen sends.
+    static Boolean (*send)(int, CFDictionaryRef);
+    if (!send) {
+        void *h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
+        if (h) send = (Boolean (*)(int, CFDictionaryRef))dlsym(h, "MRMediaRemoteSendCommand");
+    }
+    if (send) send(next ? 4 : 5, NULL);
+}
+@interface MPTitleSwipe : NSObject <UIGestureRecognizerDelegate>
+@property (nonatomic, strong) NSArray *rows;
+@property (nonatomic) BOOL busy;
++ (instancetype)shared;
+@end
+@implementation MPTitleSwipe
++ (instancetype)shared { static MPTitleSwipe *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPTitleSwipe new]; }); return t; }
+- (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
+    if (!gTitleSwipe || self.busy || ![g isKindOfClass:[UIPanGestureRecognizer class]]) return NO;
+    CGPoint v = [g velocityInView:g.view];
+    if (fabs(v.x) < fabs(v.y) * 1.2) return NO;   // up / down stays Music's (close the player)
+    NSArray *rows = TitleRows();
+    if (!rows.count) return NO;
+    CGRect box = CGRectNull;
+    for (UIView *m in rows) box = CGRectUnion(box, [m convertRect:m.bounds toView:nil]);
+    UIButton *star = gPlayerStar;
+    CGFloat stopX = star.window && !star.hidden ? [star convertPoint:CGPointZero toView:nil].x - 4 : CGRectGetMaxX(box);
+    box = CGRectMake(MIN(CGRectGetMinX(box), 16), CGRectGetMinY(box) - 12, stopX - MIN(CGRectGetMinX(box), 16), box.size.height + 24);
+    CGPoint p = [g locationInView:nil];
+    // locationInView:nil is in window coords; the start point is a bit behind.
+    CGPoint t = [g translationInView:nil];
+    CGPoint start = CGPointMake(p.x - t.x, p.y - t.y);
+    if (!CGRectContainsPoint(box, start)) return NO;
+    self.rows = rows;
+    return YES;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)o {
+    // Music's own pans (closing the player) wait a moment for ours to decide.
+    return [o isKindOfClass:[UIPanGestureRecognizer class]] && ![o.view isKindOfClass:[UIScrollView class]];
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return NO; }
+- (void)pan:(UIPanGestureRecognizer *)g {
+    NSArray *rows = self.rows;
+    if (!rows.count) return;
+    CGFloat W = g.view.window.bounds.size.width ?: 390;
+    CGFloat dx = [g translationInView:g.view].x;
+    if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
+        for (UIView *m in rows) [m.layer removeAllAnimations];
+        SetRowsOffset(rows, dx, MAX(0.15, 1 - fabs(dx) / (W * 0.7)));
+        return;
+    }
+    CGFloat vx = [g velocityInView:g.view].x;
+    BOOL commit = g.state == UIGestureRecognizerStateEnded && (fabs(dx) > W * 0.22 || (fabs(vx) > 650 && dx * vx > 0));
+    if (!commit) {
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+            SetRowsOffset(rows, 0, 1);
+        } completion:nil];
+        self.rows = nil;
+        return;
+    }
+    BOOL next = dx < 0;
+    self.busy = YES;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    CGFloat out = next ? -W : W;
+    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        SetRowsOffset(rows, out * 0.6, 0);
+    } completion:^(__unused BOOL f) {
+        @try { SkipTrack(next); } @catch (__unused id e) {}
+        // The new song's text comes in from the other side.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            NSArray *now = TitleRows();
+            NSMutableSet *all = [NSMutableSet setWithArray:rows];
+            [all addObjectsFromArray:now];
+            [UIView performWithoutAnimation:^{ SetRowsOffset(all.allObjects, -out * 0.35, 0); }];
+            [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+                SetRowsOffset(all.allObjects, 0, 1);
+            } completion:^(__unused BOOL f2) { self.busy = NO; }];
+            // Never leave the title stuck off-screen.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                for (UIView *m in all) if (m.alpha < 1 || !CGAffineTransformIsIdentity(m.transform)) { m.transform = CGAffineTransformIdentity; m.alpha = 1; }
+                self.busy = NO;
+            });
+        });
+    }];
+    self.rows = nil;
+}
+@end
+static void InstallTitleSwipe(UIView *player) {
+    static const char kTS = 0;
+    if (!player || objc_getAssociatedObject(player, &kTS)) return;
+    UIPanGestureRecognizer *g = [[UIPanGestureRecognizer alloc] initWithTarget:[MPTitleSwipe shared] action:@selector(pan:)];
+    g.delegate = [MPTitleSwipe shared];
+    g.maximumNumberOfTouches = 1;
+    [player addGestureRecognizer:g];
+    objc_setAssociatedObject(player, &kTS, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 static void PlayerExtras(UIView *player, UIWindow *w) {
+    @try { InstallTitleSwipe(player); } @catch (__unused id e) {}
     CGFloat H = w.bounds.size.height;
     UIView *more = nil, *loss = nil; UIButton *artist = nil;
     NSMutableArray *st = [NSMutableArray arrayWithObject:player];
