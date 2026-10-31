@@ -1,4 +1,5 @@
-// MusicPill 1.2.31 - made by nano
+// MusicPill 1.2.32 - made by nano
+// 1.2.32: artist page star has a haptic and shows the "Favorited" capsule; Play Next / Play Last show the same small capsule instead of the big box; capsules are frosted white in light mode
 // 1.2.31: the Home / Search circles next to the minimized pill get the same frosted white glass in light mode
 // 1.2.30: the bottom pill in light mode is frosted white glass with a soft rim and shadow (no more dark glass); album cover on the pill is a bit smaller
 // 1.2.29: fixed Music freezing when opening the queue after a title swipe (skips now use the lock screen commands), and the swipe only listens to touches on the title
@@ -1283,7 +1284,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.31 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.32 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2930,6 +2931,35 @@ static BOOL IsHeaderTitle(NSString *s) {
 // iOS 26 style pop-up: Music's big square HUD is hidden, a small glass capsule
 // with a star and the word shows above the pill instead.
 static void ShowToast(UILabel *label, NSString *icon, NSString *text);
+static void ShowToast(UILabel *label, NSString *icon, NSString *text);
+// Music's big square "Playing Next" / "Playing Last" box (after Play Next / Play
+// Last) becomes our small capsule. Only that box: the queue's own "Playing Next"
+// header is a full-width row, not a square in the middle of the screen.
+static UIColor *MusicPink(void);
+static void ShowQueueToastTry(UILabel *label, BOOL last, int tries);
+static void ShowQueueToast(UILabel *label, BOOL last) { ShowQueueToastTry(label, last, 0); }
+static void ShowQueueToastTry(UILabel *label, BOOL last, int tries) {
+    UIWindow *w = label.window;
+    if (!w) {
+        // The box may not be on screen yet: look again shortly.
+        if (label && tries < 6) {
+            __weak UILabel *weak = label;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.04 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ @try { ShowQueueToastTry(weak, last, tries + 1); } @catch (__unused id e) {} });
+        }
+        return;
+    }
+    UIView *box = nil;
+    for (UIView *p = label.superview; p && p != w; p = p.superview) {
+        CGSize s = p.bounds.size;
+        if (s.width < w.bounds.size.width * 0.9 && s.height < w.bounds.size.height * 0.7) box = p;
+        else break;
+    }
+    CGSize bs = box.bounds.size;
+    if (!box || bs.width < 150 || bs.width > 360 || bs.height < 150 || bs.height > 360 || fabs(bs.width - bs.height) > 90) return;
+    CGFloat cx = CGRectGetMidX([box convertRect:box.bounds toView:w]);
+    if (fabs(cx - w.bounds.size.width / 2) > 40) return;
+    ShowToast(label, last ? @"text.line.last.and.arrowtriangle.forward" : @"text.line.first.and.arrowtriangle.forward", last ? @"Playing Last" : @"Playing Next");
+}
 static void ShowFavToast(UILabel *label, BOOL fav) {
     ShowToast(label, fav ? @"star.fill" : @"star.slash", fav ? @"Favorited" : @"Unfavorited");
 }
@@ -2954,14 +2984,15 @@ static void ShowToast(UILabel *label, NSString *icon, NSString *text) {
     UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
     g.clipsToBounds = YES; g.layer.cornerCurve = kCACornerCurveContinuous;
     [cap addSubview:g];
+    cap.overrideUserInterfaceStyle = w.traitCollection.userInterfaceStyle;
     UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:icon
                                                     withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]];
-    iv.tintColor = UIColor.whiteColor; iv.contentMode = UIViewContentModeCenter;
+    iv.tintColor = [icon hasPrefix:@"star"] ? MusicPink() : GlassIcon(); iv.contentMode = UIViewContentModeCenter;
     [cap addSubview:iv];
     UILabel *l = [UILabel new];
     l.text = text;
     l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-    l.textColor = UIColor.whiteColor;
+    l.textColor = GlassIcon();
     [cap addSubview:l];
     CGFloat lw = ceil([l.text sizeWithAttributes:@{NSFontAttributeName: l.font}].width);
     CGFloat H = 50, W = 22 + 24 + 12 + lw + 26;
@@ -2971,6 +3002,7 @@ static void ShowToast(UILabel *label, NSString *icon, NSString *text) {
     for (UIView *v in host.subviews) if ([v isKindOfClass:NSClassFromString(@"MPMiniPill")] && !v.hidden) bottom = [v convertRect:v.bounds toView:w].origin.y - 14;
     cap.frame = CGRectMake(round((w.bounds.size.width - W) / 2), bottom - H, W, H);
     g.frame = cap.bounds; g.layer.cornerRadius = H / 2;
+    FrostGlass(g, cap);   // frosted white in light mode, dark glass in dark mode
     iv.frame = CGRectMake(22, 0, 24, H);
     l.frame = CGRectMake(22 + 24 + 12, 0, lw, H);
     [w addSubview:cap];
@@ -3014,6 +3046,11 @@ static BOOL InBars(UIView *v) {
 - (void)setText:(NSString *)text {
     NSString *mapped = MapQueueText(text);
     %orig(mapped);
+    if ([text isKindOfClass:[NSString class]] && ([text isEqualToString:@"Playing Next"] || [text isEqualToString:@"Playing Last"])) {
+        __weak UILabel *weak = self;
+        BOOL last = [text isEqualToString:@"Playing Last"];
+        dispatch_async(dispatch_get_main_queue(), ^{ @try { ShowQueueToast(weak, last); } @catch (__unused id e) {} });
+    }
     if (mapped != text && ([mapped isEqualToString:@"Favorited"] || [mapped isEqualToString:@"Unfavorited"])) {
         BOOL fav = [mapped isEqualToString:@"Favorited"];
         __weak UILabel *weak = self;
@@ -4357,6 +4394,8 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
         gArtistFav = !gArtistFav; gArtistFavKnown = YES;
         gArtistFavLock = CACurrentMediaTime() + 1.5;
         SetStar(b, gArtistFav, YES);
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+        ShowFavToast(nil, gArtistFav);
         return;
     }
     UIView *more = gMoreBtn;
@@ -4368,6 +4407,8 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
     gArtistFav = willBeFav; gArtistFavKnown = YES;
     gArtistFavLock = CACurrentMediaTime() + 1.5;
     SetStar(b, willBeFav, YES);
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    ShowFavToast(nil, willBeFav);
 }
 @end
 
