@@ -360,6 +360,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
+static void FavStarTick(UIWindow *w);
 // Artists you favorited (by name), so search can show a star next to them.
 static NSMutableSet *FavArtists(void) {
     static NSMutableSet *set;
