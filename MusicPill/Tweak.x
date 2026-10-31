@@ -5805,7 +5805,7 @@ static void SetRowsOffset(NSArray *rows, CGFloat dx, CGFloat alpha) {
         m.alpha = alpha;
     }
 }
-static void SkipTrack(BOOL next) {
+static void TitleSkip(BOOL next) {
     Class C = NSClassFromString(@"MPMusicPlayerController");
     id mp = [C respondsToSelector:@selector(systemMusicPlayer)] ? [C performSelector:@selector(systemMusicPlayer)] : nil;
     SEL sel = next ? @selector(skipToNextItem) : @selector(skipToPreviousItem);
@@ -5875,7 +5875,7 @@ static void SkipTrack(BOOL next) {
     [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
         SetRowsOffset(rows, out * 0.6, 0);
     } completion:^(__unused BOOL f) {
-        @try { SkipTrack(next); } @catch (__unused id e) {}
+        @try { TitleSkip(next); } @catch (__unused id e) {}
         // The new song's text comes in from the other side.
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             NSArray *now = TitleRows();
