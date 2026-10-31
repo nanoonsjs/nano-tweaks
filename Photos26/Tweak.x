@@ -1,4 +1,6 @@
-// Photos26 2.4.1 - made by nano
+// Photos26 2.4.2 - made by nano
+// 2.4.2: Collections title and + sit on top of their glass; rows inside a
+//        section's own list get the glass cards too.
 // 2.4.1: Albums tab found from its nav bar (cards / glass rows now apply), no
 //        dividers, top bar without its grey background, glass + and title,
 //        "Albums" renamed "Collections".
@@ -1627,7 +1629,11 @@ static void StyleAlbumsBar(UINavigationBar *nb) {
     if (!c) { c = [UIView new]; c.tag = ALBUMS_TOP_TAG; c.userInteractionEnabled = NO; [nb insertSubview:c atIndex:0]; }
     UIView *bg = nil;
     for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"Background"]) bg = s;
-    if (bg) { if (!bg.layer.mask) bg.layer.mask = [CALayer layer]; [nb insertSubview:c aboveSubview:bg]; }
+    if (bg && !bg.layer.mask) bg.layer.mask = [CALayer layer];
+    UIView *content = nil;
+    for (UIView *s in nb.subviews) if (s != c && [NSStringFromClass([s class]) containsString:@"ContentView"]) content = s;
+    if (content) { if ([nb.subviews indexOfObject:c] > [nb.subviews indexOfObject:content]) [nb insertSubview:c belowSubview:content]; }
+    else if (nb.subviews.firstObject != c) [nb sendSubviewToBack:c];
     if (!CGRectEqualToRect(c.frame, nb.bounds)) c.frame = nb.bounds;
     c.hidden = NO;
     // + : glass circle behind it.
@@ -1719,8 +1725,10 @@ static void StyleAlbumsTab(UIWindow *w) {
             rows++;
             continue;
         }
+        // A big cell holding a whole list: its rows are cells of their own.
+        if (cb.size.height >= 80) [st addObjectsFromArray:cv.subviews];
         // Album cards: the big artwork gets iOS 26's round corners.
-        if (big && big.bounds.size.width >= 110 && fabs(big.bounds.size.width - big.bounds.size.height) < big.bounds.size.width * 0.35) {
+        if (big && big.bounds.size.width >= 110 && big.bounds.size.height < 400 && fabs(big.bounds.size.width - big.bounds.size.height) < big.bounds.size.width * 0.35) {
             UIView *clip = big;
             for (UIView *p = big.superview; p && p != v; p = p.superview) if (fabs(p.bounds.size.width - big.bounds.size.width) < 2 && fabs(p.bounds.size.height - big.bounds.size.height) < 2) clip = p;
             if (clip.layer.cornerRadius != 26) { clip.layer.cornerRadius = 26; clip.layer.cornerCurve = kCACornerCurveContinuous; clip.clipsToBounds = YES; }
@@ -1776,7 +1784,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 2.4.1 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n segments: %@\n albums: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gSegDebug, gAlbumsDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 2.4.2 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n segments: %@\n albums: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gSegDebug, gAlbumsDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
