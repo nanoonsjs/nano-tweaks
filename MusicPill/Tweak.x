@@ -1,4 +1,5 @@
-// MusicPill 1.2.25 - made by nano
+// MusicPill 1.2.26 - made by nano
+// 1.2.26: title swipe really gets the touch now (it was checking the wrong window)
 // 1.2.25: title swipe listens on the whole window (it never got the touch before)
 // 1.2.24: title swipe fixed (the player's own scroll gesture was taking it first)
 // 1.2.23: swipe the song title on the player left for the next song or right for the previous one (the title follows your finger); new setting "Swipe Title to Skip"
@@ -1276,7 +1277,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.25 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.26 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5851,7 +5852,8 @@ static void TitleSkip(BOOL next) {
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)t {
     if (!gTitleSwipe) return NO;
-    UIWindow *w = g.view.window;
+    // (The recognizer sits on the window itself, and a window's .window is nil.)
+    UIWindow *w = [g.view isKindOfClass:[UIWindow class]] ? (UIWindow *)g.view : g.view.window;
     if (!w || !PlayerIsUp(w, NULL)) return NO;   // only on the full player
     gSwipeDebug = [NSString stringWithFormat:@"touch on %@", NSStringFromClass([t.view class])];
     return YES;
@@ -5866,7 +5868,7 @@ static void TitleSkip(BOOL next) {
 - (void)pan:(UIPanGestureRecognizer *)g {
     NSArray *rows = self.rows;
     if (!rows.count) return;
-    CGFloat W = g.view.window.bounds.size.width ?: 390;
+    CGFloat W = g.view.bounds.size.width ?: 390;
     CGFloat dx = [g translationInView:g.view].x;
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
         for (UIView *m in rows) [m.layer removeAllAnimations];
