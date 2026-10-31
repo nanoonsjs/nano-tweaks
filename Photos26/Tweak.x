@@ -1,4 +1,7 @@
-// Photos26 2.4.2 - made by nano
+// Photos26 2.5.0 - made by nano
+// 2.5.0: Media Types / Utilities as a two-column grid of small glass cards
+//        (icon + white title), styled right away; Collections title and + now
+//        really sit above their glass.
 // 2.4.2: Collections title and + sit on top of their glass; rows inside a
 //        section's own list get the glass cards too.
 // 2.4.1: Albums tab found from its nav bar (cards / glass rows now apply), no
@@ -1627,14 +1630,30 @@ static void StyleAlbumsBar(UINavigationBar *nb) {
     }
     UIView *c = [nb viewWithTag:ALBUMS_TOP_TAG];
     if (!c) { c = [UIView new]; c.tag = ALBUMS_TOP_TAG; c.userInteractionEnabled = NO; [nb insertSubview:c atIndex:0]; }
+    // Glass frames below are worked out in the bar's space; c is laid over it.
     UIView *bg = nil;
     for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"Background"]) bg = s;
     if (bg && !bg.layer.mask) bg.layer.mask = [CALayer layer];
+    // The glass goes inside the bar's visible content view, under everything in it.
     UIView *content = nil;
-    for (UIView *s in nb.subviews) if (s != c && [NSStringFromClass([s class]) containsString:@"ContentView"]) content = s;
-    if (content) { if ([nb.subviews indexOfObject:c] > [nb.subviews indexOfObject:content]) [nb insertSubview:c belowSubview:content]; }
-    else if (nb.subviews.firstObject != c) [nb sendSubviewToBack:c];
-    if (!CGRectEqualToRect(c.frame, nb.bounds)) c.frame = nb.bounds;
+    {
+        NSMutableArray *q = [NSMutableArray arrayWithArray:nb.subviews];
+        int gq = 0;
+        while (q.count && gq++ < 200 && !content) {
+            UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+            if (v == c) continue;
+            if ([v isKindOfClass:[UILabel class]] && ([((UILabel *)v).text isEqualToString:@"Collections"] || [((UILabel *)v).text isEqualToString:@"Albums"]) && !v.hidden && v.alpha > 0.05) {
+                for (UIView *p = v.superview; p && p != nb; p = p.superview) if (p.superview == nb) { content = p; break; }
+                break;
+            }
+            [q addObjectsFromArray:v.subviews];
+        }
+    }
+    UIView *host = content ?: nb;
+    if (c.superview != host) { [c removeFromSuperview]; [host insertSubview:c atIndex:0]; }
+    else if (host.subviews.firstObject != c) [host sendSubviewToBack:c];
+    CGRect cf = [nb convertRect:nb.bounds toView:host];
+    if (!CGRectEqualToRect(c.frame, cf)) c.frame = cf;
     c.hidden = NO;
     // + : glass circle behind it.
     UIBarButtonItem *plus = it.leftBarButtonItems.firstObject ?: it.rightBarButtonItems.firstObject;
@@ -1645,7 +1664,7 @@ static void StyleAlbumsBar(UINavigationBar *nb) {
         UIView *g = GlyphIn(pv, 0) ?: pv;
         CGRect r = [g convertRect:g.bounds toView:nb];
         CGFloat D = 42;
-        SetFrame(gp, CGRectMake(round(CGRectGetMidX(r) - D / 2), round(CGRectGetMidY(r) - D / 2), D, D));
+        SetFrame(gp, [nb convertRect:CGRectMake(round(CGRectGetMidX(r) - D / 2), round(CGRectGetMidY(r) - D / 2), D, D) toView:c]);
         static char kT;
         if (!objc_getAssociatedObject(pv, &kT)) { objc_setAssociatedObject(pv, &kT, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); pv.tintColor = GIcon(); }
     }
@@ -1664,7 +1683,7 @@ static void StyleAlbumsBar(UINavigationBar *nb) {
     if (title.window) {
         CGRect r = [title convertRect:title.bounds toView:nb];
         CGFloat w = [title sizeThatFits:CGSizeMake(400, 40)].width + 44, h = 40;
-        SetFrame(gt, CGRectMake(round(CGRectGetMidX(r) - w / 2), round(CGRectGetMidY(r) - h / 2), round(w), h));
+        SetFrame(gt, [nb convertRect:CGRectMake(round(CGRectGetMidX(r) - w / 2), round(CGRectGetMidY(r) - h / 2), round(w), h) toView:c]);
     }
 }
 // Tab bar: "Albums" -> "Collections".
@@ -1673,6 +1692,28 @@ static void RenameAlbumsTab(UIWindow *w) {
     UITabBarController *tbc = [root isKindOfClass:[UITabBarController class]] ? (UITabBarController *)root : nil;
     if (!tbc) for (UIViewController *v in root.childViewControllers) if ([v isKindOfClass:[UITabBarController class]]) tbc = (UITabBarController *)v;
     for (UITabBarItem *ti in tbc.tabBar.items) if ([ti.title isEqualToString:@"Albums"]) ti.title = @"Collections";
+}
+// Media Types / Utilities list -> iOS 26 two-column grid of small cards.
+static NSString *gGridDebug2 = @"-";
+static void MakeTwoColumns(UICollectionView *list) {
+    static char kGrid;
+    if (!list || objc_getAssociatedObject(list, &kGrid)) return;
+    objc_setAssociatedObject(list, &kGrid, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSCollectionLayoutSize *isz = [NSCollectionLayoutSize sizeWithWidthDimension:[NSCollectionLayoutDimension fractionalWidthDimension:0.5] heightDimension:[NSCollectionLayoutDimension absoluteDimension:48]];
+    NSCollectionLayoutItem *item = [NSCollectionLayoutItem itemWithLayoutSize:isz];
+    item.contentInsets = NSDirectionalEdgeInsetsMake(0, 5, 0, 5);
+    NSCollectionLayoutSize *gsz = [NSCollectionLayoutSize sizeWithWidthDimension:[NSCollectionLayoutDimension fractionalWidthDimension:1] heightDimension:[NSCollectionLayoutDimension absoluteDimension:48]];
+    NSCollectionLayoutGroup *grp = [NSCollectionLayoutGroup horizontalGroupWithLayoutSize:gsz subitems:@[item, item]];
+    NSCollectionLayoutSection *sec = [NSCollectionLayoutSection sectionWithGroup:grp];
+    sec.interGroupSpacing = 10;
+    sec.contentInsets = NSDirectionalEdgeInsetsMake(4, 11, 4, 11);
+    UICollectionViewCompositionalLayout *lay = [[UICollectionViewCompositionalLayout alloc] initWithSection:sec];
+    [list setCollectionViewLayout:lay animated:NO];
+    [list layoutIfNeeded];
+    // The page around it shrinks to the new height.
+    for (UIView *p = list.superview; p; p = p.superview)
+        if ([p isKindOfClass:[UICollectionView class]]) { [((UICollectionView *)p).collectionViewLayout invalidateLayout]; break; }
+    gGridDebug2 = [NSString stringWithFormat:@"grid %.0f", list.contentSize.height];
 }
 static void StyleAlbumsTab(UIWindow *w) {
     if (!w || !gEnabled || !gTopBar) return;
@@ -1685,8 +1726,9 @@ static void StyleAlbumsTab(UIWindow *w) {
     BOOL dark = page.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
     NSMutableArray *st = [NSMutableArray arrayWithObject:page];
     int g = 0;
-    while (st.count && g++ < 4000) {
+    while (st.count && g++ < 20000) {
         UIView *v = st.lastObject; [st removeLastObject];
+        if (v.hidden || [v isKindOfClass:[PGGlass class]]) continue;
         if (![v isKindOfClass:[UICollectionViewCell class]] && ![v isKindOfClass:[UITableViewCell class]]) { [st addObjectsFromArray:v.subviews]; continue; }
         UIView *cv = [v isKindOfClass:[UICollectionViewCell class]] ? ((UICollectionViewCell *)v).contentView : ((UITableViewCell *)v).contentView;
         // Media Types / Utilities rows: a glass card each.
@@ -1714,8 +1756,34 @@ static void StyleAlbumsTab(UIWindow *w) {
                     if ([c respondsToSelector:@selector(setBackgroundConfiguration:)]) ((UICollectionViewListCell *)c).backgroundConfiguration = [UIBackgroundConfiguration clearConfiguration];
                 } else { ((UITableViewCell *)v).backgroundColor = UIColor.clearColor; }
             }
-            CGRect gf = CGRectInset(cb, 16, 4);
-            if (!CGRectEqualToRect(gl.frame, gf)) { gl.frame = gf; gl.layer.cornerRadius = 16; [gl setNeedsLayout]; }
+            if ([v.superview isKindOfClass:[UICollectionView class]]) MakeTwoColumns((UICollectionView *)v.superview);
+            BOOL grid = cb.size.width < w.bounds.size.width * 0.7;
+            CGRect gf = grid ? cb : CGRectInset(cb, 16, 4);
+            if (!CGRectEqualToRect(gl.frame, gf)) { gl.frame = gf; gl.layer.cornerRadius = 14; [gl setNeedsLayout]; }
+            // iOS 26 card: just icon + title, white text; counts, locks and arrows go.
+            if (grid) {
+                CGFloat tx = [title convertPoint:CGPointZero toView:v].x;
+                NSMutableArray *s3 = [NSMutableArray arrayWithObject:v];
+                int g3 = 0;
+                while (s3.count && g3++ < 120) {
+                    UIView *x = s3.lastObject; [s3 removeLastObject];
+                    if (x == gl) continue;
+                    if (x == title) {
+                        UIColor *tc = UIColor.labelColor;
+                        if (title.textColor != tc) title.textColor = tc;
+                        if (title.font.pointSize != 17) title.font = [UIFont systemFontOfSize:17];
+                        continue;
+                    }
+                    CGFloat xx = [x convertPoint:CGPointZero toView:v].x;
+                    if (([x isKindOfClass:[UILabel class]] || [x isKindOfClass:[UIImageView class]]) && xx > tx + 20 && x.bounds.size.width < 120) { if (!x.hidden) x.hidden = YES; continue; }
+                    if ([x isKindOfClass:[UIImageView class]] && xx < tx) {
+                        static char kIc;
+                        if (!objc_getAssociatedObject(x, &kIc)) { objc_setAssociatedObject(x, &kIc, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); x.tintColor = UIColor.labelColor; }
+                        continue;
+                    }
+                    [s3 addObjectsFromArray:x.subviews];
+                }
+            }
             if (v.subviews.firstObject != gl) [v sendSubviewToBack:gl];
             // Separators between rows go (each row is its own card now).
             for (UIView *x in v.subviews) if (x != gl && x.bounds.size.height <= 1.0 && x.bounds.size.width > 100) x.hidden = YES;
@@ -1737,7 +1805,7 @@ static void StyleAlbumsTab(UIWindow *w) {
         }
         (void)dark;
     }
-    gAlbumsDebug = [NSString stringWithFormat:@"rows=%d cards=%d page=%@", rows, cards, NSStringFromClass([page class])];
+    gAlbumsDebug = [NSString stringWithFormat:@"rows=%d cards=%d %@ page=%@", rows, cards, gGridDebug2, NSStringFromClass([page class])];
 }
 
 static void StyleGridTop(UIWindow *w) {
@@ -1784,7 +1852,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 2.4.2 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n segments: %@\n albums: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gSegDebug, gAlbumsDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 2.5.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n segments: %@\n albums: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gSegDebug, gAlbumsDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
