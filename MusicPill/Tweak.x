@@ -1,4 +1,5 @@
-// MusicPill 1.2.43 - made by nano
+// MusicPill 1.2.44 - made by nano
+// 1.2.44: a pressed circle no longer slides over the pill; it stops just short and the liquid neck joins them seamlessly
 // 1.2.43: the liquid neck only fills the space between the circle and the pill (no more darker half circle over them)
 // 1.2.42: pressing a circle next to the minimized pill joins them with a smooth liquid neck (curved in at the middle, iOS 26), following the bounce live
 // 1.2.41: another app playing (YouTube...) no longer shows in the pill, and the pill buttons control Music; squishing a circle into the pill joins them with a liquid glass neck that snaps when you let go
@@ -1329,7 +1330,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.43 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.44 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2437,8 +2438,15 @@ static void PlayerStarSync(void);
         // Toward the pill it can be pulled further, so the two glasses can touch.
         CGFloat dirToPill = pill ? (CGRectGetMidX(pill.frame) > c.center.x ? 1 : -1) : 0;
         CGFloat rx = tanh((p.x - c.bounds.size.width / 2) / 40);
-        CGFloat ox = rx * ((rx * dirToPill > 0) ? 16 : 8), oy = tanh((p.y - c.bounds.size.height / 2) / 40) * 8;
+        CGFloat ox = rx * 8, oy = tanh((p.y - c.bounds.size.height / 2) / 40) * 8;
         CGFloat sx = 1.18 + fabs(ox) * 0.012 - fabs(oy) * 0.006, sy = 1.18 + fabs(oy) * 0.012 - fabs(ox) * 0.006;
+        // Never over the pill: it stops a few points short, and the liquid neck
+        // joins the two (overlapping showed the circle's whole edge on the pill).
+        if (pill && dirToPill != 0) {
+            CGFloat half = c.bounds.size.width * sx / 2, minGap = 5;
+            if (dirToPill > 0) ox = MIN(ox, CGRectGetMinX(pill.frame) - minGap - half - c.center.x);
+            else ox = MAX(ox, CGRectGetMaxX(pill.frame) + minGap + half - c.center.x);
+        }
         [UIView animateWithDuration:0.18 delay:0 options:o | UIViewAnimationOptionCurveEaseOut animations:^{
             c.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(ox, oy), sx, sy);
         } completion:nil];
@@ -2462,6 +2470,11 @@ static void PlayerStarSync(void);
     }
 }
 - (void)stopGoo {
+    UIView *gc = [gGooCircle viewWithTag:1];
+    if (gc) {
+        BOOL dark = gc.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+        gc.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.2] : [UIColor colorWithWhite:0 alpha:0.08]).CGColor;
+    }
     [gGooLink invalidate]; gGooLink = nil;
     [gGooBridge removeFromSuperview]; gGooBridge = nil;
     gGooCircle = nil;
@@ -2499,6 +2512,9 @@ static void PlayerStarSync(void);
         if (!m) { m = [CAShapeLayer layer]; b.layer.mask = m; }
         m.frame = b.bounds; m.path = path.CGPath;
         b.alpha = MIN(1, press * 1.6);
+        UIView *cg = [c viewWithTag:1];
+        CGFloat rimA = 0.22 * (1 - MIN(1, press * 1.6));
+        cg.layer.borderColor = [UIColor colorWithWhite:(cg.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? 1 : 0) alpha:(cg.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? rimA : rimA * 0.4)].CGColor;
         [CATransaction commit];
     } @catch (__unused id e) { [self stopGoo]; }
 }
