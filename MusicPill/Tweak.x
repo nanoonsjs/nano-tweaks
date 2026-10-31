@@ -1,4 +1,5 @@
-// MusicPill 1.2.23 - made by nano
+// MusicPill 1.2.24 - made by nano
+// 1.2.24: title swipe fixed (the player's own scroll gesture was taking it first)
 // 1.2.23: swipe the song title on the player left for the next song or right for the previous one (the title follows your finger); new setting "Swipe Title to Skip"
 // 1.2.22: Animated Album Covers is off by default (turn it on in MusicPill settings)
 // 1.2.21: no more wrong animated covers: covers are no longer guessed from the album page's song list (it also lists other albums), a tie only happens when you press Play / a song on that same album page while it's on screen. Saved covers are cleared once more.
@@ -346,6 +347,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
+static NSString *gSwipeDebug = @"-";
 static BOOL gTitleSwipe = YES;   // swipe the player title left / right to skip
 static BOOL gMotionCovers = NO;    // animated album covers in the player (saved per album)
 static NSString *gFloatDebug = @"-";
@@ -1273,7 +1275,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.23 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.24 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5654,7 +5656,7 @@ static void PlayerDebug(UIView *player, UIWindow *w) {
     }
     NSMutableArray *lines = [NSMutableArray array];
     MapPlayer(player, w, 0, lines);
-    NSString *text = [NSString stringWithFormat:@" MusicPill player map (open the queue, screenshot this)\n motion: %@\n queue: %@\n %@", gMotionDebug, gQueueDebug, [lines componentsJoinedByString:@"\n "]];
+    NSString *text = [NSString stringWithFormat:@" MusicPill player map (open the queue, screenshot this)\n motion: %@\n swipe: %@\n queue: %@\n %@", gMotionDebug, gSwipeDebug, gQueueDebug, [lines componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 16;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -5826,11 +5828,12 @@ static void TitleSkip(BOOL next) {
 @implementation MPTitleSwipe
 + (instancetype)shared { static MPTitleSwipe *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPTitleSwipe new]; }); return t; }
 - (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
-    if (!gTitleSwipe || self.busy || ![g isKindOfClass:[UIPanGestureRecognizer class]]) return NO;
+    if (!gTitleSwipe || self.busy || ![g isKindOfClass:[UIPanGestureRecognizer class]]) { gSwipeDebug = @"off/busy"; return NO; }
     CGPoint v = [g velocityInView:g.view];
-    if (fabs(v.x) < fabs(v.y) * 1.2) return NO;   // up / down stays Music's (close the player)
+    CGPoint t0 = [g translationInView:g.view];
+    if (fabs(v.x) + fabs(t0.x) < (fabs(v.y) + fabs(t0.y)) * 1.2) { gSwipeDebug = [NSString stringWithFormat:@"vertical v=%.0f,%.0f", v.x, v.y]; return NO; }   // up / down stays Music's (close the player)
     NSArray *rows = TitleRows();
-    if (!rows.count) return NO;
+    if (!rows.count) { gSwipeDebug = [NSString stringWithFormat:@"no rows (marquees=%lu)", (unsigned long)gMarquees.count]; return NO; }
     CGRect box = CGRectNull;
     for (UIView *m in rows) box = CGRectUnion(box, [m convertRect:m.bounds toView:nil]);
     UIButton *star = gPlayerStar;
@@ -5840,13 +5843,16 @@ static void TitleSkip(BOOL next) {
     // locationInView:nil is in window coords; the start point is a bit behind.
     CGPoint t = [g translationInView:nil];
     CGPoint start = CGPointMake(p.x - t.x, p.y - t.y);
-    if (!CGRectContainsPoint(box, start)) return NO;
+    if (!CGRectContainsPoint(box, start)) { gSwipeDebug = [NSString stringWithFormat:@"outside %.0f,%.0f box=%.0f,%.0f %.0fx%.0f", start.x, start.y, box.origin.x, box.origin.y, box.size.width, box.size.height]; return NO; }
+    gSwipeDebug = [NSString stringWithFormat:@"began rows=%lu", (unsigned long)rows.count];
     self.rows = rows;
     return YES;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)o {
     // Music's own pans (closing the player) wait a moment for ours to decide.
-    return [o isKindOfClass:[UIPanGestureRecognizer class]] && ![o.view isKindOfClass:[UIScrollView class]];
+    // (Scroll views too: the player's content is a scroll view, whose pan used to
+    // grab the swipe first. Ours gives up at once outside the title.)
+    return [o isKindOfClass:[UIPanGestureRecognizer class]] || [o isKindOfClass:[UISwipeGestureRecognizer class]];
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return NO; }
 - (void)pan:(UIPanGestureRecognizer *)g {
@@ -5901,8 +5907,10 @@ static void InstallTitleSwipe(UIView *player) {
     UIPanGestureRecognizer *g = [[UIPanGestureRecognizer alloc] initWithTarget:[MPTitleSwipe shared] action:@selector(pan:)];
     g.delegate = [MPTitleSwipe shared];
     g.maximumNumberOfTouches = 1;
+    g.cancelsTouchesInView = YES;
     [player addGestureRecognizer:g];
     objc_setAssociatedObject(player, &kTS, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    gSwipeDebug = @"installed";
 }
 static void PlayerExtras(UIView *player, UIWindow *w) {
     @try { InstallTitleSwipe(player); } @catch (__unused id e) {}
