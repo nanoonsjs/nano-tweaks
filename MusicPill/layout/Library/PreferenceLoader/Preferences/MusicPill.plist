@@ -27,6 +27,18 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Plays an album's animated cover in the player. Once you open an album with an animated cover and play it, the cover is saved, so it keeps playing every time after. Turning this off deletes the saved covers.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Animated Album Covers</string>
+			<key>key</key><string>motioncovers</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.musicpill</string>
+			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
 			<key>footerText</key><string>Changes should apply right away. If not, close Music from the app switcher and reopen it.</string>
 		</dict>
 		<dict>
