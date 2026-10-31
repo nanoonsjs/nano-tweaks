@@ -1,4 +1,5 @@
-// MusicPill 1.2.38 - made by nano
+// MusicPill 1.2.39 - made by nano
+// 1.2.39: search stars read rows another way (their text views and spoken descriptions)
 // 1.2.38: the pill says "Not Playing" when Music opens until something plays; search stars read the rows properly
 // 1.2.37: favorite stars in search sit in the left margin (iOS 26) and also mark favorited songs; better row reading
 // 1.2.36: holding an artist shows a small iOS 26 card (round photo, name, chevron) with Favorite / Share side by side; favorited artists get a star next to their name in search
@@ -1324,7 +1325,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.38 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n favs: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.39 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n favs: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gFavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -6610,38 +6611,85 @@ static void FavStarTick(UIWindow *w) {
     NSString *sample = @"";
     for (UIView *cell in cells) {
         // The row's texts with their heights: the name / title on top, then
-        // "Artist" or "Song · Who" under it. Only real text views (labels and
-        // Music's text drawing views), not containers.
+        // "Artist" or "Song · Who" under it. Search rows draw their text in views
+        // whose names vary, so: labels, any "Text..." view (read like Music's text
+        // drawing views), and text layers.
         NSMutableArray *texts = [NSMutableArray array];
         NSMutableArray *cs = [NSMutableArray arrayWithArray:cell.subviews];
+        NSMutableArray *classes = [NSMutableArray array];
         int gc = 0;
         while (cs.count && gc++ < 300) {
             UIView *v = cs.lastObject; [cs removeLastObject];
             if (v.tag == FAVSTAR_TAG || v.hidden || v.alpha < 0.01) continue;
+            NSString *cn = NSStringFromClass([v class]);
             NSString *t = nil;
             if ([v isKindOfClass:[UILabel class]]) t = ((UILabel *)v).text;
-            else if ([NSStringFromClass([v class]) containsString:@"TextDrawing"]) t = DrawnText(v);
-            if (t.length) { [texts addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:cell].y)}]; continue; }
+            else if ([cn containsString:@"Text"] || [cn containsString:@"Label"]) {
+                t = DrawnText(v);
+                if (!t.length) {
+                    for (Class c = [v class]; c && c != [UIView class] && !t.length; c = class_getSuperclass(c)) {
+                        unsigned n = 0; Ivar *iv = class_copyIvarList(c, &n);
+                        for (unsigned i = 0; i < n && !t.length; i++) {
+                            const char *enc = ivar_getTypeEncoding(iv[i]), *nm = ivar_getName(iv[i]);
+                            if (!enc || enc[0] != '@' || !nm) continue;
+                            NSString *ln = [@(nm) lowercaseString];
+                            if ([ln containsString:@"delegate"] || [ln containsString:@"weak"] || [ln containsString:@"parent"]) continue;
+                            id o = nil; @try { o = object_getIvar(v, iv[i]); } @catch (__unused id e) {}
+                            if ([o isKindOfClass:[NSAttributedString class]]) t = ((NSAttributedString *)o).string;
+                            else if ([o isKindOfClass:[NSString class]]) t = o;
+                        }
+                        free(iv);
+                    }
+                }
+            }
+            if (!t.length) for (CALayer *l in v.layer.sublayers) if ([l isKindOfClass:[CATextLayer class]]) {
+                id str = ((CATextLayer *)l).string;
+                t = [str isKindOfClass:[NSAttributedString class]] ? ((NSAttributedString *)str).string : ([str isKindOfClass:[NSString class]] ? str : nil);
+                if (t.length) break;
+            }
+            if (t.length && t.length > 1) { [texts addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:cell].y)}]; continue; }
+            if (!v.subviews.count && classes.count < 6) [classes addObject:cn];
             [cs addObjectsFromArray:v.subviews];
         }
         [texts sortUsingComparator:^NSComparisonResult(NSDictionary *x, NSDictionary *y2) { return [x[@"y"] compare:y2[@"y"]]; }];
+        NSString *name = nil, *sub = nil, *who = nil;
+        if (texts.count >= 2) { name = texts[0][@"t"]; sub = texts[1][@"t"]; }
+        // Or the row's spoken description: "Never Lose Me, Song, Flo Milli" / "Che, Artist".
+        if (!name) {
+            NSString *ax = cell.accessibilityLabel.length ? cell.accessibilityLabel : nil;
+            if (!ax.length) for (UIView *x in cell.subviews) if (x.accessibilityLabel.length > 3) { ax = x.accessibilityLabel; break; }
+            NSArray *parts = [ax componentsSeparatedByString:@", "];
+            for (NSUInteger i = 1; i < parts.count; i++) {
+                NSString *kind = parts[i];
+                if ([kind isEqualToString:@"Artist"] || [kind isEqualToString:@"Song"]) {
+                    name = [[parts subarrayWithRange:NSMakeRange(0, i)] componentsJoinedByString:@", "];
+                    sub = kind;
+                    NSMutableArray *rest = [NSMutableArray array];
+                    for (NSUInteger j = i + 1; j < parts.count; j++) if (![parts[j] isEqualToString:@"Explicit"]) [rest addObject:parts[j]];
+                    who = [rest componentsJoinedByString:@", "];
+                    break;
+                }
+            }
+            if (ax.length && !texts.count) [texts addObject:@{@"t": ax, @"y": @0}];
+        }
         BOOL fav = NO, known = NO;
-        if (texts.count >= 2) {
-            NSString *name = texts[0][@"t"], *sub = texts[1][@"t"];
+        if (name && sub) {
             NSString *subL = sub.lowercaseString;
             if ([subL isEqualToString:@"artist"]) { known = YES; fav = [favs containsObject:name]; }
             else if ([subL hasPrefix:@"song"]) {
                 known = YES;
-                NSRange dot = [sub rangeOfString:@"·"];
-                NSString *who = dot.location != NSNotFound ? [[sub substringFromIndex:dot.location + 1] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]
-                                                           : (texts.count >= 3 ? texts[2][@"t"] : @"");
+                if (!who) {
+                    NSRange dot = [sub rangeOfString:@"·"];
+                    who = dot.location != NSNotFound ? [[sub substringFromIndex:dot.location + 1] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]
+                                                     : (texts.count >= 3 ? texts[2][@"t"] : @"");
+                }
                 fav = [favs containsObject:SongKey(name, who)];
             }
         }
-        if (!sample.length && texts.count) {
+        if (!sample.length) {
             NSMutableArray *ts = [NSMutableArray array];
             for (NSDictionary *o in texts) [ts addObject:o[@"t"]];
-            sample = [ts componentsJoinedByString:@"/"];
+            sample = [NSString stringWithFormat:@"%@ [%@]", [ts componentsJoinedByString:@"/"], [classes componentsJoinedByString:@","]];
         }
         if (known) rows++;
         UIImageView *star = (UIImageView *)[cell viewWithTag:FAVSTAR_TAG];
@@ -6662,7 +6710,7 @@ static void FavStarTick(UIWindow *w) {
         if (!CGPointEqualToPoint(star.center, c)) { star.bounds = CGRectMake(0, 0, 16, 16); star.center = c; }
         if (cell.subviews.lastObject != star) [cell bringSubviewToFront:star];
     }
-    gFavDebug = [NSString stringWithFormat:@"saved=%lu cells=%lu rows=%d starred=%d e.g. %@", (unsigned long)favs.count, (unsigned long)cells.count, rows, starred, sample.length > 60 ? [sample substringToIndex:60] : sample];
+    gFavDebug = [NSString stringWithFormat:@"saved=%lu cells=%lu rows=%d starred=%d e.g. %@", (unsigned long)favs.count, (unsigned long)cells.count, rows, starred, sample.length > 160 ? [sample substringToIndex:160] : sample];
 }
 %hook UICollectionViewCell
 - (void)prepareForReuse { %orig; [[self viewWithTag:FAVSTAR_TAG] removeFromSuperview]; }
