@@ -1,4 +1,5 @@
-// MusicPill 1.2.16 - made by nano
+// MusicPill 1.2.17 - made by nano
+// 1.2.17: animated album covers play in the player again (the album title is read better, and hitting Play on an album page ties its cover to that song)
 // 1.2.16: dark mode switch titles stay (the title segments were being hidden as
 //         if they were backgrounds).
 // 1.2.15: Library title always shows (switch laid out again after narrowing),
@@ -4860,11 +4861,51 @@ static BOOL PageHasLabel(UIView *page, NSString *text) {
 }
 static NSMapTable *gMotionByAlbum;   // album title -> its cover video player
 static NSMapTable *gMotionTexts;     // cover video player -> every text on its album page
+// Loose key: lowercase, no " - Single"/" - EP", no "(feat. ...)" / "[...]",
+// letters and digits only, so the page text and the now-playing info line up.
 static NSString *AlbumKey(NSString *s) {
-    s = s.lowercaseString;
+    s = s.lowercaseString ?: @"";
     for (NSString *suf in @[@" - single", @" - ep"]) if ([s hasSuffix:suf]) s = [s substringToIndex:s.length - suf.length];
-    return s;
+    NSMutableString *o = [NSMutableString string];
+    int depth = 0;
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        if (c == '(' || c == '[') { depth++; continue; }
+        if (c == ')' || c == ']') { if (depth) depth--; continue; }
+        if (depth) continue;
+        if ([[NSCharacterSet alphanumericCharacterSet] characterIsMember:c]) [o appendFormat:@"%C", c];
+    }
+    return o.length ? o : s;
 }
+// Every string a view draws (Music's text views keep more than one; the first
+// one isn't always the text you see).
+static void DrawnTextsInto(UIView *v, NSMutableSet *out) {
+    if ([v isKindOfClass:[UILabel class]]) { NSString *t = ((UILabel *)v).text ?: ((UILabel *)v).attributedText.string; if (t.length) [out addObject:t]; return; }
+    if (v.accessibilityLabel.length) [out addObject:v.accessibilityLabel];
+    if (![NSStringFromClass([v class]) containsString:@"TextDrawing"]) return;
+    for (Class c = [v class]; c && c != [UIView class]; c = class_getSuperclass(c)) {
+        unsigned n = 0;
+        Ivar *iv = class_copyIvarList(c, &n);
+        for (unsigned i = 0; i < n; i++) {
+            const char *enc = ivar_getTypeEncoding(iv[i]);
+            if (!enc || enc[0] != '@') continue;
+            id o = nil;
+            @try { o = object_getIvar(v, iv[i]); } @catch (__unused id e) {}
+            NSString *t = [o isKindOfClass:[NSAttributedString class]] ? ((NSAttributedString *)o).string : ([o isKindOfClass:[NSString class]] ? o : nil);
+            if (t.length > 1 && t.length < 160) [out addObject:t];
+        }
+        free(iv);
+    }
+    for (NSString *k in @[@"attributedText", @"text", @"string"]) {
+        id o = nil;
+        @try { o = [v valueForKey:k]; } @catch (__unused id e) {}
+        NSString *t = [o isKindOfClass:[NSAttributedString class]] ? ((NSAttributedString *)o).string : ([o isKindOfClass:[NSString class]] ? o : nil);
+        if (t.length > 1 && t.length < 160) [out addObject:t];
+    }
+}
+static NSMutableArray *gMotionKeep;          // the last few cover players, kept alive
+static CFTimeInterval gMotionPageSeenAt;     // last time an album page with a cover video was on screen
+static __weak AVPlayer *gMotionPageSeenPlayer;
 static NSString *PageTitleOf(UIView *v);
 // The song playing right now (the pill only refreshes when it's showing, so with
 // the player open the album / title went stale and the old video stayed).
@@ -4886,7 +4927,19 @@ static void RefreshNowPlaying(void) {
     });
 }
 static void MotionTick(UIWindow *w) {
-    if (PlayerIsUp(w, NULL)) RefreshNowPlaying();
+    if (PlayerIsUp(w, NULL) || CACurrentMediaTime() - gMotionPageSeenAt < 3) RefreshNowPlaying();
+    // You hit Play on an album page with a cover video: the song that starts is from
+    // that album, so tie the two together even if the page's title couldn't be read.
+    static NSString *lastAlbum;
+    if (gNowAlbum.length && ![gNowAlbum isEqualToString:lastAlbum]) {
+        BOOL first = lastAlbum == nil;
+        lastAlbum = gNowAlbum;
+        AVPlayer *sp = gMotionPageSeenPlayer;
+        if (!first && sp && CACurrentMediaTime() - gMotionPageSeenAt < 3) {
+            if (!gMotionByAlbum) gMotionByAlbum = [NSMapTable strongToWeakObjectsMapTable];
+            [gMotionByAlbum setObject:sp forKey:AlbumKey(gNowAlbum)];
+        }
+    }
     // 1. On an album page with a motion cover: remember its player.
     UIView *rp = gRowParent;
     static NSString *videoDebug = @"";
@@ -4917,6 +4970,12 @@ static void MotionTick(UIWindow *w) {
             }
             if (pick.player) {
                 gMotionPlayer = pick.player; gMotionPage = page;
+                gMotionPageSeenAt = CACurrentMediaTime(); gMotionPageSeenPlayer = pick.player;
+                if (!gMotionKeep) gMotionKeep = [NSMutableArray array];
+                if (![gMotionKeep containsObject:pick.player]) {
+                    [gMotionKeep addObject:pick.player];
+                    while (gMotionKeep.count > 3) [gMotionKeep removeObjectAtIndex:0];
+                }
                 // Remembered per album (every text in the header above the Play row, as
                 // Music draws the title without a label), so the player finds it later.
                 if (!gMotionByAlbum) gMotionByAlbum = [NSMapTable strongToWeakObjectsMapTable];
@@ -4930,8 +4989,9 @@ static void MotionTick(UIWindow *w) {
                     if (v.hidden) continue;
                     CGRect vf = [v convertRect:v.bounds toView:nil];
                     if (CGRectGetMinY(vf) > rowTop) continue;
-                    NSString *s = DrawnText(v);
-                    if (s.length > 1 && s.length < 120) { [keys addObject:s]; continue; }
+                    NSMutableSet *ts = [NSMutableSet set];
+                    DrawnTextsInto(v, ts);
+                    if (ts.count) { [keys addObjectsFromArray:ts.allObjects]; continue; }
                     [vs addObjectsFromArray:v.subviews];
                 }
                 for (NSString *k in keys) [gMotionByAlbum setObject:pick.player forKey:AlbumKey(k)];
@@ -4942,8 +5002,9 @@ static void MotionTick(UIWindow *w) {
                 int ga = 0;
                 while (as.count && ga++ < 3000) {
                     UIView *v = as.lastObject; [as removeLastObject];
-                    NSString *s = DrawnText(v);
-                    if (s.length > 1 && s.length < 160) [all addObject:AlbumKey(s)];
+                    NSMutableSet *ts = [NSMutableSet set];
+                    DrawnTextsInto(v, ts);
+                    for (NSString *t in ts) { NSString *k = AlbumKey(t); if (k.length > 1) [all addObject:k]; }
                     [as addObjectsFromArray:v.subviews];
                 }
                 if (!gMotionTexts) gMotionTexts = [NSMapTable weakToStrongObjectsMapTable];
@@ -4987,6 +5048,12 @@ static void MotionTick(UIWindow *w) {
         for (AVPlayer *p in gMotionTexts.keyEnumerator.allObjects) {
             NSSet *tx = [gMotionTexts objectForKey:p];
             if ((alb.length && [tx containsObject:alb]) || (song.length && [tx containsObject:song])) { byTitle = p; break; }
+            // Looser: a page text that starts with the song / album name (a row that
+            // also holds the artist or a badge).
+            for (NSString *t in tx) {
+                if ((alb.length >= 3 && [t hasPrefix:alb]) || (song.length >= 3 && [t hasPrefix:song])) { byTitle = p; break; }
+            }
+            if (byTitle) break;
         }
     }
     if (byTitle) mp = byTitle;
@@ -5005,7 +5072,7 @@ static void MotionTick(UIWindow *w) {
     }
     if (!match) {
         [shown removeFromSuperview];
-        gMotionDebug = [NSString stringWithFormat:@"player=%d art=%d video=%d album=%@ page=%d match=%d seen=%@ cands=%@", up, art != nil, mp != nil, gNowAlbum, gMotionPage != nil, gMotionPage ? PageHasLabel(gMotionPage, gNowAlbum) : 0, videoDebug, cands];
+        gMotionDebug = [NSString stringWithFormat:@"player=%d art=%d video=%d song=%@ albums=%lu pages=%lu album=%@ page=%d match=%d seen=%@ cands=%@", up, art != nil, mp != nil, gNowTitle, (unsigned long)gMotionByAlbum.count, (unsigned long)gMotionTexts.count, gNowAlbum, gMotionPage != nil, gMotionPage ? PageHasLabel(gMotionPage, gNowAlbum) : 0, videoDebug, cands];
         return;
     }
     UIView *mv = [art viewWithTag:MOTION_TAG];
