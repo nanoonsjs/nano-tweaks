@@ -1,4 +1,5 @@
-// MusicPill 1.2.37 - made by nano
+// MusicPill 1.2.38 - made by nano
+// 1.2.38: the pill says "Not Playing" when Music opens until something plays; search stars read the rows properly
 // 1.2.37: favorite stars in search sit in the left margin (iOS 26) and also mark favorited songs; better row reading
 // 1.2.36: holding an artist shows a small iOS 26 card (round photo, name, chevron) with Favorite / Share side by side; favorited artists get a star next to their name in search
 // 1.2.35: minimized pill: tapping or swiping up where the big pill used to be no longer opens the player (only the small pill does)
@@ -1323,7 +1324,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.37 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n favs: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.38 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n favs: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gFavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1633,6 +1634,7 @@ static BOOL OpenPlayer(UIView *mini) {
 }
 
 static NSString *MusicBarTitle(UIView *mini);
+static BOOL gEverPlayed;   // something has played since Music opened
 @interface MPMiniPill : UIView
 @property (nonatomic, strong) UIView *glass;
 @property (nonatomic, strong) UIImageView *art, *badge;
@@ -1788,6 +1790,15 @@ static NSString *MusicBarTitle(UIView *mini);
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             MPMiniPill *me = weak; if (!me) return;
+            // Music just opened: it remembers the last song, but nothing is playing
+            // yet, so say "Not Playing" until you start something.
+            if (!gEverPlayed) {
+                if (![me.title.text isEqualToString:@"Not Playing"]) me.title.text = @"Not Playing";
+                if (me.artist.text.length) me.artist.text = @"";
+                me.badge.hidden = YES; me.art.image = nil;
+                [me setNeedsLayout];
+                return;
+            }
             BOOL have = [title isKindOfClass:[NSString class]] && [title length];
             if (!have && me.title.text.length && ![me.title.text isEqualToString:@"Not Playing"]) return;   // keep the last song
             if (!have) {
@@ -1824,6 +1835,7 @@ static NSString *MusicBarTitle(UIView *mini);
     if (playing) playing(q, ^(Boolean p) {
         dispatch_async(dispatch_get_main_queue(), ^{
             MPMiniPill *me = weak; if (!me) return;
+            if (p && !gEverPlayed) { gEverPlayed = YES; [me refresh]; }
             NSString *sym = p ? @"pause.fill" : @"play.fill";
             if (![me.play.accessibilityValue isEqualToString:sym]) {
                 me.play.accessibilityValue = sym;
@@ -6595,34 +6607,41 @@ static void FavStarTick(UIWindow *w) {
         [st addObjectsFromArray:v.subviews];
     }
     int rows = 0, starred = 0;
+    NSString *sample = @"";
     for (UIView *cell in cells) {
-        // The row's texts, top to bottom: the name / title, then "Artist" or "Song · Who".
+        // The row's texts with their heights: the name / title on top, then
+        // "Artist" or "Song · Who" under it. Only real text views (labels and
+        // Music's text drawing views), not containers.
         NSMutableArray *texts = [NSMutableArray array];
         NSMutableArray *cs = [NSMutableArray arrayWithArray:cell.subviews];
         int gc = 0;
-        while (cs.count && gc++ < 250) {
+        while (cs.count && gc++ < 300) {
             UIView *v = cs.lastObject; [cs removeLastObject];
             if (v.tag == FAVSTAR_TAG || v.hidden || v.alpha < 0.01) continue;
-            NSMutableSet *ts = [NSMutableSet set];
-            DrawnTextsInto(v, ts);
-            if (ts.count) {
-                CGFloat y = [v convertPoint:CGPointZero toView:cell].y;
-                for (NSString *t in ts) [texts addObject:@{@"t": t, @"y": @(y)}];
-                continue;
-            }
+            NSString *t = nil;
+            if ([v isKindOfClass:[UILabel class]]) t = ((UILabel *)v).text;
+            else if ([NSStringFromClass([v class]) containsString:@"TextDrawing"]) t = DrawnText(v);
+            if (t.length) { [texts addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:cell].y)}]; continue; }
             [cs addObjectsFromArray:v.subviews];
         }
+        [texts sortUsingComparator:^NSComparisonResult(NSDictionary *x, NSDictionary *y2) { return [x[@"y"] compare:y2[@"y"]]; }];
         BOOL fav = NO, known = NO;
-        for (NSDictionary *sub in texts) {
-            NSString *t = sub[@"t"];
-            if ([t isEqualToString:@"Artist"]) {
+        if (texts.count >= 2) {
+            NSString *name = texts[0][@"t"], *sub = texts[1][@"t"];
+            NSString *subL = sub.lowercaseString;
+            if ([subL isEqualToString:@"artist"]) { known = YES; fav = [favs containsObject:name]; }
+            else if ([subL hasPrefix:@"song"]) {
                 known = YES;
-                for (NSDictionary *o in texts) if ([o[@"y"] doubleValue] < [sub[@"y"] doubleValue] && [favs containsObject:o[@"t"]]) fav = YES;
-            } else if ([t hasPrefix:@"Song · "]) {
-                known = YES;
-                NSString *who = [t substringFromIndex:7];
-                for (NSDictionary *o in texts) if ([o[@"y"] doubleValue] < [sub[@"y"] doubleValue] && [favs containsObject:SongKey(o[@"t"], who)]) fav = YES;
+                NSRange dot = [sub rangeOfString:@"·"];
+                NSString *who = dot.location != NSNotFound ? [[sub substringFromIndex:dot.location + 1] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]
+                                                           : (texts.count >= 3 ? texts[2][@"t"] : @"");
+                fav = [favs containsObject:SongKey(name, who)];
             }
+        }
+        if (!sample.length && texts.count) {
+            NSMutableArray *ts = [NSMutableArray array];
+            for (NSDictionary *o in texts) [ts addObject:o[@"t"]];
+            sample = [ts componentsJoinedByString:@"/"];
         }
         if (known) rows++;
         UIImageView *star = (UIImageView *)[cell viewWithTag:FAVSTAR_TAG];
@@ -6643,7 +6662,7 @@ static void FavStarTick(UIWindow *w) {
         if (!CGPointEqualToPoint(star.center, c)) { star.bounds = CGRectMake(0, 0, 16, 16); star.center = c; }
         if (cell.subviews.lastObject != star) [cell bringSubviewToFront:star];
     }
-    gFavDebug = [NSString stringWithFormat:@"saved=%lu cells=%lu rows=%d starred=%d", (unsigned long)favs.count, (unsigned long)cells.count, rows, starred];
+    gFavDebug = [NSString stringWithFormat:@"saved=%lu cells=%lu rows=%d starred=%d e.g. %@", (unsigned long)favs.count, (unsigned long)cells.count, rows, starred, sample.length > 60 ? [sample substringToIndex:60] : sample];
 }
 %hook UICollectionViewCell
 - (void)prepareForReuse { %orig; [[self viewWithTag:FAVSTAR_TAG] removeFromSuperview]; }
