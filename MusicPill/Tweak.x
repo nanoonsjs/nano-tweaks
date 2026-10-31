@@ -1,4 +1,5 @@
-// MusicPill 1.2.30 - made by nano
+// MusicPill 1.2.31 - made by nano
+// 1.2.31: the Home / Search circles next to the minimized pill get the same frosted white glass in light mode
 // 1.2.30: the bottom pill in light mode is frosted white glass with a soft rim and shadow (no more dark glass); album cover on the pill is a bit smaller
 // 1.2.29: fixed Music freezing when opening the queue after a title swipe (skips now use the lock screen commands), and the swipe only listens to touches on the title
 // 1.2.28: title swipe is faster and bounces into place like iOS 26 (slight squish while dragging)
@@ -1282,7 +1283,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.30 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.31 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1374,6 +1375,42 @@ static UIImage *SelectedTabImage(UITabBar *tb) {
     return [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
 
+// Light mode: frosted white glass with a soft grey rim and shadow (iOS 26), not the
+// tab bar's dark glass. Dark mode keeps the dark glass. Used by the pill and the
+// Home / Search circles next to the minimized pill.
+static void FrostGlass(UIVisualEffectView *g, UIView *shadowHost) {
+    if (![g isKindOfClass:[UIVisualEffectView class]]) return;
+    BOOL light = g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+    NSNumber *was = objc_getAssociatedObject(g, (const void *)&FrostGlass);
+    if (!was || was.boolValue != light) {
+        objc_setAssociatedObject(g, (const void *)&FrostGlass, @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIView *tint = [g.contentView viewWithTag:0x4D50574C];
+        if (light) {
+            g.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight];
+            if (!tint) {
+                tint = [[UIView alloc] initWithFrame:g.contentView.bounds];
+                tint.tag = 0x4D50574C; tint.userInteractionEnabled = NO;
+                tint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                [g.contentView insertSubview:tint atIndex:0];
+            }
+            tint.backgroundColor = [UIColor colorWithWhite:1 alpha:0.62];
+            g.layer.borderWidth = 0.8;
+            g.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.08].CGColor;
+            shadowHost.layer.shadowColor = UIColor.blackColor.CGColor;
+            shadowHost.layer.shadowOpacity = 0.12; shadowHost.layer.shadowRadius = 14; shadowHost.layer.shadowOffset = CGSizeMake(0, 4);
+        } else {
+            g.effect = TabGlassEffect();
+            [tint removeFromSuperview];
+            g.layer.borderWidth = 0.75;
+            g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2].CGColor;
+            shadowHost.layer.shadowOpacity = 0;
+        }
+    }
+    if (shadowHost.layer.shadowOpacity > 0 && !CGRectIsEmpty(shadowHost.bounds)) {
+        CGFloat r = MIN(shadowHost.bounds.size.width, shadowHost.bounds.size.height) / 2;
+        shadowHost.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:shadowHost.bounds cornerRadius:r].CGPath;
+    }
+}
 static UIView *GlassCircle(NSString *ident, UIView *host) {
     for (UIView *v in host.subviews) if ([v.accessibilityIdentifier isEqualToString:ident]) return v;
     UIView *c = [UIView new];
@@ -1407,6 +1444,7 @@ static void RebuildCircleGlass(UIView *c) {
     g.frame = old ? old.frame : c.bounds; g.layer.cornerRadius = old.layer.cornerRadius;
     [c insertSubview:g atIndex:0];
     [old removeFromSuperview];
+    FrostGlass(g, c);
 }
 static void LayoutCircle(UIView *c, CGRect f) {
     c.bounds = CGRectMake(0, 0, f.size.width, f.size.height);
@@ -1415,6 +1453,7 @@ static void LayoutCircle(UIView *c, CGRect f) {
     g.frame = c.bounds;
     g.layer.cornerRadius = MIN(f.size.width, f.size.height) / 2;
     [c viewWithTag:2].frame = c.bounds;
+    FrostGlass((UIVisualEffectView *)g, c);
 }
 
 @interface MPPassHost : UIView @end
@@ -1577,35 +1616,7 @@ static NSString *MusicBarTitle(UIView *mini);
 }
 // Light mode: frosted white glass with a soft grey rim and shadow (iOS 26), not the
 // tab bar's dark glass. Dark mode keeps the dark glass.
-- (void)applyLook {
-    BOOL light = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
-    UIVisualEffectView *g = (UIVisualEffectView *)_glass;
-    if (![g isKindOfClass:[UIVisualEffectView class]]) return;
-    NSNumber *was = objc_getAssociatedObject(g, @selector(applyLook));
-    if (was && was.boolValue == light) return;
-    objc_setAssociatedObject(g, @selector(applyLook), @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    UIView *tint = [g.contentView viewWithTag:0x4D50574C];
-    if (light) {
-        g.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight];
-        if (!tint) {
-            tint = [[UIView alloc] initWithFrame:g.contentView.bounds];
-            tint.tag = 0x4D50574C; tint.userInteractionEnabled = NO;
-            tint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            [g.contentView insertSubview:tint atIndex:0];
-        }
-        tint.backgroundColor = [UIColor colorWithWhite:1 alpha:0.62];
-        g.layer.borderWidth = 0.8;
-        g.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.08].CGColor;
-        self.layer.shadowColor = UIColor.blackColor.CGColor;
-        self.layer.shadowOpacity = 0.12; self.layer.shadowRadius = 14; self.layer.shadowOffset = CGSizeMake(0, 4);
-    } else {
-        g.effect = TabGlassEffect();
-        [tint removeFromSuperview];
-        g.layer.borderWidth = 0.75;
-        g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2].CGColor;
-        self.layer.shadowOpacity = 0;
-    }
-}
+- (void)applyLook { FrostGlass((UIVisualEffectView *)_glass, self); }
 - (void)traitCollectionDidChange:(UITraitCollection *)prev {
     [super traitCollectionDidChange:prev];
     [self setNeedsLayout];
@@ -1615,7 +1626,6 @@ static NSString *MusicBarTitle(UIView *mini);
     CGSize S = self.bounds.size;
     _glass.frame = self.bounds; _glass.layer.cornerRadius = S.height / 2;
     [self applyLook];
-    if (self.layer.shadowOpacity > 0) self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:S.height / 2].CGPath;
     // Artwork a bit smaller, with more room around it (iOS 26).
     CGFloat a = round(S.height * 0.66);
     _art.frame = CGRectMake(12, round((S.height - a) / 2), a, a);
