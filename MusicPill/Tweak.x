@@ -1,4 +1,5 @@
-// MusicPill 1.2.21 - made by nano
+// MusicPill 1.2.22 - made by nano
+// 1.2.22: Animated Album Covers is off by default (turn it on in MusicPill settings)
 // 1.2.21: no more wrong animated covers: covers are no longer guessed from the album page's song list (it also lists other albums), a tie only happens when you press Play / a song on that same album page while it's on screen. Saved covers are cleared once more.
 // 1.2.20: animated covers made safer and lighter: the cover video pauses when the player is closed or Music is in the background, an expired saved cover is forgotten instead of showing black, text reading never touches freed objects, fewer page scans, and memory is freed on low memory
 // 1.2.19: a song that changes by itself (autoplay / next song) no longer takes the previous album's animated cover; a cover is only tied to an album when you tap Play or a song on that album's page. Old saved covers are cleared once.
@@ -344,7 +345,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
-static BOOL gMotionCovers = YES;   // animated album covers in the player (saved per album)
+static BOOL gMotionCovers = NO;    // animated album covers in the player (saved per album)
 static NSString *gFloatDebug = @"-";
 static NSString *gNowAlbum;   // album of the song playing (MediaRemote)
 static NSString *gNowTitle;   // song playing (MediaRemote)
@@ -429,7 +430,7 @@ static void LoadPrefs(void) {
     gNavGlass = PrefBool(file, @"navglass", YES);
     gQueueLook = PrefBool(file, @"queuelook", YES);
     gCollapse = PrefBool(file, @"collapse", YES);
-    gMotionCovers = PrefBool(file, @"motioncovers", YES);
+    gMotionCovers = PrefBool(file, @"motioncovers", NO);
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers"];
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers2"];   // 1.2.19/20's list (some wrong)   // 1.2.18's list (could hold wrong covers)
     // Turned off: forget every saved cover.
@@ -1269,7 +1270,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.21 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.22 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
