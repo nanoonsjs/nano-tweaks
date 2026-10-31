@@ -1,4 +1,5 @@
-// MusicPill 1.2.28 - made by nano
+// MusicPill 1.2.29 - made by nano
+// 1.2.29: fixed Music freezing when opening the queue after a title swipe (skips now use the lock screen commands), and the swipe only listens to touches on the title
 // 1.2.28: title swipe is faster and bounces into place like iOS 26 (slight squish while dragging)
 // 1.2.27: title swipe reads where your finger went down correctly
 // 1.2.26: title swipe really gets the touch now (it was checking the wrong window)
@@ -1280,7 +1281,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.28 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.29 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5814,18 +5815,32 @@ static void SetRowsOffset(NSArray *rows, CGFloat dx, CGFloat alpha) {
         m.alpha = alpha;
     }
 }
+// Skip with MediaRemote (the lock screen's commands; they don't wait for an
+// answer). MPMusicPlayerController inside Music talks to Music itself and could
+// lock it up (opening the queue after a swipe froze the app).
 static void TitleSkip(BOOL next) {
-    Class C = NSClassFromString(@"MPMusicPlayerController");
-    id mp = [C respondsToSelector:@selector(systemMusicPlayer)] ? [C performSelector:@selector(systemMusicPlayer)] : nil;
-    SEL sel = next ? @selector(skipToNextItem) : @selector(skipToPreviousItem);
-    if ([mp respondsToSelector:sel]) { ((void (*)(id, SEL))objc_msgSend)(mp, sel); return; }
-    // Fallback: the same command the lock screen sends.
     static Boolean (*send)(int, CFDictionaryRef);
+    static void (*getInfo)(dispatch_queue_t, void (^)(CFDictionaryRef));
     if (!send) {
         void *h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
-        if (h) send = (Boolean (*)(int, CFDictionaryRef))dlsym(h, "MRMediaRemoteSendCommand");
+        if (h) {
+            send = (Boolean (*)(int, CFDictionaryRef))dlsym(h, "MRMediaRemoteSendCommand");
+            getInfo = (void (*)(dispatch_queue_t, void (^)(CFDictionaryRef)))dlsym(h, "MRMediaRemoteGetNowPlayingInfo");
+        }
     }
-    if (send) send(next ? 4 : 5, NULL);
+    if (!send) return;
+    if (next || !getInfo) { send(next ? 4 : 5, NULL); return; }
+    // "Previous" restarts the song when it's past the first few seconds; then send
+    // it twice so it really goes back to the previous song.
+    getInfo(dispatch_get_main_queue(), ^(CFDictionaryRef cd) {
+        NSDictionary *d = (__bridge NSDictionary *)cd;
+        double el = [d[@"kMRMediaRemoteNowPlayingInfoElapsedTime"] doubleValue];
+        NSDate *ts = d[@"kMRMediaRemoteNowPlayingInfoTimestamp"];
+        double rate = [d[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"] doubleValue];
+        if ([ts isKindOfClass:[NSDate class]] && rate > 0) el += -[ts timeIntervalSinceNow] * rate;
+        send(5, NULL);
+        if (el > 2.5) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ send(5, NULL); });
+    });
 }
 @interface MPTitleSwipe : NSObject <UIGestureRecognizerDelegate>
 @property (nonatomic, strong) NSArray *rows;
@@ -5859,6 +5874,11 @@ static void TitleSkip(BOOL next) {
     if (!w || !PlayerIsUp(w, NULL)) return NO;   // only on the full player
     gSwipeDebug = [NSString stringWithFormat:@"touch on %@", NSStringFromClass([t.view class])];
     gSwipeStart = [t locationInView:w];   // where the finger went down (window points)
+    // Anywhere else (queue list, lyrics, sliders) the swipe stays out of the way.
+    NSArray *rows = TitleRows();
+    CGRect box = CGRectNull;
+    for (UIView *m in rows) box = CGRectUnion(box, [m convertRect:m.bounds toView:nil]);
+    if (CGRectIsNull(box) || !CGRectContainsPoint(CGRectInset(box, -16, -14), gSwipeStart)) return NO;
     return YES;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)o {
