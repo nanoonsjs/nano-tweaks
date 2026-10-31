@@ -1,14 +1,6 @@
-// Photos26 2.5.0 - made by nano
-// 2.5.0: Media Types / Utilities as a two-column grid of small glass cards
-//        (icon + white title), styled right away; Collections title and + now
-//        really sit above their glass.
-// 2.4.2: Collections title and + sit on top of their glass; rows inside a
-//        section's own list get the glass cards too.
-// 2.4.1: Albums tab found from its nav bar (cards / glass rows now apply), no
-//        dividers, top bar without its grey background, glass + and title,
-//        "Albums" renamed "Collections".
-// 2.4.0: Albums tab, iOS 26 look: album cards with big round corners, Media
-//        Types / Utilities rows as liquid glass cards (light and dark).
+// Photos26 2.5.1 - made by nano
+// 2.5.1: back to the 2.3.0 look (the Albums tab changes in 2.4.0 - 2.5.0 are
+//        removed); numbered higher so it installs over them.
 // 2.3.0: light mode (frosted light glass, dark icons), the photo viewer's top
 //        bar is glass again (viewer found without the "Edit" label; Edit stays
 //        hidden, it's the bottom sliders icon), liquid drop on Years / Months /
@@ -92,7 +84,6 @@
 static UIColor *Dyn(UIColor *light, UIColor *dark) {
     return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) { return tc.userInterfaceStyle == UIUserInterfaceStyleDark ? dark : light; }];
 }
-static NSString *gAlbumsDebug = @"-";
 static UIColor *GIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackColor, UIColor.whiteColor); return c; }
 
 @interface PUTilingView : UIView @end
@@ -1583,231 +1574,6 @@ static void StyleOverlayButton(UIView *b) {
 static NSString *gGridDebug = @"-";
 static void UpdateDebug(UIWindow *w);
 // Debug only for now: what the grid's top-right buttons are made of.
-// ---- Albums tab, iOS 26 look: big rounded album cards, glass rows ----
-#define ROWGLASS_TAG 0x50474C52
-static NSSet *RowTitles(void) {
-    static NSSet *s;
-    if (!s) s = [NSSet setWithArray:@[@"Videos", @"Selfies", @"Live Photos", @"Portrait", @"Panoramas", @"Time-lapse", @"Slo-mo", @"Cinematic",
-        @"Bursts", @"Screenshots", @"Screen Recordings", @"Animated", @"RAW", @"ProRAW", @"Long Exposure", @"Spatial", @"Imports", @"Duplicates",
-        @"Hidden", @"Recently Deleted", @"Favorites", @"Captured by Me", @"Receipts", @"Handwriting", @"Illustrations", @"QR Codes", @"Recently Saved", @"Recently Edited"]];
-    return s;
-}
-// The Albums tab's page, found from its visible nav bar ("Albums", renamed
-// "Collections" by us). Its view controller usually has no title set itself.
-static UINavigationBar *AlbumsBar(UIWindow *w) {
-    NSMutableArray *st = [NSMutableArray arrayWithObject:w];
-    int g = 0;
-    while (st.count && g++ < 3000) {
-        UIView *v = st.lastObject; [st removeLastObject];
-        if (v.hidden || v.alpha < 0.05) continue;
-        if ([v isKindOfClass:[UINavigationBar class]]) {
-            NSString *tt = ((UINavigationBar *)v).topItem.title;
-            if ([tt isEqualToString:@"Albums"] || [tt isEqualToString:@"Collections"]) return (UINavigationBar *)v;
-            continue;
-        }
-        [st addObjectsFromArray:v.subviews];
-    }
-    return nil;
-}
-static UIView *AlbumsPage(UIWindow *w) {
-    UINavigationBar *nb = AlbumsBar(w);
-    UIResponder *r = nb;
-    while (r && ![r isKindOfClass:[UINavigationController class]]) r = r.nextResponder;
-    UIViewController *top = ((UINavigationController *)r).topViewController;
-    return top.view.window ? top.view : nil;
-}
-#define ALBUMS_TOP_TAG 0x50474154
-// Top bar: no grey background; "Collections" on a glass capsule, + in a glass circle.
-static void StyleAlbumsBar(UINavigationBar *nb) {
-    UINavigationItem *it = nb.topItem;
-    if ([it.title isEqualToString:@"Albums"]) it.title = @"Collections";
-    static char kStyledBar;
-    if (!objc_getAssociatedObject(nb, &kStyledBar)) {
-        objc_setAssociatedObject(nb, &kStyledBar, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        UINavigationBarAppearance *a = [UINavigationBarAppearance new];
-        [a configureWithTransparentBackground];
-        it.standardAppearance = a; it.scrollEdgeAppearance = a; it.compactAppearance = a;
-    }
-    UIView *c = [nb viewWithTag:ALBUMS_TOP_TAG];
-    if (!c) { c = [UIView new]; c.tag = ALBUMS_TOP_TAG; c.userInteractionEnabled = NO; [nb insertSubview:c atIndex:0]; }
-    // Glass frames below are worked out in the bar's space; c is laid over it.
-    UIView *bg = nil;
-    for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"Background"]) bg = s;
-    if (bg && !bg.layer.mask) bg.layer.mask = [CALayer layer];
-    // The glass goes inside the bar's visible content view, under everything in it.
-    UIView *content = nil;
-    {
-        NSMutableArray *q = [NSMutableArray arrayWithArray:nb.subviews];
-        int gq = 0;
-        while (q.count && gq++ < 200 && !content) {
-            UIView *v = q.firstObject; [q removeObjectAtIndex:0];
-            if (v == c) continue;
-            if ([v isKindOfClass:[UILabel class]] && ([((UILabel *)v).text isEqualToString:@"Collections"] || [((UILabel *)v).text isEqualToString:@"Albums"]) && !v.hidden && v.alpha > 0.05) {
-                for (UIView *p = v.superview; p && p != nb; p = p.superview) if (p.superview == nb) { content = p; break; }
-                break;
-            }
-            [q addObjectsFromArray:v.subviews];
-        }
-    }
-    UIView *host = content ?: nb;
-    if (c.superview != host) { [c removeFromSuperview]; [host insertSubview:c atIndex:0]; }
-    else if (host.subviews.firstObject != c) [host sendSubviewToBack:c];
-    CGRect cf = [nb convertRect:nb.bounds toView:host];
-    if (!CGRectEqualToRect(c.frame, cf)) c.frame = cf;
-    c.hidden = NO;
-    // + : glass circle behind it.
-    UIBarButtonItem *plus = it.leftBarButtonItems.firstObject ?: it.rightBarButtonItems.firstObject;
-    UIView *pv = KV(plus, @"view");
-    PGGlass *gp = GlassIn(c, @"plus");
-    gp.hidden = !pv.window;
-    if (pv.window) {
-        UIView *g = GlyphIn(pv, 0) ?: pv;
-        CGRect r = [g convertRect:g.bounds toView:nb];
-        CGFloat D = 42;
-        SetFrame(gp, [nb convertRect:CGRectMake(round(CGRectGetMidX(r) - D / 2), round(CGRectGetMidY(r) - D / 2), D, D) toView:c]);
-        static char kT;
-        if (!objc_getAssociatedObject(pv, &kT)) { objc_setAssociatedObject(pv, &kT, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); pv.tintColor = GIcon(); }
-    }
-    // Title capsule.
-    UILabel *title = nil;
-    NSMutableArray *st = [NSMutableArray arrayWithArray:nb.subviews];
-    int gd = 0;
-    while (st.count && gd++ < 200) {
-        UIView *v = st.lastObject; [st removeLastObject];
-        if (v.tag == ALBUMS_TOP_TAG) continue;
-        if ([v isKindOfClass:[UILabel class]] && [((UILabel *)v).text isEqualToString:@"Collections"]) { title = (UILabel *)v; break; }
-        [st addObjectsFromArray:v.subviews];
-    }
-    PGGlass *gt = GlassIn(c, @"title");
-    gt.hidden = !title.window;
-    if (title.window) {
-        CGRect r = [title convertRect:title.bounds toView:nb];
-        CGFloat w = [title sizeThatFits:CGSizeMake(400, 40)].width + 44, h = 40;
-        SetFrame(gt, [nb convertRect:CGRectMake(round(CGRectGetMidX(r) - w / 2), round(CGRectGetMidY(r) - h / 2), round(w), h) toView:c]);
-    }
-}
-// Tab bar: "Albums" -> "Collections".
-static void RenameAlbumsTab(UIWindow *w) {
-    UIViewController *root = w.rootViewController;
-    UITabBarController *tbc = [root isKindOfClass:[UITabBarController class]] ? (UITabBarController *)root : nil;
-    if (!tbc) for (UIViewController *v in root.childViewControllers) if ([v isKindOfClass:[UITabBarController class]]) tbc = (UITabBarController *)v;
-    for (UITabBarItem *ti in tbc.tabBar.items) if ([ti.title isEqualToString:@"Albums"]) ti.title = @"Collections";
-}
-// Media Types / Utilities list -> iOS 26 two-column grid of small cards.
-static NSString *gGridDebug2 = @"-";
-static void MakeTwoColumns(UICollectionView *list) {
-    static char kGrid;
-    if (!list || objc_getAssociatedObject(list, &kGrid)) return;
-    objc_setAssociatedObject(list, &kGrid, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    NSCollectionLayoutSize *isz = [NSCollectionLayoutSize sizeWithWidthDimension:[NSCollectionLayoutDimension fractionalWidthDimension:0.5] heightDimension:[NSCollectionLayoutDimension absoluteDimension:48]];
-    NSCollectionLayoutItem *item = [NSCollectionLayoutItem itemWithLayoutSize:isz];
-    item.contentInsets = NSDirectionalEdgeInsetsMake(0, 5, 0, 5);
-    NSCollectionLayoutSize *gsz = [NSCollectionLayoutSize sizeWithWidthDimension:[NSCollectionLayoutDimension fractionalWidthDimension:1] heightDimension:[NSCollectionLayoutDimension absoluteDimension:48]];
-    NSCollectionLayoutGroup *grp = [NSCollectionLayoutGroup horizontalGroupWithLayoutSize:gsz subitems:@[item, item]];
-    NSCollectionLayoutSection *sec = [NSCollectionLayoutSection sectionWithGroup:grp];
-    sec.interGroupSpacing = 10;
-    sec.contentInsets = NSDirectionalEdgeInsetsMake(4, 11, 4, 11);
-    UICollectionViewCompositionalLayout *lay = [[UICollectionViewCompositionalLayout alloc] initWithSection:sec];
-    [list setCollectionViewLayout:lay animated:NO];
-    [list layoutIfNeeded];
-    // The page around it shrinks to the new height.
-    for (UIView *p = list.superview; p; p = p.superview)
-        if ([p isKindOfClass:[UICollectionView class]]) { [((UICollectionView *)p).collectionViewLayout invalidateLayout]; break; }
-    gGridDebug2 = [NSString stringWithFormat:@"grid %.0f", list.contentSize.height];
-}
-static void StyleAlbumsTab(UIWindow *w) {
-    if (!w || !gEnabled || !gTopBar) return;
-    RenameAlbumsTab(w);
-    UINavigationBar *anb = AlbumsBar(w);
-    UIView *page = AlbumsPage(w);
-    if (!page) { gAlbumsDebug = anb ? @"bar, no page" : @"no bar"; return; }
-    @try { StyleAlbumsBar(anb); } @catch (__unused id e) {}
-    int rows = 0, cards = 0;
-    BOOL dark = page.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
-    NSMutableArray *st = [NSMutableArray arrayWithObject:page];
-    int g = 0;
-    while (st.count && g++ < 20000) {
-        UIView *v = st.lastObject; [st removeLastObject];
-        if (v.hidden || [v isKindOfClass:[PGGlass class]]) continue;
-        if (![v isKindOfClass:[UICollectionViewCell class]] && ![v isKindOfClass:[UITableViewCell class]]) { [st addObjectsFromArray:v.subviews]; continue; }
-        UIView *cv = [v isKindOfClass:[UICollectionViewCell class]] ? ((UICollectionViewCell *)v).contentView : ((UITableViewCell *)v).contentView;
-        // Media Types / Utilities rows: a glass card each.
-        UILabel *title = nil; UIImageView *big = nil; CGFloat bigA = 0;
-        NSMutableArray *s2 = [NSMutableArray arrayWithObject:cv];
-        int g2 = 0;
-        while (s2.count && g2++ < 80) {
-            UIView *x = s2.lastObject; [s2 removeLastObject];
-            if ([x isKindOfClass:[UILabel class]] && !title && [RowTitles() containsObject:((UILabel *)x).text]) title = (UILabel *)x;
-            if ([x isKindOfClass:[UIImageView class]] && ((UIImageView *)x).image) {
-                CGFloat a = x.bounds.size.width * x.bounds.size.height;
-                if (a > bigA) { bigA = a; big = (UIImageView *)x; }
-            }
-            [s2 addObjectsFromArray:x.subviews];
-        }
-        CGRect cb = v.bounds;
-        if (title && cb.size.height < 80 && cb.size.width > 200) {
-            PGGlass *gl = (PGGlass *)[v viewWithTag:ROWGLASS_TAG];
-            if (!gl) {
-                gl = [PGGlass new]; gl.tag = ROWGLASS_TAG;
-                [v insertSubview:gl atIndex:0];
-                if ([v isKindOfClass:[UICollectionViewCell class]]) {
-                    UICollectionViewCell *c = (UICollectionViewCell *)v;
-                    c.backgroundView.hidden = YES; c.selectedBackgroundView.alpha = 0.6;
-                    if ([c respondsToSelector:@selector(setBackgroundConfiguration:)]) ((UICollectionViewListCell *)c).backgroundConfiguration = [UIBackgroundConfiguration clearConfiguration];
-                } else { ((UITableViewCell *)v).backgroundColor = UIColor.clearColor; }
-            }
-            if ([v.superview isKindOfClass:[UICollectionView class]]) MakeTwoColumns((UICollectionView *)v.superview);
-            BOOL grid = cb.size.width < w.bounds.size.width * 0.7;
-            CGRect gf = grid ? cb : CGRectInset(cb, 16, 4);
-            if (!CGRectEqualToRect(gl.frame, gf)) { gl.frame = gf; gl.layer.cornerRadius = 14; [gl setNeedsLayout]; }
-            // iOS 26 card: just icon + title, white text; counts, locks and arrows go.
-            if (grid) {
-                CGFloat tx = [title convertPoint:CGPointZero toView:v].x;
-                NSMutableArray *s3 = [NSMutableArray arrayWithObject:v];
-                int g3 = 0;
-                while (s3.count && g3++ < 120) {
-                    UIView *x = s3.lastObject; [s3 removeLastObject];
-                    if (x == gl) continue;
-                    if (x == title) {
-                        UIColor *tc = UIColor.labelColor;
-                        if (title.textColor != tc) title.textColor = tc;
-                        if (title.font.pointSize != 17) title.font = [UIFont systemFontOfSize:17];
-                        continue;
-                    }
-                    CGFloat xx = [x convertPoint:CGPointZero toView:v].x;
-                    if (([x isKindOfClass:[UILabel class]] || [x isKindOfClass:[UIImageView class]]) && xx > tx + 20 && x.bounds.size.width < 120) { if (!x.hidden) x.hidden = YES; continue; }
-                    if ([x isKindOfClass:[UIImageView class]] && xx < tx) {
-                        static char kIc;
-                        if (!objc_getAssociatedObject(x, &kIc)) { objc_setAssociatedObject(x, &kIc, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); x.tintColor = UIColor.labelColor; }
-                        continue;
-                    }
-                    [s3 addObjectsFromArray:x.subviews];
-                }
-            }
-            if (v.subviews.firstObject != gl) [v sendSubviewToBack:gl];
-            // Separators between rows go (each row is its own card now).
-            for (UIView *x in v.subviews) if (x != gl && x.bounds.size.height <= 1.0 && x.bounds.size.width > 100) x.hidden = YES;
-            // List separators can also sit beside the cells, in the list itself.
-            for (UIView *x in v.superview.subviews) if (x.bounds.size.height <= 1.0 && x.bounds.size.width > 100 && ![x isKindOfClass:[UICollectionViewCell class]]) x.hidden = YES;
-            if ([v.superview isKindOfClass:[UITableView class]] && ((UITableView *)v.superview).separatorStyle != UITableViewCellSeparatorStyleNone) ((UITableView *)v.superview).separatorStyle = UITableViewCellSeparatorStyleNone;
-            rows++;
-            continue;
-        }
-        // A big cell holding a whole list: its rows are cells of their own.
-        if (cb.size.height >= 80) [st addObjectsFromArray:cv.subviews];
-        // Album cards: the big artwork gets iOS 26's round corners.
-        if (big && big.bounds.size.width >= 110 && big.bounds.size.height < 400 && fabs(big.bounds.size.width - big.bounds.size.height) < big.bounds.size.width * 0.35) {
-            UIView *clip = big;
-            for (UIView *p = big.superview; p && p != v; p = p.superview) if (fabs(p.bounds.size.width - big.bounds.size.width) < 2 && fabs(p.bounds.size.height - big.bounds.size.height) < 2) clip = p;
-            if (clip.layer.cornerRadius != 26) { clip.layer.cornerRadius = 26; clip.layer.cornerCurve = kCACornerCurveContinuous; clip.clipsToBounds = YES; }
-            if (big.layer.cornerRadius != 26) { big.layer.cornerRadius = 26; big.layer.cornerCurve = kCACornerCurveContinuous; big.clipsToBounds = YES; }
-            cards++;
-        }
-        (void)dark;
-    }
-    gAlbumsDebug = [NSString stringWithFormat:@"rows=%d cards=%d %@ page=%@", rows, cards, gGridDebug2, NSStringFromClass([page class])];
-}
-
 static void StyleGridTop(UIWindow *w) {
     if (!w || !gDebug || HasScrubber(w)) return;
     NSMutableArray *found = [NSMutableArray array];
@@ -1852,7 +1618,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Photos26 2.5.0 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n segments: %@\n albums: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gSegDebug, gAlbumsDebug, gForwardDebug];
+    NSString *text = [NSString stringWithFormat:@" Photos26 2.1.1 debug\n bottom: %@\n top: %@\n video: %@\n bg: %@\n strip: %@\n grid top: %@\n segments: %@\n last tap: %@", gBottomDebug, gTopDebug, gVideoDebug, gBgDebug, gFilmDebug, gGridDebug, gSegDebug, gForwardDebug];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize sz = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2164,7 +1930,7 @@ static void InitScrubber(void) { static BOOL done; if (done) return; done = YES;
             UIWindow *key = nil;
             for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
                 if ([s isKindOfClass:[UIWindowScene class]]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) key = w;
-            @try { StyleGridTop(key); StyleSegments(key); StyleAlbumsTab(key); } @catch (__unused id e) {}
+            @try { StyleGridTop(key); StyleSegments(key); } @catch (__unused id e) {}
         }];
     });
     // Photos' own classes load late on a cold start (right after a reboot it's
