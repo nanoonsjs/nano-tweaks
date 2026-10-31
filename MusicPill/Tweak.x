@@ -1,4 +1,5 @@
-// MusicPill 1.2.26 - made by nano
+// MusicPill 1.2.27 - made by nano
+// 1.2.27: title swipe reads where your finger went down correctly
 // 1.2.26: title swipe really gets the touch now (it was checking the wrong window)
 // 1.2.25: title swipe listens on the whole window (it never got the touch before)
 // 1.2.24: title swipe fixed (the player's own scroll gesture was taking it first)
@@ -350,6 +351,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
+static CGPoint gSwipeStart;
 static BOOL gTitleSwipe = YES;   // swipe the player title left / right to skip
 static BOOL gMotionCovers = NO;    // animated album covers in the player (saved per album)
 static NSString *gFloatDebug = @"-";
@@ -1277,7 +1279,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.26 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.27 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5841,10 +5843,7 @@ static void TitleSkip(BOOL next) {
     UIButton *star = gPlayerStar;
     CGFloat stopX = star.window && !star.hidden ? [star convertPoint:CGPointZero toView:nil].x - 4 : CGRectGetMaxX(box);
     box = CGRectMake(MIN(CGRectGetMinX(box), 16), CGRectGetMinY(box) - 12, stopX - MIN(CGRectGetMinX(box), 16), box.size.height + 24);
-    CGPoint p = [g locationInView:nil];
-    // locationInView:nil is in window coords; the start point is a bit behind.
-    CGPoint t = [g translationInView:nil];
-    CGPoint start = CGPointMake(p.x - t.x, p.y - t.y);
+    CGPoint start = gSwipeStart;
     if (!CGRectContainsPoint(box, start)) { gSwipeDebug = [NSString stringWithFormat:@"outside %.0f,%.0f box=%.0f,%.0f %.0fx%.0f", start.x, start.y, box.origin.x, box.origin.y, box.size.width, box.size.height]; return NO; }
     gSwipeDebug = [NSString stringWithFormat:@"began rows=%lu", (unsigned long)rows.count];
     self.rows = rows;
@@ -5856,6 +5855,7 @@ static void TitleSkip(BOOL next) {
     UIWindow *w = [g.view isKindOfClass:[UIWindow class]] ? (UIWindow *)g.view : g.view.window;
     if (!w || !PlayerIsUp(w, NULL)) return NO;   // only on the full player
     gSwipeDebug = [NSString stringWithFormat:@"touch on %@", NSStringFromClass([t.view class])];
+    gSwipeStart = [t locationInView:w];   // where the finger went down (window points)
     return YES;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)o {
