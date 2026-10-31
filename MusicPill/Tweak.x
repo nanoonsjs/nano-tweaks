@@ -1,4 +1,5 @@
-// MusicPill 1.2.46 - made by nano
+// MusicPill 1.2.47 - made by nano
+// 1.2.47: X centered in its circle and level with the search field; Apple Music / Library switch a bit lower
 // 1.2.46: search field and X are bigger (46pt) with more space between them, like iOS 26
 // 1.2.45: the liquid neck fades out when you let go instead of vanishing
 // 1.2.44: a pressed circle no longer slides over the pill; it stops just short and the liquid neck joins them seamlessly
@@ -1332,7 +1333,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.46 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.47 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2590,6 +2591,16 @@ static const void *kNarrowSeg = &kNarrowSeg;
         f = CGRectMake(round(CGRectGetMidX(f) - SEG_W / 2), f.origin.y, SEG_W, f.size.height);
         narrowed = YES;
     }
+    // A little lower, under the taller search field (once per UIKit position,
+    // never stacking).
+    if (objc_getAssociatedObject(self, kNarrowSeg)) {
+        static char kSegY;
+        NSNumber *applied = objc_getAssociatedObject(self, &kSegY);
+        if (!applied || fabs(applied.doubleValue - f.origin.y) > 0.5) {
+            f.origin.y += 7;
+            objc_setAssociatedObject(self, &kSegY, @(f.origin.y), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
     %orig(f);
     if (narrowed) [self setNeedsLayout];
 }
@@ -3673,10 +3684,17 @@ static void StyleSearchBar(UISearchBar *sb) {
                 [cancel insertSubview:disc atIndex:0];
             }
             CGFloat D = 46;
-            CGPoint ic = cancel.imageView ? CGPointMake(cancel.imageView.center.x - cancel.imageView.transform.tx, cancel.imageView.center.y) : CGPointMake(CGRectGetMidX(cancel.bounds), CGRectGetMidY(cancel.bounds));
-            CGRect df = CGRectMake(round(ic.x - D / 2 - 3), round(ic.y - D / 2), D, D);
-            // the xmark sits in the middle of the (moved) disc
-            if (cancel.imageView) { CGAffineTransform t = CGAffineTransformMakeTranslation(-3, 0); if (!CGAffineTransformEqualToTransform(cancel.imageView.transform, t)) cancel.imageView.transform = t; }
+            CGPoint ic = cancel.imageView ? cancel.imageView.center : CGPointMake(CGRectGetMidX(cancel.bounds), CGRectGetMidY(cancel.bounds));
+            CGRect df = CGRectMake(round(ic.x - D / 2), round(ic.y - D / 2), D, D);
+            if (cancel.imageView && !CGAffineTransformIsIdentity(cancel.imageView.transform)) cancel.imageView.transform = CGAffineTransformIdentity;
+            // Level with the middle of the (taller) field.
+            if (tf.window && cancel.superview) {
+                CGFloat fieldMid = [tf convertPoint:CGPointMake(0, tf.bounds.size.height / 2) toView:cancel.superview].y;
+                CGFloat glyphMid = cancel.center.y - cancel.bounds.size.height / 2 + ic.y;
+                CGFloat dy = round(fieldMid - glyphMid);
+                CGAffineTransform t = CGAffineTransformMakeTranslation(0, dy);
+                if (fabs(dy) < 20 && !CGAffineTransformEqualToTransform(cancel.transform, t)) cancel.transform = t;
+            }
             if (!CGRectEqualToRect(disc.frame, df)) { disc.frame = df; disc.layer.cornerRadius = D / 2; }
             [cancel sendSubviewToBack:disc];
             if (cancel.imageView) [cancel bringSubviewToFront:cancel.imageView];
