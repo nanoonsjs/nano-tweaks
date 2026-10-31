@@ -1,4 +1,5 @@
-// MusicPill 1.2.32 - made by nano
+// MusicPill 1.2.33 - made by nano
+// 1.2.33: Album Color Glow (the pill and its circles take a soft tint of the album cover's color) and double-tap the player cover to favorite the song with a star burst
 // 1.2.32: artist page star has a haptic and shows the "Favorited" capsule; Play Next / Play Last show the same small capsule instead of the big box; capsules are frosted white in light mode
 // 1.2.31: the Home / Search circles next to the minimized pill get the same frosted white glass in light mode
 // 1.2.30: the bottom pill in light mode is frosted white glass with a soft rim and shadow (no more dark glass); album cover on the pill is a bit smaller
@@ -356,6 +357,10 @@ static UIView *GlyphIn(UIView *v, int depth);
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
+static BOOL gAlbumGlow = YES;        // pill + circles tinted with the album cover's color
+static BOOL gDoubleTapFav = YES;     // double-tap the player's artwork to favorite
+static UIColor *gGlowColor;
+static __weak UIView *gPlayerArt;
 static CGPoint gSwipeStart;
 static BOOL gTitleSwipe = YES;   // swipe the player title left / right to skip
 static BOOL gMotionCovers = NO;    // animated album covers in the player (saved per album)
@@ -445,6 +450,8 @@ static void LoadPrefs(void) {
     gCollapse = PrefBool(file, @"collapse", YES);
     gMotionCovers = PrefBool(file, @"motioncovers", NO);
     gTitleSwipe = PrefBool(file, @"titleswipe", YES);
+    gAlbumGlow = PrefBool(file, @"albumglow", YES);
+    gDoubleTapFav = PrefBool(file, @"doubletapfav", YES);
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers"];
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers2"];   // 1.2.19/20's list (some wrong)   // 1.2.18's list (could hold wrong covers)
     // Turned off: forget every saved cover.
@@ -1284,7 +1291,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.32 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.33 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1412,6 +1419,54 @@ static void FrostGlass(UIVisualEffectView *g, UIView *shadowHost) {
         shadowHost.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:shadowHost.bounds cornerRadius:r].CGPath;
     }
 }
+// Album color glow: a soft wash of the cover's main color inside the glass.
+#define GLOW_TAG 0x4D50474C
+static void ApplyGlow(UIVisualEffectView *g, BOOL animated) {
+    if (![g isKindOfClass:[UIVisualEffectView class]]) return;
+    UIView *glow = [g.contentView viewWithTag:GLOW_TAG];
+    if (!gAlbumGlow || !gGlowColor) { if (glow.alpha > 0) [UIView animateWithDuration:animated ? 0.5 : 0 animations:^{ glow.alpha = 0; }]; return; }
+    if (!glow) {
+        glow = [[UIView alloc] initWithFrame:g.contentView.bounds];
+        glow.tag = GLOW_TAG; glow.userInteractionEnabled = NO; glow.alpha = 0;
+        glow.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [g.contentView addSubview:glow];
+    }
+    BOOL light = g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+    CGFloat h = 0, sa = 0, b = 0, a = 0;
+    [gGlowColor getHue:&h saturation:&sa brightness:&b alpha:&a];
+    UIColor *c = [UIColor colorWithHue:h saturation:MIN(1, sa * 1.35) brightness:light ? MAX(b, 0.75) : MIN(MAX(b, 0.45), 0.85) alpha:1];
+    CGFloat want = sa < 0.12 ? 0 : (light ? 0.30 : 0.38);   // black & white covers: no tint
+    if ([glow.backgroundColor isEqual:c] && fabs(glow.alpha - want) < 0.01) return;
+    void (^go)(void) = ^{ glow.backgroundColor = c; glow.alpha = want; };
+    if (animated) [UIView animateWithDuration:0.6 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:go completion:nil];
+    else go();
+}
+// The cover's main color: shrink it to a few pixels and average them, leaning
+// toward the most colorful ones so a bright accent isn't washed out by black.
+static UIColor *MainColorOf(UIImage *img) {
+    CGImageRef cg = img.CGImage;
+    if (!cg) return nil;
+    const int N = 12;
+    uint8_t px[N * N * 4];
+    memset(px, 0, sizeof(px));
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(px, N, N, 8, N * 4, cs, kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(cs);
+    if (!ctx) return nil;
+    CGContextSetInterpolationQuality(ctx, kCGInterpolationMedium);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, N, N), cg);
+    CGContextRelease(ctx);
+    double r = 0, gg = 0, bb = 0, wsum = 0;
+    for (int i = 0; i < N * N; i++) {
+        double R = px[i*4] / 255.0, G = px[i*4+1] / 255.0, B = px[i*4+2] / 255.0;
+        double mx = MAX(R, MAX(G, B)), mn = MIN(R, MIN(G, B));
+        double sat = mx > 0 ? (mx - mn) / mx : 0;
+        double wt = 0.15 + sat * sat * 3 + (mx > 0.2 ? 0.2 : 0);
+        r += R * wt; gg += G * wt; bb += B * wt; wsum += wt;
+    }
+    if (wsum <= 0) return nil;
+    return [UIColor colorWithRed:r / wsum green:gg / wsum blue:bb / wsum alpha:1];
+}
 static UIView *GlassCircle(NSString *ident, UIView *host) {
     for (UIView *v in host.subviews) if ([v.accessibilityIdentifier isEqualToString:ident]) return v;
     UIView *c = [UIView new];
@@ -1455,6 +1510,7 @@ static void LayoutCircle(UIView *c, CGRect f) {
     g.layer.cornerRadius = MIN(f.size.width, f.size.height) / 2;
     [c viewWithTag:2].frame = c.bounds;
     FrostGlass((UIVisualEffectView *)g, c);
+    ApplyGlow((UIVisualEffectView *)g, YES);
 }
 
 @interface MPPassHost : UIView @end
@@ -1617,7 +1673,7 @@ static NSString *MusicBarTitle(UIView *mini);
 }
 // Light mode: frosted white glass with a soft grey rim and shadow (iOS 26), not the
 // tab bar's dark glass. Dark mode keeps the dark glass.
-- (void)applyLook { FrostGlass((UIVisualEffectView *)_glass, self); }
+- (void)applyLook { FrostGlass((UIVisualEffectView *)_glass, self); ApplyGlow((UIVisualEffectView *)_glass, NO); }
 - (void)traitCollectionDidChange:(UITraitCollection *)prev {
     [super traitCollectionDidChange:prev];
     [self setNeedsLayout];
@@ -1712,7 +1768,18 @@ static NSString *MusicBarTitle(UIView *mini);
             if (![me.title.text isEqualToString:t2]) me.title.text = t2;
             if (![me.artist.text isEqualToString:a2]) me.artist.text = a2;
             me.badge.hidden = !explicitTrack;
-            if (img && me.art.image != img) me.art.image = img;
+            if (img && me.art.image != img) {
+                me.art.image = img;
+                UIImage *src = img;
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                    UIColor *c = MainColorOf(src);
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        MPMiniPill *me2 = weak; if (!me2 || !c) return;
+                        gGlowColor = c;
+                        ApplyGlow((UIVisualEffectView *)me2.glass, YES);
+                    });
+                });
+            }
             else if (!img && !have) me.art.image = nil;
             [me setNeedsLayout];
         });
@@ -5211,6 +5278,7 @@ static void MotionTick(UIWindow *w) {
             [st addObjectsFromArray:v.subviews];
         }
     }
+    gPlayerArt = art;
     static __weak UIView *shown;
     AVPlayer *mp = gMotionPlayer;
     // This album's own cover video (by title), else the last page's if it matches.
@@ -6027,6 +6095,87 @@ static void TitleSkip(BOOL next) {
     self.rows = nil;
 }
 @end
+// Double-tap the cover to favorite the song (like a post): a big star pops on the
+// art and little stars burst out.
+static void StarBurst(UIView *art) {
+    UIWindow *w = art.window;
+    if (!w) return;
+    CGRect f = [art convertRect:art.bounds toView:w];
+    CGPoint c = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
+    UIImageSymbolConfiguration *big = [UIImageSymbolConfiguration configurationWithPointSize:92 weight:UIImageSymbolWeightBold];
+    UIImageView *star = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"star.fill" withConfiguration:big]];
+    star.tintColor = UIColor.whiteColor;
+    star.layer.shadowColor = UIColor.blackColor.CGColor; star.layer.shadowOpacity = 0.35; star.layer.shadowRadius = 12; star.layer.shadowOffset = CGSizeZero;
+    star.center = c; star.userInteractionEnabled = NO;
+    [w addSubview:star];
+    star.transform = CGAffineTransformMakeScale(0.2, 0.2); star.alpha = 0;
+    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0.8 options:0 animations:^{
+        star.transform = CGAffineTransformIdentity; star.alpha = 1;
+    } completion:^(__unused BOOL d) {
+        [UIView animateWithDuration:0.3 delay:0.35 options:UIViewAnimationOptionCurveEaseIn animations:^{
+            star.transform = CGAffineTransformMakeScale(1.25, 1.25); star.alpha = 0;
+        } completion:^(__unused BOOL d2) { [star removeFromSuperview]; }];
+    }];
+    // Little stars flying out.
+    UIImageSymbolConfiguration *small = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightBold];
+    int n = 10;
+    for (int i = 0; i < n; i++) {
+        UIImageView *p = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"star.fill" withConfiguration:small]];
+        p.tintColor = (i % 2) ? UIColor.whiteColor : MusicPink();
+        p.center = c; p.userInteractionEnabled = NO; p.alpha = 0;
+        [w addSubview:p];
+        double ang = (2 * M_PI * i) / n + (arc4random_uniform(100) / 100.0 - 0.5) * 0.4;
+        CGFloat dist = 90 + arc4random_uniform(50);
+        CGFloat sc = 0.6 + arc4random_uniform(60) / 100.0;
+        p.transform = CGAffineTransformMakeScale(0.3, 0.3);
+        [UIView animateWithDuration:0.65 delay:0.05 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            p.alpha = 1;
+            p.center = CGPointMake(c.x + cos(ang) * dist, c.y + sin(ang) * dist);
+            p.transform = CGAffineTransformRotate(CGAffineTransformMakeScale(sc, sc), (CGFloat)ang);
+        } completion:^(__unused BOOL d) {
+            [UIView animateWithDuration:0.25 animations:^{ p.alpha = 0; p.transform = CGAffineTransformMakeScale(0.1, 0.1); } completion:^(__unused BOOL d2) { [p removeFromSuperview]; }];
+        }];
+    }
+}
+@interface MPArtTap : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+@implementation MPArtTap
++ (instancetype)shared { static MPArtTap *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPArtTap new]; }); return t; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)t {
+    if (!gDoubleTapFav) return NO;
+    UIWindow *w = [g.view isKindOfClass:[UIWindow class]] ? (UIWindow *)g.view : g.view.window;
+    UIView *art = gPlayerArt;
+    if (!w || !art.window || !PlayerIsUp(w, NULL)) return NO;
+    CGRect f = [art convertRect:art.bounds toView:w];
+    return CGRectContainsPoint(f, [t locationInView:w]);
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return YES; }
+- (void)doubleTap:(UITapGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateEnded) return;
+    UIView *art = gPlayerArt;
+    if (!art.window) return;
+    StarBurst(art);
+    UIButton *star = gPlayerStar;
+    if (gSongFavKnown && gSongFav) {
+        // Already a favorite: just the pop (double-tap never un-favorites).
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        return;
+    }
+    if (star.window) [[MPSongStar shared] tap:star];
+    else [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+}
+@end
+static void InstallArtTap(UIWindow *w) {
+    static const char kAT = 0;
+    if (!w || objc_getAssociatedObject(w, &kAT)) return;
+    UITapGestureRecognizer *t = [[UITapGestureRecognizer alloc] initWithTarget:[MPArtTap shared] action:@selector(doubleTap:)];
+    t.numberOfTapsRequired = 2;
+    t.delegate = [MPArtTap shared];
+    t.cancelsTouchesInView = NO; t.delaysTouchesEnded = NO;
+    [w addGestureRecognizer:t];
+    objc_setAssociatedObject(w, &kAT, t, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 static void InstallTitleSwipe(UIView *player) {
     static const char kTS = 0;
     player = player.window;   // the window sees every touch, whatever view the title is in
@@ -6040,7 +6189,7 @@ static void InstallTitleSwipe(UIView *player) {
     gSwipeDebug = @"installed";
 }
 static void PlayerExtras(UIView *player, UIWindow *w) {
-    @try { InstallTitleSwipe(player); } @catch (__unused id e) {}
+    @try { InstallTitleSwipe(player); InstallArtTap(player.window); } @catch (__unused id e) {}
     CGFloat H = w.bounds.size.height;
     UIView *more = nil, *loss = nil; UIButton *artist = nil;
     NSMutableArray *st = [NSMutableArray arrayWithObject:player];
