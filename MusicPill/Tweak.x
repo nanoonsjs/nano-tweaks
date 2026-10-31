@@ -1,4 +1,5 @@
-// MusicPill 1.2.36 - made by nano
+// MusicPill 1.2.37 - made by nano
+// 1.2.37: favorite stars in search sit in the left margin (iOS 26) and also mark favorited songs; better row reading
 // 1.2.36: holding an artist shows a small iOS 26 card (round photo, name, chevron) with Favorite / Share side by side; favorited artists get a star next to their name in search
 // 1.2.35: minimized pill: tapping or swiping up where the big pill used to be no longer opens the player (only the small pill does)
 // 1.2.34: album color glow updates the Home / Search circles of the minimized pill right away; Album Color Glow and Double-Tap Cover to Favorite are off by default
@@ -367,6 +368,17 @@ static NSMutableSet *FavArtists(void) {
     if (!set) set = [NSMutableSet setWithArray:[[NSUserDefaults standardUserDefaults] arrayForKey:@"mp.favArtists"] ?: @[]];
     return set;
 }
+static NSString *SongKey(NSString *title, NSString *artist) {
+    return [NSString stringWithFormat:@"s:%@|%@", title.lowercaseString ?: @"", artist.lowercaseString ?: @""];
+}
+static void SetFavSong(NSString *title, NSString *artist, BOOL fav) {
+    if (!title.length || !artist.length) return;
+    NSMutableSet *s = FavArtists();
+    NSString *k = SongKey(title, artist);
+    if (fav == [s containsObject:k]) return;
+    if (fav) [s addObject:k]; else [s removeObject:k];
+    [[NSUserDefaults standardUserDefaults] setObject:s.allObjects forKey:@"mp.favArtists"];
+}
 static void SetFavArtist(NSString *name, BOOL fav) {
     name = [name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (!name.length || name.length > 80) return;
@@ -385,6 +397,8 @@ static BOOL gMotionCovers = NO;    // animated album covers in the player (saved
 static NSString *gFloatDebug = @"-";
 static NSString *gNowAlbum;   // album of the song playing (MediaRemote)
 static NSString *gNowTitle;   // song playing (MediaRemote)
+static NSString *gNowArtist;  // its artist (MediaRemote)
+static NSString *gFavDebug = @"-";
 static const void *kKeepRed = &kKeepRed;   // labels we colour pink on purpose
 static CFTimeInterval gPlayerCooldownUntil;   // no reopening the player before this
 static NSString *gDismissDebug = @"-";
@@ -1309,9 +1323,9 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.36 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.37 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n favs: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
-                      CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
+                      CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gFavDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
@@ -5160,6 +5174,8 @@ static void RefreshNowPlaying(void) {
         NSString *al = d[@"kMRMediaRemoteNowPlayingInfoAlbum"], *ti = d[@"kMRMediaRemoteNowPlayingInfoTitle"];
         if ([al isKindOfClass:[NSString class]]) gNowAlbum = al;
         if ([ti isKindOfClass:[NSString class]]) gNowTitle = ti;
+        NSString *ar = d[@"kMRMediaRemoteNowPlayingInfoArtist"];
+        if ([ar isKindOfClass:[NSString class]]) gNowArtist = ar;
     });
 }
 // Saved covers: album -> its cover video's URL, kept in Music's own settings so
@@ -5978,6 +5994,7 @@ static void RefreshSongFav(void) {
     UIAction *a = FindKind(MenuOf(gPlayerMore, NULL).children, @[@"love", @"unlove"]);
     gSongFavKnown = a != nil;
     if (a) gSongFav = [MenuKind(a) isEqualToString:@"unlove"];
+    if (a) SetFavSong(gNowTitle, gNowArtist, gSongFav);
 }
 @interface MPSongStar : NSObject
 + (instancetype)shared;
@@ -5992,6 +6009,7 @@ static void RefreshSongFav(void) {
     BOOL willFav = ![MenuKind(a) isEqualToString:@"unlove"];
     RunAction(a, b);
     gSongFav = willFav; gSongFavKnown = YES;
+    SetFavSong(gNowTitle, gNowArtist, willFav);
     gSongFavLock = CACurrentMediaTime() + 1.5;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     SetStar(b, willFav, YES);
@@ -6570,45 +6588,62 @@ static void FavStarTick(UIWindow *w) {
     NSMutableArray *cells = [NSMutableArray array];
     NSMutableArray *st = [NSMutableArray arrayWithObject:w];
     int g = 0;
-    while (st.count && g++ < 4000) {
+    while (st.count && g++ < 6000) {
         UIView *v = st.lastObject; [st removeLastObject];
-        if (v.hidden || v.alpha < 0.01) continue;
+        if (v.hidden || v.alpha < 0.01 || [v isKindOfClass:[UITabBar class]] || v.tag == COLLAPSE_TAG || v.tag == DEBUG_TAG) continue;
         if ([v isKindOfClass:[UICollectionViewCell class]] || [v isKindOfClass:[UITableViewCell class]]) { [cells addObject:v]; continue; }
         [st addObjectsFromArray:v.subviews];
     }
+    int rows = 0, starred = 0;
     for (UIView *cell in cells) {
-        UIView *nameView = nil; BOOL isArtist = NO; NSString *nameText = nil;
+        // The row's texts, top to bottom: the name / title, then "Artist" or "Song · Who".
+        NSMutableArray *texts = [NSMutableArray array];
         NSMutableArray *cs = [NSMutableArray arrayWithArray:cell.subviews];
         int gc = 0;
-        while (cs.count && gc++ < 200) {
+        while (cs.count && gc++ < 250) {
             UIView *v = cs.lastObject; [cs removeLastObject];
-            if (v.tag == FAVSTAR_TAG || v.hidden) continue;
-            NSString *t = DrawnText(v);
-            if (t.length) {
-                if ([t isEqualToString:@"Artist"]) isArtist = YES;
-                else if (!nameView && [favs containsObject:t]) { nameView = v; nameText = t; }
+            if (v.tag == FAVSTAR_TAG || v.hidden || v.alpha < 0.01) continue;
+            NSMutableSet *ts = [NSMutableSet set];
+            DrawnTextsInto(v, ts);
+            if (ts.count) {
+                CGFloat y = [v convertPoint:CGPointZero toView:cell].y;
+                for (NSString *t in ts) [texts addObject:@{@"t": t, @"y": @(y)}];
                 continue;
             }
             [cs addObjectsFromArray:v.subviews];
         }
+        BOOL fav = NO, known = NO;
+        for (NSDictionary *sub in texts) {
+            NSString *t = sub[@"t"];
+            if ([t isEqualToString:@"Artist"]) {
+                known = YES;
+                for (NSDictionary *o in texts) if ([o[@"y"] doubleValue] < [sub[@"y"] doubleValue] && [favs containsObject:o[@"t"]]) fav = YES;
+            } else if ([t hasPrefix:@"Song · "]) {
+                known = YES;
+                NSString *who = [t substringFromIndex:7];
+                for (NSDictionary *o in texts) if ([o[@"y"] doubleValue] < [sub[@"y"] doubleValue] && [favs containsObject:SongKey(o[@"t"], who)]) fav = YES;
+            }
+        }
+        if (known) rows++;
         UIImageView *star = (UIImageView *)[cell viewWithTag:FAVSTAR_TAG];
-        if (!(isArtist && nameView)) { [star removeFromSuperview]; continue; }
+        if (!fav) { [star removeFromSuperview]; continue; }
+        starred++;
         if (!star) {
-            star = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"star.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold]]];
+            star = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"star.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:11 weight:UIImageSymbolWeightBold]]];
             star.tag = FAVSTAR_TAG; star.tintColor = MusicPink(); star.contentMode = UIViewContentModeCenter;
             star.userInteractionEnabled = NO;
             [cell addSubview:star];
             star.alpha = 0; star.transform = CGAffineTransformMakeScale(0.4, 0.4);
             [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.6 options:0 animations:^{ star.alpha = 1; star.transform = CGAffineTransformIdentity; } completion:nil];
         }
-        // Right after the name: its text width in the row's font (labels know theirs).
-        CGRect nf = [nameView convertRect:nameView.bounds toView:cell];
-        UIFont *f = [nameView isKindOfClass:[UILabel class]] ? ((UILabel *)nameView).font : [UIFont systemFontOfSize:17];
-        CGFloat tw = MIN(ceil([nameText sizeWithAttributes:@{NSFontAttributeName: f}].width), nf.size.width);
-        CGPoint c = CGPointMake(round(CGRectGetMinX(nf) + tw + 13), round(CGRectGetMidY(nf)));
-        if (!CGPointEqualToPoint(star.center, c)) { star.bounds = CGRectMake(0, 0, 18, 18); star.center = c; }
+        if (cell.clipsToBounds) cell.clipsToBounds = NO;
+        // In the left margin, level with the row (iOS 26).
+        CGPoint c = [cell convertPoint:CGPointMake(12, 0) fromView:nil];
+        c = CGPointMake(round(c.x), round(cell.bounds.size.height / 2));
+        if (!CGPointEqualToPoint(star.center, c)) { star.bounds = CGRectMake(0, 0, 16, 16); star.center = c; }
         if (cell.subviews.lastObject != star) [cell bringSubviewToFront:star];
     }
+    gFavDebug = [NSString stringWithFormat:@"saved=%lu cells=%lu rows=%d starred=%d", (unsigned long)favs.count, (unsigned long)cells.count, rows, starred];
 }
 %hook UICollectionViewCell
 - (void)prepareForReuse { %orig; [[self viewWithTag:FAVSTAR_TAG] removeFromSuperview]; }
