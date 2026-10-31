@@ -1,4 +1,5 @@
-// MusicPill 1.2.20 - made by nano
+// MusicPill 1.2.21 - made by nano
+// 1.2.21: no more wrong animated covers: covers are no longer guessed from the album page's song list (it also lists other albums), a tie only happens when you press Play / a song on that same album page while it's on screen. Saved covers are cleared once more.
 // 1.2.20: animated covers made safer and lighter: the cover video pauses when the player is closed or Music is in the background, an expired saved cover is forgotten instead of showing black, text reading never touches freed objects, fewer page scans, and memory is freed on low memory
 // 1.2.19: a song that changes by itself (autoplay / next song) no longer takes the previous album's animated cover; a cover is only tied to an album when you tap Play or a song on that album's page. Old saved covers are cleared once.
 // 1.2.18: new setting "Animated Album Covers": a cover found once is saved and plays in the player every time after; turning it off deletes the saved covers
@@ -429,9 +430,10 @@ static void LoadPrefs(void) {
     gQueueLook = PrefBool(file, @"queuelook", YES);
     gCollapse = PrefBool(file, @"collapse", YES);
     gMotionCovers = PrefBool(file, @"motioncovers", YES);
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers"];   // 1.2.18's list (could hold wrong covers)
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers"];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers2"];   // 1.2.19/20's list (some wrong)   // 1.2.18's list (could hold wrong covers)
     // Turned off: forget every saved cover.
-    if (!gMotionCovers) [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers2"];
+    if (!gMotionCovers) [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers3"];
     id ps = file[@"playerstyle"];
     if (!ps) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("playerstyle"), DOM); if (cf) ps = (__bridge_transfer id)cf; }
     gPlayerStyle = [ps respondsToSelector:@selector(intValue)] ? [ps intValue] : 0;
@@ -680,6 +682,7 @@ static __weak UIView *gMotionTapPage;
         if (t0.phase == UITouchPhaseBegan) {
             UIView *mpg = gMotionTapPage;
             if (mpg && t0.view && [t0.view isDescendantOfView:mpg]) gMotionTapAt = CACurrentMediaTime();
+            else gMotionTapAt = 0;   // a tap anywhere else (another album, the pill...) cancels it
             UIView *c = CellUnder(t0.view);
             if (c && c.bounds.size.width < self.bounds.size.width * 0.98) { gTapCell = c; gTapTime = CACurrentMediaTime(); }
             else if (c) { gTapCell = c; gTapTime = CACurrentMediaTime(); }
@@ -1266,7 +1269,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.20 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.21 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -4872,7 +4875,6 @@ static BOOL PageHasLabel(UIView *page, NSString *text) {
     return NO;
 }
 static NSMapTable *gMotionByAlbum;   // album title -> its cover video player
-static NSMapTable *gMotionTexts;     // cover video player -> every text on its album page
 // Loose key: lowercase, no " - Single"/" - EP", no "(feat. ...)" / "[...]",
 // letters and digits only, so the page text and the now-playing info line up.
 static NSString *AlbumKey(NSString *s) {
@@ -4954,15 +4956,15 @@ static void SaveMotionCover(NSString *album, AVPlayer *p) {
     NSString *u = MotionURLOf(p), *k = AlbumKey(album ?: @"");
     if (!gMotionCovers || !u.length || k.length < 1) return;
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    NSMutableDictionary *m = [[d dictionaryForKey:@"mp.motionCovers2"] mutableCopy] ?: [NSMutableDictionary dictionary];
+    NSMutableDictionary *m = [[d dictionaryForKey:@"mp.motionCovers3"] mutableCopy] ?: [NSMutableDictionary dictionary];
     if ([m[k] isEqualToString:u]) return;
     if (m.count >= 400) [m removeObjectForKey:m.allKeys.firstObject];   // keep the list small
     m[k] = u;
-    [d setObject:m forKey:@"mp.motionCovers2"];
+    [d setObject:m forKey:@"mp.motionCovers3"];
 }
 static NSString *SavedMotionURL(NSString *album) {
     if (!gMotionCovers || !album.length) return nil;
-    return [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"mp.motionCovers2"][AlbumKey(album)];
+    return [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"mp.motionCovers3"][AlbumKey(album)];
 }
 // Our own looping, muted player for a saved cover.
 static AVQueuePlayer *gOwnMotion;
@@ -4973,10 +4975,10 @@ static void PauseOwnMotion(void) {
 }
 static void ForgetMotionCover(NSString *album) {
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    NSMutableDictionary *m = [[d dictionaryForKey:@"mp.motionCovers2"] mutableCopy];
+    NSMutableDictionary *m = [[d dictionaryForKey:@"mp.motionCovers3"] mutableCopy];
     if (!m[AlbumKey(album ?: @"")]) return;
     [m removeObjectForKey:AlbumKey(album ?: @"")];
-    [d setObject:m forKey:@"mp.motionCovers2"];
+    [d setObject:m forKey:@"mp.motionCovers3"];
 }
 static AVPlayer *OwnMotionPlayer(NSString *url) {
     static dispatch_once_t once;
@@ -5013,7 +5015,9 @@ static void MotionTick(UIWindow *w) {
     if (gNowAlbum.length && ![gNowAlbum isEqualToString:lastAlbum]) {
         lastAlbum = gNowAlbum;
         AVPlayer *sp = gMotionPageSeenPlayer;
-        if (gMotionCovers && sp && CACurrentMediaTime() - gMotionTapAt < 6) {
+        UIView *tp = gMotionTapPage;
+        BOOL pageOnTop = tp.window != nil && gRowParent.window != nil && [gRowParent isDescendantOfView:tp];
+        if (gMotionCovers && sp && pageOnTop && CACurrentMediaTime() - gMotionTapAt < 6) {
             gMotionTapAt = 0;
             if (!gMotionByAlbum) gMotionByAlbum = [NSMapTable strongToWeakObjectsMapTable];
             [gMotionByAlbum setObject:sp forKey:AlbumKey(gNowAlbum)];
@@ -5076,26 +5080,6 @@ static void MotionTick(UIWindow *w) {
                     [vs addObjectsFromArray:v.subviews];
                 }
                 for (NSString *k in keys) [gMotionByAlbum setObject:pick.player forKey:AlbumKey(k)];
-                // Plus every text on the page (song list): the playing song's title is
-                // there even when the album title can't be read.
-                static CFTimeInterval lastTextScan;
-                static __weak AVPlayer *lastTextPlayer;
-                BOOL rescan = lastTextPlayer != pick.player || CACurrentMediaTime() - lastTextScan > 3;
-                if (rescan) { lastTextScan = CACurrentMediaTime(); lastTextPlayer = pick.player; }
-                NSMutableSet *all = [NSMutableSet set];
-                NSMutableArray *as = rescan ? [NSMutableArray arrayWithObject:page] : [NSMutableArray array];
-                int ga = 0;
-                while (as.count && ga++ < 3000) {
-                    UIView *v = as.lastObject; [as removeLastObject];
-                    NSMutableSet *ts = [NSMutableSet set];
-                    DrawnTextsInto(v, ts);
-                    for (NSString *t in ts) { NSString *k = AlbumKey(t); if (k.length > 1) [all addObject:k]; }
-                    [as addObjectsFromArray:v.subviews];
-                }
-                if (!gMotionTexts) gMotionTexts = [NSMapTable weakToStrongObjectsMapTable];
-                NSMutableSet *old = [gMotionTexts objectForKey:pick.player];
-                if (old) [all unionSet:old];
-                [gMotionTexts setObject:all forKey:pick.player];
                 [gVideoSeen appendFormat:@"cover keys=%@", [keys componentsJoinedByString:@"/"]];
             }
             videoDebug = [gVideoSeen copy];
@@ -5128,19 +5112,8 @@ static void MotionTick(UIWindow *w) {
     // This album's own cover video (by title), else the last page's if it matches.
     AVPlayer *byTitle = nil;
     for (NSString *k in gMotionByAlbum.keyEnumerator.allObjects) if ([AlbumKey(k) isEqualToString:AlbumKey(gNowAlbum ?: @"")]) { byTitle = [gMotionByAlbum objectForKey:k]; break; }
-    if (!byTitle) {
-        NSString *song = AlbumKey(gNowTitle ?: @""), *alb = AlbumKey(gNowAlbum ?: @"");
-        for (AVPlayer *p in gMotionTexts.keyEnumerator.allObjects) {
-            NSSet *tx = [gMotionTexts objectForKey:p];
-            if ((alb.length && [tx containsObject:alb]) || (song.length && [tx containsObject:song])) { byTitle = p; break; }
-            // Looser: a page text that starts with the song / album name (a row that
-            // also holds the artist or a badge).
-            for (NSString *t in tx) {
-                if ((alb.length >= 3 && [t hasPrefix:alb]) || (song.length >= 3 && [t hasPrefix:song])) { byTitle = p; break; }
-            }
-            if (byTitle) break;
-        }
-    }
+    // (No matching by the page's song list anymore: it also lists OTHER albums
+    // under "More by" / "Other Versions", which gave covers to the wrong album.)
     if (byTitle) SaveMotionCover(gNowAlbum, byTitle);
     // Prefer the saved cover (our own looping player): it works on every launch.
     NSString *savedURL = SavedMotionURL(gNowAlbum);
@@ -5169,7 +5142,7 @@ static void MotionTick(UIWindow *w) {
     if (!match) {
         [shown removeFromSuperview];
         PauseOwnMotion();   // nothing on screen: no video decoding / data in the background
-        gMotionDebug = [NSString stringWithFormat:@"player=%d art=%d video=%d song=%@ albums=%lu pages=%lu album=%@ page=%d match=%d saved=%lu on=%d seen=%@ cands=%@", up, art != nil, mp != nil, gNowTitle, (unsigned long)gMotionByAlbum.count, (unsigned long)gMotionTexts.count, gNowAlbum, gMotionPage != nil, gMotionPage ? PageHasLabel(gMotionPage, gNowAlbum) : 0, (unsigned long)[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"mp.motionCovers2"].count, gMotionCovers, videoDebug, cands];
+        gMotionDebug = [NSString stringWithFormat:@"player=%d art=%d video=%d song=%@ albums=%lu pages=%lu album=%@ page=%d match=%d saved=%lu on=%d seen=%@ cands=%@", up, art != nil, mp != nil, gNowTitle, (unsigned long)gMotionByAlbum.count, (unsigned long)0, gNowAlbum, gMotionPage != nil, gMotionPage ? PageHasLabel(gMotionPage, gNowAlbum) : 0, (unsigned long)[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"mp.motionCovers3"].count, gMotionCovers, videoDebug, cands];
         return;
     }
     UIView *mv = [art viewWithTag:MOTION_TAG];
