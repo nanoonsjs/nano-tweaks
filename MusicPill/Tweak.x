@@ -1,4 +1,5 @@
-// MusicPill 1.2.33 - made by nano
+// MusicPill 1.2.34 - made by nano
+// 1.2.34: album color glow updates the Home / Search circles of the minimized pill right away; Album Color Glow and Double-Tap Cover to Favorite are off by default
 // 1.2.33: Album Color Glow (the pill and its circles take a soft tint of the album cover's color) and double-tap the player cover to favorite the song with a star burst
 // 1.2.32: artist page star has a haptic and shows the "Favorited" capsule; Play Next / Play Last show the same small capsule instead of the big box; capsules are frosted white in light mode
 // 1.2.31: the Home / Search circles next to the minimized pill get the same frosted white glass in light mode
@@ -357,8 +358,8 @@ static UIView *GlyphIn(UIView *v, int depth);
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
-static BOOL gAlbumGlow = YES;        // pill + circles tinted with the album cover's color
-static BOOL gDoubleTapFav = YES;     // double-tap the player's artwork to favorite
+static BOOL gAlbumGlow = NO;         // pill + circles tinted with the album cover's color
+static BOOL gDoubleTapFav = NO;      // double-tap the player's artwork to favorite
 static UIColor *gGlowColor;
 static __weak UIView *gPlayerArt;
 static CGPoint gSwipeStart;
@@ -450,8 +451,8 @@ static void LoadPrefs(void) {
     gCollapse = PrefBool(file, @"collapse", YES);
     gMotionCovers = PrefBool(file, @"motioncovers", NO);
     gTitleSwipe = PrefBool(file, @"titleswipe", YES);
-    gAlbumGlow = PrefBool(file, @"albumglow", YES);
-    gDoubleTapFav = PrefBool(file, @"doubletapfav", YES);
+    gAlbumGlow = PrefBool(file, @"albumglow", NO);
+    gDoubleTapFav = PrefBool(file, @"doubletapfav", NO);
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers"];
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers2"];   // 1.2.19/20's list (some wrong)   // 1.2.18's list (could hold wrong covers)
     // Turned off: forget every saved cover.
@@ -1291,7 +1292,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.33 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.34 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1777,6 +1778,11 @@ static NSString *MusicBarTitle(UIView *mini);
                         MPMiniPill *me2 = weak; if (!me2 || !c) return;
                         gGlowColor = c;
                         ApplyGlow((UIVisualEffectView *)me2.glass, YES);
+                        // The Home / Search circles next to the minimized pill too, right away
+                        // (they only updated when the pill was expanded and minimized again).
+                        for (UIView *v in me2.superview.subviews)
+                            if ([v.accessibilityIdentifier isEqualToString:@"tab"] || [v.accessibilityIdentifier isEqualToString:@"search"])
+                                ApplyGlow((UIVisualEffectView *)[v viewWithTag:1], YES);
                     });
                 });
             }
