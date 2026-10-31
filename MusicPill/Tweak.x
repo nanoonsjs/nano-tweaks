@@ -1,4 +1,5 @@
-// MusicPill 1.2.39 - made by nano
+// MusicPill 1.2.40 - made by nano
+// 1.2.40: removed the favorite stars in search
 // 1.2.39: search stars read rows another way (their text views and spoken descriptions)
 // 1.2.38: the pill says "Not Playing" when Music opens until something plays; search stars read the rows properly
 // 1.2.37: favorite stars in search sit in the left margin (iOS 26) and also mark favorited songs; better row reading
@@ -1325,9 +1326,9 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.39 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n favs: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.40 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
-                      CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gFavDebug, gCollapseDebug,
+                      CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
@@ -6434,7 +6435,6 @@ static void StartWatchdog(void) {
             @try { AlbumTick(w); } @catch (__unused id e) {}
             @try { NavTick(TopNavBar(w)); } @catch (__unused id e) {}
             @try { FloatTick(w); } @catch (__unused id e) {}
-            @try { FavStarTick(w); } @catch (__unused id e) {}
         }
         // Full player: round queue button (backup for the hook) + debug map.
         UIView *player = nil;
@@ -6593,7 +6593,7 @@ static void StyleArtistPreview(UIViewController *vc) {
 
 // A star after a favorited artist's name in search results.
 #define FAVSTAR_TAG 0x4D504653
-static void FavStarTick(UIWindow *w) {
+__attribute__((unused)) static void FavStarTick(UIWindow *w) {
     static CFTimeInterval last;
     if (CACurrentMediaTime() - last < 0.3) return;
     last = CACurrentMediaTime();
