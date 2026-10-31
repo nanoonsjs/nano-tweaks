@@ -1,4 +1,5 @@
-// MusicPill 1.2.34 - made by nano
+// MusicPill 1.2.35 - made by nano
+// 1.2.35: minimized pill: tapping or swiping up where the big pill used to be no longer opens the player (only the small pill does)
 // 1.2.34: album color glow updates the Home / Search circles of the minimized pill right away; Album Color Glow and Double-Tap Cover to Favorite are off by default
 // 1.2.33: Album Color Glow (the pill and its circles take a soft tint of the album cover's color) and double-tap the player cover to favorite the song with a star burst
 // 1.2.32: artist page star has a haptic and shows the "Favorited" capsule; Play Next / Play Last show the same small capsule instead of the big box; capsules are frosted white in light mode
@@ -1292,7 +1293,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.34 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.35 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1986,11 +1987,15 @@ static void HideOne(UIView *m, BOOL hide) {
 }
 static NSHashTable *gUnclipped;
 static __weak UIView *gUnderMini;   // Music's bar while it's moved under the collapsed pill
+static NSHashTable *gMiniChain;      // the views holding Music's bar (its old spot keeps them alive)
+static __weak UIView *gMiniRoot;
 static void SetUnclipped(UIView *mini, UIView *root, BOOL on) {
     if (!gUnclipped) gUnclipped = [NSHashTable weakObjectsHashTable];
+    if (!gMiniChain) gMiniChain = [NSHashTable weakObjectsHashTable];
+    [gMiniChain removeAllObjects];
     if (on) {
-        for (UIView *p = mini.superview; p && p != root; p = p.superview) if (p.clipsToBounds) { p.clipsToBounds = NO; [gUnclipped addObject:p]; }
-        gUnderMini = mini;
+        for (UIView *p = mini.superview; p && p != root; p = p.superview) { if (p.clipsToBounds) { p.clipsToBounds = NO; [gUnclipped addObject:p]; } [gMiniChain addObject:p]; }
+        gUnderMini = mini; gMiniRoot = root;
     } else {
         for (UIView *p in [gUnclipped allObjects]) p.clipsToBounds = YES;
         [gUnclipped removeAllObjects];
@@ -2438,6 +2443,21 @@ static void AvatarEval(void);
         }
     }
     return %orig;
+}
+// Minimized: the spot where Music's bar used to be is empty, but its holders were
+// still there, so a tap or swipe up on it opened the player. Only Music's bar itself
+// (sitting under our small pill) takes touches now; everything else falls through.
+- (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
+    UIView *r = %orig;
+    if (!gCollapsed || !r) return r;
+    BOOL chain = [gMiniChain containsObject:self];
+    if (!chain && self != gMiniRoot) return r;
+    UIView *m = gUnderMini;
+    if (!m) return r;
+    if (r == m || [r isDescendantOfView:m]) return r;
+    if (chain) return nil;
+    // The root: only its own empty area (not the tab bar, our circles, the pill...).
+    return r == self ? nil : r;
 }
 // Music's gray circles we cleared behind the top buttons stay clear.
 - (void)setBackgroundColor:(UIColor *)color {
