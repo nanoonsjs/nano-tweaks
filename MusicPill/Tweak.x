@@ -1,4 +1,5 @@
-// MusicPill 1.2.29 - made by nano
+// MusicPill 1.2.30 - made by nano
+// 1.2.30: the bottom pill in light mode is frosted white glass with a soft rim and shadow (no more dark glass); album cover on the pill is a bit smaller
 // 1.2.29: fixed Music freezing when opening the queue after a title swipe (skips now use the lock screen commands), and the swipe only listens to touches on the title
 // 1.2.28: title swipe is faster and bounces into place like iOS 26 (slight squish while dragging)
 // 1.2.27: title swipe reads where your finger went down correctly
@@ -1281,7 +1282,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.29 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.30 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1572,15 +1573,55 @@ static NSString *MusicBarTitle(UIView *mini);
     [self insertSubview:g aboveSubview:_glass];
     [_glass removeFromSuperview];
     _glass = g;
+    [self applyLook];
+}
+// Light mode: frosted white glass with a soft grey rim and shadow (iOS 26), not the
+// tab bar's dark glass. Dark mode keeps the dark glass.
+- (void)applyLook {
+    BOOL light = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+    UIVisualEffectView *g = (UIVisualEffectView *)_glass;
+    if (![g isKindOfClass:[UIVisualEffectView class]]) return;
+    NSNumber *was = objc_getAssociatedObject(g, @selector(applyLook));
+    if (was && was.boolValue == light) return;
+    objc_setAssociatedObject(g, @selector(applyLook), @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIView *tint = [g.contentView viewWithTag:0x4D50574C];
+    if (light) {
+        g.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight];
+        if (!tint) {
+            tint = [[UIView alloc] initWithFrame:g.contentView.bounds];
+            tint.tag = 0x4D50574C; tint.userInteractionEnabled = NO;
+            tint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [g.contentView insertSubview:tint atIndex:0];
+        }
+        tint.backgroundColor = [UIColor colorWithWhite:1 alpha:0.62];
+        g.layer.borderWidth = 0.8;
+        g.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.08].CGColor;
+        self.layer.shadowColor = UIColor.blackColor.CGColor;
+        self.layer.shadowOpacity = 0.12; self.layer.shadowRadius = 14; self.layer.shadowOffset = CGSizeMake(0, 4);
+    } else {
+        g.effect = TabGlassEffect();
+        [tint removeFromSuperview];
+        g.layer.borderWidth = 0.75;
+        g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2].CGColor;
+        self.layer.shadowOpacity = 0;
+    }
+}
+- (void)traitCollectionDidChange:(UITraitCollection *)prev {
+    [super traitCollectionDidChange:prev];
+    [self setNeedsLayout];
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGSize S = self.bounds.size;
     _glass.frame = self.bounds; _glass.layer.cornerRadius = S.height / 2;
-    CGFloat a = S.height - 14;
-    _art.frame = CGRectMake(8, 7, a, a);
+    [self applyLook];
+    if (self.layer.shadowOpacity > 0) self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:S.height / 2].CGPath;
+    // Artwork a bit smaller, with more room around it (iOS 26).
+    CGFloat a = round(S.height * 0.66);
+    _art.frame = CGRectMake(12, round((S.height - a) / 2), a, a);
+    _art.layer.cornerRadius = 7;
     CGFloat pw = 44, btns = _compact ? pw : pw * 2;
-    CGFloat x = 8 + a + 11, maxW = S.width - x - btns - 8;
+    CGFloat x = 12 + a + 11, maxW = S.width - x - btns - 8;
     CGFloat bw = _badge.hidden ? 0 : 18;
     CGFloat full = ceil([_title sizeThatFits:CGSizeMake(2000, 30)].width);
     CGFloat boxW = MIN(full, maxW - bw);
