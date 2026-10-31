@@ -1,4 +1,5 @@
-// MusicPill 1.2.47 - made by nano
+// MusicPill 1.2.48 - made by nano
+// 1.2.48: the X circle lines up with the search field (its own centered xmark) and has the same jelly press as the bottom circles
 // 1.2.47: X centered in its circle and level with the search field; Apple Music / Library switch a bit lower
 // 1.2.46: search field and X are bigger (46pt) with more space between them, like iOS 26
 // 1.2.45: the liquid neck fades out when you let go instead of vanishing
@@ -1333,7 +1334,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.47 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.48 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2434,7 +2435,7 @@ static void PlayerStarSync(void);
         [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.8 options:o animations:^{
             c.transform = CGAffineTransformMakeScale(1.18, 1.18);
         } completion:nil];
-        [self startGoo:c];
+        if ([c.accessibilityIdentifier isEqualToString:@"tab"] || [c.accessibilityIdentifier isEqualToString:@"search"]) [self startGoo:c];
     } else if (g.state == UIGestureRecognizerStateChanged) {
         CGPoint p = [g locationInView:c];
         UIView *pill = nil;
@@ -2459,7 +2460,7 @@ static void PlayerStarSync(void);
         [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.38 initialSpringVelocity:0.9 options:o animations:^{
             c.transform = CGAffineTransformIdentity;
         } completion:nil];
-        gGooEnd = CACurrentMediaTime() + 0.5;   // fade the neck out while it springs back
+        if (c == gGooCircle) gGooEnd = CACurrentMediaTime() + 0.5;   // fade the neck out while it springs back
         gGooReleaseAlpha = gGooBridge && !gGooBridge.hidden ? gGooBridge.alpha : 0;
     }
 }
@@ -3674,28 +3675,34 @@ static void StyleSearchBar(UISearchBar *sb) {
             if ([cancel currentTitle].length) [cancel setTitle:@"" forState:UIControlStateNormal];
             if (![cancel imageForState:UIControlStateNormal])
                 [cancel setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
-            cancel.tintColor = GlassIcon();
+            // Music's own xmark is hidden (UIKit keeps moving it); ours sits in the
+            // middle of the disc, and the disc sits level with the field's middle.
+            if (![cancel.tintColor isEqual:UIColor.clearColor]) cancel.tintColor = UIColor.clearColor;
             UIView *disc = [cancel viewWithTag:XDISC_TAG];
             if (!disc) {
                 disc = [UIView new];
                 disc.tag = XDISC_TAG; disc.userInteractionEnabled = NO;
                 disc.backgroundColor = GlassFill();
                 disc.layer.borderWidth = 0.75; disc.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+                UIImageView *x = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium]]];
+                x.tag = 7; x.contentMode = UIViewContentModeCenter; x.tintColor = GlassIcon();
+                x.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                [disc addSubview:x];
                 [cancel insertSubview:disc atIndex:0];
+                // Same jelly press as the bottom circles.
+                UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPCollapse shared] action:@selector(jelly:)];
+                lp.minimumPressDuration = 0; lp.cancelsTouchesInView = NO;
+                lp.delegate = (id<UIGestureRecognizerDelegate>)[MPCollapse shared];
+                [cancel addGestureRecognizer:lp];
             }
             CGFloat D = 46;
             CGPoint ic = cancel.imageView ? cancel.imageView.center : CGPointMake(CGRectGetMidX(cancel.bounds), CGRectGetMidY(cancel.bounds));
-            CGRect df = CGRectMake(round(ic.x - D / 2), round(ic.y - D / 2), D, D);
-            if (cancel.imageView && !CGAffineTransformIsIdentity(cancel.imageView.transform)) cancel.imageView.transform = CGAffineTransformIdentity;
-            // Level with the middle of the (taller) field.
-            if (tf.window && cancel.superview) {
-                CGFloat fieldMid = [tf convertPoint:CGPointMake(0, tf.bounds.size.height / 2) toView:cancel.superview].y;
-                CGFloat glyphMid = cancel.center.y - cancel.bounds.size.height / 2 + ic.y;
-                CGFloat dy = round(fieldMid - glyphMid);
-                CGAffineTransform t = CGAffineTransformMakeTranslation(0, dy);
-                if (fabs(dy) < 20 && !CGAffineTransformEqualToTransform(cancel.transform, t)) cancel.transform = t;
-            }
-            if (!CGRectEqualToRect(disc.frame, df)) { disc.frame = df; disc.layer.cornerRadius = D / 2; }
+            CGFloat cy = ic.y;
+            if (tf.window) cy = [tf convertPoint:CGPointMake(0, tf.bounds.size.height / 2) toView:cancel].y;
+            if (fabs(cy - ic.y) > 30) cy = ic.y;
+            CGRect df = CGRectMake(round(ic.x - D / 2), round(cy - D / 2), D, D);
+            // (not while it's being squished: that moves everything together)
+            if (CGAffineTransformIsIdentity(cancel.transform) && !CGRectEqualToRect(disc.frame, df)) { disc.frame = df; disc.layer.cornerRadius = D / 2; [disc viewWithTag:7].frame = disc.bounds; }
             [cancel sendSubviewToBack:disc];
             if (cancel.imageView) [cancel bringSubviewToFront:cancel.imageView];
         }
