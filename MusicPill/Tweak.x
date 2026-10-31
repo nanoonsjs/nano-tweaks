@@ -1,4 +1,5 @@
-// MusicPill 1.2.40 - made by nano
+// MusicPill 1.2.41 - made by nano
+// 1.2.41: another app playing (YouTube...) no longer shows in the pill, and the pill buttons control Music; squishing a circle into the pill joins them with a liquid glass neck that snaps when you let go
 // 1.2.40: removed the favorite stars in search
 // 1.2.39: search stars read rows another way (their text views and spoken descriptions)
 // 1.2.38: the pill says "Not Playing" when Music opens until something plays; search stars read the rows properly
@@ -1326,7 +1327,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.40 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.41 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1637,6 +1638,33 @@ static BOOL OpenPlayer(UIView *mini) {
 
 static NSString *MusicBarTitle(UIView *mini);
 static BOOL gEverPlayed;   // something has played since Music opened
+static int gNowPlayingPID;  // the app whose song MediaRemote reports
+static BOOL gOtherApp;      // that app isn't Music (YouTube etc.)
+// One of Music's own (hidden) bar buttons, by its symbol: so play / next act on
+// Music even when another app is the one "now playing".
+static UIControl *MusicBarButton(NSArray *syms) {
+    UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
+    if (!mini) return nil;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:mini];
+    int g = 0;
+    while (st.count && g++ < 200) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if ([v isKindOfClass:NSClassFromString(@"MPMiniPill")]) continue;
+        if ([v isKindOfClass:[UIControl class]]) {
+            NSMutableArray *is = [NSMutableArray arrayWithObject:v];
+            int gi = 0;
+            while (is.count && gi++ < 20) {
+                UIView *x = is.lastObject; [is removeLastObject];
+                NSString *d = [x isKindOfClass:[UIImageView class]] ? ((UIImageView *)x).image.description : nil;
+                if ([x isKindOfClass:[UIButton class]]) d = [((UIButton *)x) imageForState:UIControlStateNormal].description ?: d;
+                for (NSString *sym in syms) if ([d containsString:sym]) return (UIControl *)v;
+                [is addObjectsFromArray:x.subviews];
+            }
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+    return nil;
+}
 @interface MPMiniPill : UIView
 @property (nonatomic, strong) UIView *glass;
 @property (nonatomic, strong) UIImageView *art, *badge;
@@ -1774,6 +1802,13 @@ static BOOL gEverPlayed;   // something has played since Music opened
         void *h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
         if (h) { info = (InfoFn)dlsym(h, "MRMediaRemoteGetNowPlayingInfo"); playing = (PlayingFn)dlsym(h, "MRMediaRemoteGetNowPlayingApplicationIsPlaying"); }
     });
+    static void (*getPID)(dispatch_queue_t, void (^)(int));
+    static dispatch_once_t once2;
+    dispatch_once(&once2, ^{
+        void *h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
+        if (h) getPID = (void (*)(dispatch_queue_t, void (^)(int)))dlsym(h, "MRMediaRemoteGetNowPlayingApplicationPID");
+    });
+    if (getPID) getPID(dispatch_get_main_queue(), ^(int pid) { gNowPlayingPID = pid; });
     __weak MPMiniPill *weak = self;
     dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
     if (info) info(q, ^(CFDictionaryRef d) {
@@ -1802,6 +1837,24 @@ static BOOL gEverPlayed;   // something has played since Music opened
                 return;
             }
             BOOL have = [title isKindOfClass:[NSString class]] && [title length];
+            // Another app (YouTube...) is the one playing: MediaRemote reports its
+            // video. Show Music's own song instead (what Music's bar says), no art.
+            UIView *mb = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
+            NSString *barTitle = mb ? MusicBarTitle(mb) : nil;
+            BOOL otherPID = gNowPlayingPID > 0 && gNowPlayingPID != getpid();
+            gOtherApp = have && otherPID && barTitle.length && ![barTitle isEqualToString:title];
+            if (gOtherApp) {
+                NSString *t3 = [barTitle isEqualToString:@"Not Playing"] ? @"Not Playing" : barTitle;
+                if (![me.title.text isEqualToString:t3]) me.title.text = t3;
+                if (me.artist.text.length) me.artist.text = @"";
+                me.badge.hidden = YES; me.art.image = nil;
+                if (![me.play.accessibilityValue isEqualToString:@"play.fill"]) {
+                    me.play.accessibilityValue = @"play.fill";
+                    [me.play setImage:[UIImage systemImageNamed:@"play.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+                }
+                [me setNeedsLayout];
+                return;
+            }
             if (!have && me.title.text.length && ![me.title.text isEqualToString:@"Not Playing"]) return;   // keep the last song
             if (!have) {
                 UIView *m = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
@@ -1837,6 +1890,7 @@ static BOOL gEverPlayed;   // something has played since Music opened
     if (playing) playing(q, ^(Boolean p) {
         dispatch_async(dispatch_get_main_queue(), ^{
             MPMiniPill *me = weak; if (!me) return;
+            if (gOtherApp) return;
             if (p && !gEverPlayed) { gEverPlayed = YES; [me refresh]; }
             NSString *sym = p ? @"pause.fill" : @"play.fill";
             if (![me.play.accessibilityValue isEqualToString:sym]) {
@@ -1846,7 +1900,11 @@ static BOOL gEverPlayed;   // something has played since Music opened
         });
     });
 }
-- (void)skipNext { SkipTrack(YES); [self bump:-1]; }
+- (void)skipNext {
+    UIControl *mbn = gOtherApp ? MusicBarButton(@[@"forward"]) : nil;
+    if (mbn) [mbn sendActionsForControlEvents:UIControlEventTouchUpInside]; else SkipTrack(YES);
+    [self bump:-1];
+}
 - (void)swiped:(UISwipeGestureRecognizer *)g {
     if (!gSwipe) return;
     BOOL next = g.direction == UISwipeGestureRecognizerDirectionLeft;
@@ -1863,7 +1921,9 @@ static BOOL gEverPlayed;   // something has played since Music opened
     for (NSNumber *d in @[@0.2, @0.6, @1.2]) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self refresh]; });
 }
 - (void)togglePlay {
-    SendMR(2);
+    UIControl *mbp = gOtherApp ? MusicBarButton(@[@"play", @"pause"]) : nil;
+    if (mbp) { [mbp sendActionsForControlEvents:UIControlEventTouchUpInside]; gOtherApp = NO; }
+    else SendMR(2);
     UIImageView *iv = _play.imageView;
     CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
     k.values = @[@1, @0.6, @1.12, @1]; k.keyTimes = @[@0, @0.3, @0.7, @1]; k.duration = 0.35;
@@ -2325,16 +2385,73 @@ static void PlayerStarSync(void);
         } completion:nil];
     } else if (g.state == UIGestureRecognizerStateChanged) {
         CGPoint p = [g locationInView:c];
-        CGFloat ox = tanh((p.x - c.bounds.size.width / 2) / 40) * 8, oy = tanh((p.y - c.bounds.size.height / 2) / 40) * 8;
+        UIView *pill = nil;
+        for (UIView *v in c.superview.subviews) if ([v isKindOfClass:NSClassFromString(@"MPMiniPill")] && !v.hidden && v.alpha > 0.01) pill = v;
+        // Toward the pill it can be pulled further, so the two glasses can touch.
+        CGFloat dirToPill = pill ? (CGRectGetMidX(pill.frame) > c.center.x ? 1 : -1) : 0;
+        CGFloat rx = tanh((p.x - c.bounds.size.width / 2) / 40);
+        CGFloat ox = rx * ((rx * dirToPill > 0) ? 16 : 8), oy = tanh((p.y - c.bounds.size.height / 2) / 40) * 8;
         CGFloat sx = 1.18 + fabs(ox) * 0.012 - fabs(oy) * 0.006, sy = 1.18 + fabs(oy) * 0.012 - fabs(ox) * 0.006;
         [UIView animateWithDuration:0.18 delay:0 options:o | UIViewAnimationOptionCurveEaseOut animations:^{
             c.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(ox, oy), sx, sy);
         } completion:nil];
+        [self bridge:c toPill:pill circleOffset:CGPointMake(ox, oy) scale:CGSizeMake(sx, sy)];
     } else if (g.state >= UIGestureRecognizerStateEnded) {
         [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.38 initialSpringVelocity:0.9 options:o animations:^{
             c.transform = CGAffineTransformIdentity;
         } completion:nil];
+        [self snapBridge:c];
     }
+}
+// Liquid connection: when the stretched circle reaches the pill, a glass neck
+// grows between them (thicker the closer they are), like two drops joining.
+#define BRIDGE_TAG 0x4D504252
+- (void)bridge:(UIView *)c toPill:(UIView *)pill circleOffset:(CGPoint)off scale:(CGSize)sc {
+    UIView *host = c.superview;
+    UIVisualEffectView *b = (UIVisualEffectView *)objc_getAssociatedObject(c, @selector(bridge:toPill:circleOffset:scale:));
+    if (!pill || !host) { [b removeFromSuperview]; return; }
+    CGFloat cw = c.bounds.size.width * sc.width, ch = c.bounds.size.height * sc.height;
+    CGPoint cc = CGPointMake(c.center.x + off.x, c.center.y + off.y);
+    CGRect pf = pill.frame;
+    BOOL right = CGRectGetMidX(pf) > cc.x;
+    CGFloat cEdge = right ? cc.x + cw / 2 : cc.x - cw / 2;
+    CGFloat pEdge = right ? CGRectGetMinX(pf) : CGRectGetMaxX(pf);
+    CGFloat gap = right ? pEdge - cEdge : cEdge - pEdge;
+    CGFloat t = MAX(0, MIN(1, (10 - gap) / 12));   // 0 apart ... 1 squeezed together
+    if (t <= 0) {
+        if (b && b.alpha > 0) [UIView animateWithDuration:0.15 animations:^{ b.alpha = 0; }];
+        return;
+    }
+    if (!b) {
+        b = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+        b.tag = BRIDGE_TAG; b.userInteractionEnabled = NO; b.clipsToBounds = YES;
+        b.layer.cornerCurve = kCACornerCurveContinuous;
+        b.alpha = 0;
+        objc_setAssociatedObject(c, @selector(bridge:toPill:circleOffset:scale:), b, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (b.superview != host) [host insertSubview:b atIndex:0];
+    FrostGlass(b, nil);
+    ApplyGlow(b, NO);
+    b.layer.borderWidth = 0;
+    CGFloat neck = MIN(ch, pf.size.height) * (0.42 + 0.4 * t);
+    CGFloat x0 = MIN(cEdge, pEdge) - 14, x1 = MAX(cEdge, pEdge) + 14;
+    CGFloat cy = (cc.y + CGRectGetMidY(pf)) / 2;
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{
+        b.frame = CGRectMake(x0, cy - neck / 2, x1 - x0, neck);
+        b.layer.cornerRadius = neck / 2;
+        b.alpha = 1;
+    } completion:nil];
+}
+// Let go: the neck thins out and snaps, each drop springs back on its own.
+- (void)snapBridge:(UIView *)c {
+    UIVisualEffectView *b = (UIVisualEffectView *)objc_getAssociatedObject(c, @selector(bridge:toPill:circleOffset:scale:));
+    if (!b.superview) return;
+    CGRect f = b.frame;
+    [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0.6 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        b.frame = CGRectMake(CGRectGetMidX(f) - 4, CGRectGetMidY(f) - 1, 8, 2);
+        b.layer.cornerRadius = 1;
+        b.alpha = 0;
+    } completion:^(__unused BOOL d) { [b removeFromSuperview]; }];
 }
 - (void)tapSearch {
     UITabBar *tb = gLastTabBar;
@@ -5184,6 +5301,7 @@ static void RefreshNowPlaying(void) {
     }
     if (!get) return;
     get(dispatch_get_main_queue(), ^(CFDictionaryRef cd) {
+        if (gOtherApp) return;   // another app's video, not Music's song
         NSDictionary *d = (__bridge NSDictionary *)cd;
         NSString *al = d[@"kMRMediaRemoteNowPlayingInfoAlbum"], *ti = d[@"kMRMediaRemoteNowPlayingInfoTitle"];
         if ([al isKindOfClass:[NSString class]]) gNowAlbum = al;
