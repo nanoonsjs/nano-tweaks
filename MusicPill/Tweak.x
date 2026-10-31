@@ -1,4 +1,5 @@
-// MusicPill 1.2.45 - made by nano
+// MusicPill 1.2.46 - made by nano
+// 1.2.46: search field and X are bigger (46pt) with more space between them, like iOS 26
 // 1.2.45: the liquid neck fades out when you let go instead of vanishing
 // 1.2.44: a pressed circle no longer slides over the pill; it stops just short and the liquid neck joins them seamlessly
 // 1.2.43: the liquid neck only fills the space between the circle and the pill (no more darker half circle over them)
@@ -1331,7 +1332,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.45 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.46 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2702,7 +2703,21 @@ static void AvatarEval(void);
 }
 %end
 
+static char kTallField;
 static void StyleSearchBar(UISearchBar *sb);
+%hook UISearchTextField
+- (void)setFrame:(CGRect)f {
+    if (objc_getAssociatedObject(self, &kTallField)) {
+        UISearchBar *sb = nil;
+        for (UIView *p = self.superview; p && !sb; p = p.superview) if ([p isKindOfClass:[UISearchBar class]]) sb = (UISearchBar *)p;
+        UIButton *cancel = nil;
+        @try { cancel = [sb valueForKey:@"cancelButton"]; } @catch (__unused id e) {}
+        // The X is showing: leave a clear gap (iOS 26 spaces them apart).
+        if ([cancel isKindOfClass:[UIButton class]] && cancel.window && !cancel.hidden && cancel.alpha > 0.01 && f.size.width > 120) f.size.width -= 16;
+    }
+    %orig(f);
+}
+%end
 %hook UISearchBar
 - (void)didMoveToWindow {
     %orig;
@@ -3609,6 +3624,17 @@ static void StyleSearchBar(UISearchBar *sb) {
         // Field: Apple's height, as a glass capsule.
         UISearchTextField *tf = sb.searchTextField;
         if (tf.borderStyle != UITextBorderStyleNone) tf.borderStyle = UITextBorderStyleNone;
+        // iOS 26: a taller field (46pt). A clear background image of that height
+        // sets UIKit's field height; our glass fill and rim draw the look.
+        static char kTall;
+        if (!objc_getAssociatedObject(sb, &kTall)) {
+            objc_setAssociatedObject(sb, &kTall, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(1, 46)];
+            UIImage *clear = [[r imageWithActions:^(__unused UIGraphicsImageRendererContext *c) {}] resizableImageWithCapInsets:UIEdgeInsetsZero];
+            [sb setSearchFieldBackgroundImage:clear forState:UIControlStateNormal];
+            objc_setAssociatedObject(tf, &kTallField, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [sb setNeedsLayout];
+        }
         static char kFillSet;
         {
             BOOL light = tf.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
@@ -3646,10 +3672,11 @@ static void StyleSearchBar(UISearchBar *sb) {
                 disc.layer.borderWidth = 0.75; disc.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
                 [cancel insertSubview:disc atIndex:0];
             }
-            CGFloat D = 40;
-            if (cancel.imageView && !CGAffineTransformIsIdentity(cancel.imageView.transform)) cancel.imageView.transform = CGAffineTransformIdentity;
-            CGPoint ic = cancel.imageView ? cancel.imageView.center : CGPointMake(CGRectGetMidX(cancel.bounds), CGRectGetMidY(cancel.bounds));
-            CGRect df = CGRectMake(round(ic.x - D / 2), round(ic.y - D / 2), D, D);
+            CGFloat D = 46;
+            CGPoint ic = cancel.imageView ? CGPointMake(cancel.imageView.center.x - cancel.imageView.transform.tx, cancel.imageView.center.y) : CGPointMake(CGRectGetMidX(cancel.bounds), CGRectGetMidY(cancel.bounds));
+            CGRect df = CGRectMake(round(ic.x - D / 2 - 3), round(ic.y - D / 2), D, D);
+            // the xmark sits in the middle of the (moved) disc
+            if (cancel.imageView) { CGAffineTransform t = CGAffineTransformMakeTranslation(-3, 0); if (!CGAffineTransformEqualToTransform(cancel.imageView.transform, t)) cancel.imageView.transform = t; }
             if (!CGRectEqualToRect(disc.frame, df)) { disc.frame = df; disc.layer.cornerRadius = D / 2; }
             [cancel sendSubviewToBack:disc];
             if (cancel.imageView) [cancel bringSubviewToFront:cancel.imageView];
