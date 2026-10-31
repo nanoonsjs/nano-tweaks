@@ -1,4 +1,8 @@
-// Photos26 2.2.1 - made by nano
+// Photos26 2.3.0 - made by nano
+// 2.3.0: light mode (frosted light glass, dark icons), the photo viewer's top
+//        bar is glass again (viewer found without the "Edit" label; Edit stays
+//        hidden, it's the bottom sliders icon), liquid drop on Years / Months /
+//        Days / All Photos when you switch.
 // 2.2.1: works after a reboot: buttons recognised without VoiceOver labels, and
 //        the Photos-class hooks keep retrying until Photos has loaded them.
 // 2.1.1: the Years/Months/Days bar is styled the moment it appears (hooked
@@ -74,6 +78,11 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+// Light mode: clear frosted glass, dark icons. Dark mode: dark glass, white icons.
+static UIColor *Dyn(UIColor *light, UIColor *dark) {
+    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) { return tc.userInterfaceStyle == UIUserInterfaceStyleDark ? dark : light; }];
+}
+static UIColor *GIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackColor, UIColor.whiteColor); return c; }
 
 @interface PUTilingView : UIView @end
 @interface PXCuratedLibraryOverlayButton : UIView @end
@@ -243,15 +252,26 @@ static void Forward(UIBarButtonItem *it) {
 @property (nonatomic, strong) CAShapeLayer *rimMask;
 @end
 @implementation PGGlass
+// Light mode: a soft dark rim and lighter shadow so white glass shows on white.
+- (void)registerShade { [self traitCollectionDidChange:nil]; }
+- (void)traitCollectionDidChange:(UITraitCollection *)prev {
+    [super traitCollectionDidChange:prev];
+    BOOL light = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+    self.layer.shadowOpacity = light ? 0.12 : 0.25;
+    if (light) _rim.colors = @[(id)[UIColor colorWithWhite:0 alpha:0.16].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.06].CGColor,
+                               (id)[UIColor colorWithWhite:0 alpha:0.05].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.12].CGColor];
+    else _rim.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.42].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.08].CGColor,
+                         (id)[UIColor colorWithWhite:1 alpha:0.05].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.28].CGColor];
+}
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
     self.userInteractionEnabled = NO;
-    _blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+    _blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterial]];
     _blur.userInteractionEnabled = NO;
     _blur.clipsToBounds = YES;
     if (@available(iOS 13.0, *)) _blur.layer.cornerCurve = kCACornerCurveContinuous;
     UIView *tint = [UIView new];
-    tint.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.55];
+    tint.backgroundColor = Dyn([UIColor colorWithWhite:1 alpha:0.30], [UIColor colorWithWhite:0.08 alpha:0.55]);
     tint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [_blur.contentView addSubview:tint];
     [self addSubview:_blur];
@@ -269,6 +289,7 @@ static void Forward(UIBarButtonItem *it) {
     [self.layer addSublayer:_rim];
     self.layer.shadowColor = UIColor.blackColor.CGColor;
     self.layer.shadowOpacity = 0.25;
+    [self registerShade];
     self.layer.shadowRadius = 10;
     self.layer.shadowOffset = CGSizeMake(0, 3);
     return self;
@@ -561,7 +582,7 @@ static PGButton *ButtonIn(UIView *c, NSString *kind) {
     for (UIView *v in c.subviews) if ([v isKindOfClass:[PGButton class]] && [((PGButton *)v).kind isEqualToString:kind]) return (PGButton *)v;
     PGButton *b = [PGButton buttonWithType:UIButtonTypeSystem];
     b.kind = kind;
-    b.tintColor = UIColor.whiteColor;
+    b.tintColor = GIcon();
     [b addTarget:[PGTarget shared] action:@selector(down:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
     [b addTarget:[PGTarget shared] action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchDragExit];
     [b addTarget:[PGTarget shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
@@ -585,8 +606,8 @@ static void SetSym(PGButton *b, NSString *name, CGFloat size) {
 @implementation PGScrubber
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
-    _track = [UIView new]; _track.backgroundColor = [UIColor colorWithWhite:1 alpha:0.28]; _track.userInteractionEnabled = NO;
-    _fill = [UIView new]; _fill.backgroundColor = [UIColor colorWithWhite:1 alpha:0.92]; _fill.userInteractionEnabled = NO;
+    _track = [UIView new]; _track.backgroundColor = Dyn([UIColor colorWithWhite:0 alpha:0.18], [UIColor colorWithWhite:1 alpha:0.28]); _track.userInteractionEnabled = NO;
+    _fill = [UIView new]; _fill.backgroundColor = Dyn([UIColor colorWithWhite:0 alpha:0.85], [UIColor colorWithWhite:1 alpha:0.92]); _fill.userInteractionEnabled = NO;
     [self addSubview:_track]; [_track addSubview:_fill];
     _track.clipsToBounds = YES;
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pan:)];
@@ -715,7 +736,7 @@ static PGPass *EnsureContainer(UIToolbar *tb) {
         UIToolbarAppearance *a = [UIToolbarAppearance new];
         [a configureWithTransparentBackground];
         t.standardAppearance = a; t.compactAppearance = a; t.scrollEdgeAppearance = a; t.compactScrollEdgeAppearance = a;
-        t.tintColor = UIColor.whiteColor;
+        t.tintColor = GIcon();
     });
     c.hidden = NO;
     if (tb.clipsToBounds) tb.clipsToBounds = NO;
@@ -828,7 +849,7 @@ static void LayoutBottom(UIToolbar *tb) {
                 b = [PGButton buttonWithType:UIButtonTypeSystem];
                 b.kind = k;
                 b.accessibilityIdentifier = [@"sel_b_" stringByAppendingString:k];
-                b.tintColor = UIColor.whiteColor;
+                b.tintColor = GIcon();
                 [b setImage:Sym([k isEqualToString:@"share"] ? @"square.and.arrow.up" : @"trash", 19) forState:UIControlStateNormal];
                 [b addTarget:[PGTarget shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
                 [c addSubview:b];
@@ -858,7 +879,7 @@ static void LayoutBottom(UIToolbar *tb) {
             sl = [UILabel new];
             sl.accessibilityIdentifier = @"sel_text";
             sl.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-            sl.textColor = UIColor.whiteColor;
+            sl.textColor = GIcon();
             sl.textAlignment = NSTextAlignmentCenter;
             sl.adjustsFontSizeToFitWidth = YES;
             sl.minimumScaleFactor = 0.7;
@@ -961,7 +982,7 @@ static void LayoutBottom(UIToolbar *tb) {
     SetSym(bTrash, @"trash", 17);
     BOOL fav = [ItemSymbolText(AppleItem(@"heart")) containsString:@"heart.fill"];
     SetSym(bHeart, fav ? @"heart.fill" : @"heart", 17);
-    bHeart.tintColor = UIColor.whiteColor;
+    bHeart.tintColor = GIcon();
     SetSym(bInfo, @"info.circle", 18);
     SetSym(bEdit, @"slider.horizontal.3", 17);
     bInfo.hidden = !AppleItem(@"info");
@@ -1010,7 +1031,7 @@ static void LayoutBottom(UIToolbar *tb) {
         if (!lt) { lt = [UILabel new]; lt.accessibilityIdentifier = @"total"; lt.textAlignment = NSTextAlignmentRight; [c addSubview:lt]; }
         for (UILabel *l in @[le, lt]) {
             l.font = [UIFont monospacedDigitSystemFontOfSize:19 weight:UIFontWeightSemibold];
-            l.textColor = UIColor.whiteColor;
+            l.textColor = GIcon();
             l.userInteractionEnabled = NO;
         }
         if (gScrubbing) {
@@ -1170,14 +1191,19 @@ static void LayoutTop(UINavigationBar *nb) {
     UINavigationItem *top = nb.topItem;
     UIBarButtonItem *edit = nil, *more = nil;
     for (UIBarButtonItem *it in top.rightBarButtonItems) {
-        NSString *k = ItemKind(it);
+        NSNumber *sys = nil;
+        @try { sys = [it valueForKey:@"systemItem"]; } @catch (__unused id e) {}
+        BOOL isEdit = [it.title isEqualToString:@"Edit"] || [it.title isEqualToString:@"Done"] || ([sys isKindOfClass:[NSNumber class]] && sys.integerValue == UIBarButtonSystemItemEdit);
+        NSString *k = isEdit ? @"edit" : ItemKind(it);
         if ([k isEqualToString:@"edit"]) edit = it;
         else if ([k isEqualToString:@"more"]) more = it;
     }
+    // Any text-only right button that isn't "..." is Edit.
+    if (!edit) for (UIBarButtonItem *it in top.rightBarButtonItems) if (it != more && !it.image && it.title.length) { edit = it; break; }
     // "..." is whichever right button isn't Edit (its label/icon varies).
     if (!more) for (UIBarButtonItem *it in top.rightBarButtonItems) if (it != edit) { more = it; break; }
     UIView *back = FindBackButton(nb);
-    BOOL viewer = (edit || gTextMode) && gToolbar && gToolbar.window == nb.window && ![gToolbar viewWithTag:BOTTOM_TAG].hidden;
+    BOOL viewer = (edit || gTextMode || HasScrubber(nb.window)) && gToolbar && gToolbar.window == nb.window && ![gToolbar viewWithTag:BOTTOM_TAG].hidden;
     UIView *editView = KV(edit, @"view");
     if (!gEnabled || !gTopBar || !viewer) {
         if (gTopBar && gEnabled) gTopDebug = [NSString stringWithFormat:@"skip: edit=%d more=%d toolbar=%d rights=%lu", edit != nil, more != nil, gToolbar != nil, (unsigned long)top.rightBarButtonItems.count];
@@ -1202,7 +1228,7 @@ static void LayoutTop(UINavigationBar *nb) {
             [a configureWithTransparentBackground];
             n.standardAppearance = a; n.compactAppearance = a; n.scrollEdgeAppearance = a;
             if (@available(iOS 15.0, *)) n.compactScrollEdgeAppearance = a;
-            n.tintColor = UIColor.whiteColor;
+            n.tintColor = GIcon();
         });
     }
     c.hidden = NO;
@@ -1251,8 +1277,9 @@ static void LayoutTop(UINavigationBar *nb) {
             [stack addObjectsFromArray:v.subviews];
         }
     }
-    for (UIView *v in @[back ?: [UIView new], moreView ?: [UIView new]]) if (![v.tintColor isEqual:UIColor.whiteColor]) v.tintColor = UIColor.whiteColor;
-    if (![nb.tintColor isEqual:UIColor.whiteColor]) nb.tintColor = UIColor.whiteColor;
+    // Set once each (a light/dark colour never compares equal, re-setting it looped layout).
+    static char kTinted;
+    for (UIView *v in @[back ?: [UIView new], moreView ?: [UIView new], nb]) if (!objc_getAssociatedObject(v, &kTinted)) { objc_setAssociatedObject(v, &kTinted, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); v.tintColor = GIcon(); }
     PGGlass *gt = GlassIn(c, @"title");
     gt.hidden = !title.window;
     if (title.window) {
@@ -1373,8 +1400,69 @@ static void HideSegBackdrop(UIView *bar) {
     }
 }
 
+@interface PGSegDrop : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+static CGPoint gSegLastTap;
+static BOOL gSegHasLast;
+@implementation PGSegDrop
++ (instancetype)shared { static PGSegDrop *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [PGSegDrop new]; }); return t; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+- (void)tap:(UITapGestureRecognizer *)g {
+    UIView *bar = g.view;
+    if (!gEnabled || !bar.window) return;
+    // The label under the finger: the drop lands on it.
+    CGPoint p = [g locationInView:bar];
+    UILabel *best = nil; CGFloat bd = 1e9;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:bar];
+    while (st.count) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) {
+            CGPoint c = [v convertPoint:CGPointMake(v.bounds.size.width / 2, v.bounds.size.height / 2) toView:bar];
+            if (fabs(c.x - p.x) < bd) { bd = fabs(c.x - p.x); best = (UILabel *)v; }
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+    if (!best) return;
+    CGPoint to = [best convertPoint:CGPointMake(best.bounds.size.width / 2, best.bounds.size.height / 2) toView:bar];
+    CGFloat H = bar.bounds.size.height - 8, W = MAX(best.bounds.size.width + 26, H * 1.6);
+    CGPoint from = gSegHasLast ? gSegLastTap : to;
+    gSegLastTap = to; gSegHasLast = YES;
+    PGGlass *drop = [[PGGlass alloc] initWithFrame:CGRectMake(from.x - W / 2, to.y - H / 2, W, H)];
+    drop.layer.cornerRadius = H / 2; drop.userInteractionEnabled = NO;
+    [drop layoutSubviews];
+    [bar addSubview:drop];
+    CGFloat dist = fabs(to.x - from.x);
+    // Stretch along the way, round off on arrival, then melt into the pill.
+    [UIView animateKeyframesWithDuration:0.36 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
+        [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.45 animations:^{
+            drop.frame = CGRectMake((from.x + to.x) / 2 - (W + dist * 0.5) / 2, to.y - H * 0.42, W + dist * 0.5, H * 0.84); [drop layoutIfNeeded];
+        }];
+        [UIView addKeyframeWithRelativeStartTime:0.45 relativeDuration:0.55 animations:^{
+            drop.frame = CGRectMake(to.x - W / 2, to.y - H / 2, W, H); [drop layoutIfNeeded];
+        }];
+    } completion:^(BOOL d) {
+        [UIView animateWithDuration:0.18 animations:^{ drop.alpha = 0; } completion:^(BOOL f) { [drop removeFromSuperview]; }];
+    }];
+    // The whole bar gives a little jelly squish.
+    CAKeyframeAnimation *sx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"];
+    sx.values = @[@1, @1.04, @0.985, @1.01, @1]; sx.keyTimes = @[@0, @0.25, @0.55, @0.8, @1]; sx.duration = 0.5; sx.additive = NO;
+    CAKeyframeAnimation *sy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
+    sy.values = @[@1, @0.92, @1.04, @0.99, @1]; sy.keyTimes = sx.keyTimes; sy.duration = 0.5;
+    // Applied to the glass, not the bar (the bar's own transform keeps it small).
+    for (UIView *s in bar.subviews) if ([s isKindOfClass:[PGGlass class]] && s != drop) { [s.layer addAnimation:sx forKey:@"jx"]; [s.layer addAnimation:sy forKey:@"jy"]; }
+}
+@end
 static void StyleSegBar(UIView *bar) {
     if (!gEnabled) return;
+    static char kDropTap;
+    if (!objc_getAssociatedObject(bar, &kDropTap)) {
+        objc_setAssociatedObject(bar, &kDropTap, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UITapGestureRecognizer *tg = [[UITapGestureRecognizer alloc] initWithTarget:[PGSegDrop shared] action:@selector(tap:)];
+        tg.cancelsTouchesInView = NO; tg.delaysTouchesBegan = NO; tg.delaysTouchesEnded = NO;
+        tg.delegate = [PGSegDrop shared];
+        [bar addGestureRecognizer:tg];
+    }
     if (gSegBar != bar) { gSegBar = bar; gSegShown = YES; }
     HideSegBackdrop(bar);
     // Liquid glass instead of Apple's dark capsule (the selected-segment pill stays).
@@ -1437,17 +1525,17 @@ static void StyleOverlayButton(UIView *b) {
     if (!t) {
         t = [UILabel new]; t.accessibilityIdentifier = @"ovl_t";
         t.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
-        t.textColor = UIColor.whiteColor; t.textAlignment = NSTextAlignmentCenter; t.userInteractionEnabled = NO;
+        t.textColor = GIcon(); t.textAlignment = NSTextAlignmentCenter; t.userInteractionEnabled = NO;
         [b addSubview:t];
     }
     if (!x) {
         x = [[UIImageView alloc] initWithImage:Sym(@"xmark", 18)]; x.accessibilityIdentifier = @"ovl_x";
-        x.tintColor = UIColor.whiteColor; x.contentMode = UIViewContentModeCenter; x.userInteractionEnabled = NO;
+        x.tintColor = GIcon(); x.contentMode = UIViewContentModeCenter; x.userInteractionEnabled = NO;
         [b addSubview:x];
     }
     if (!d) {
         d = [[UIImageView alloc] initWithImage:Sym(@"ellipsis", 21)]; d.accessibilityIdentifier = @"ovl_d";
-        d.tintColor = UIColor.whiteColor; d.contentMode = UIViewContentModeCenter; d.userInteractionEnabled = NO;
+        d.tintColor = GIcon(); d.contentMode = UIViewContentModeCenter; d.userInteractionEnabled = NO;
         [b addSubview:d];
     }
     g.hidden = x.hidden = d.hidden = t.hidden = NO;
