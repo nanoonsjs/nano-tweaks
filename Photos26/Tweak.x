@@ -1,4 +1,6 @@
-// Photos26 2.3.0 - made by nano
+// Photos26 2.4.0 - made by nano
+// 2.4.0: Albums tab, iOS 26 look: album cards with big round corners, Media
+//        Types / Utilities rows as liquid glass cards (light and dark).
 // 2.3.0: light mode (frosted light glass, dark icons), the photo viewer's top
 //        bar is glass again (viewer found without the "Edit" label; Edit stays
 //        hidden, it's the bottom sliders icon), liquid drop on Years / Months /
@@ -1572,6 +1574,83 @@ static void StyleOverlayButton(UIView *b) {
 static NSString *gGridDebug = @"-";
 static void UpdateDebug(UIWindow *w);
 // Debug only for now: what the grid's top-right buttons are made of.
+// ---- Albums tab, iOS 26 look: big rounded album cards, glass rows ----
+#define ROWGLASS_TAG 0x50474C52
+static NSSet *RowTitles(void) {
+    static NSSet *s;
+    if (!s) s = [NSSet setWithArray:@[@"Videos", @"Selfies", @"Live Photos", @"Portrait", @"Panoramas", @"Time-lapse", @"Slo-mo", @"Cinematic",
+        @"Bursts", @"Screenshots", @"Screen Recordings", @"Animated", @"RAW", @"ProRAW", @"Long Exposure", @"Spatial", @"Imports", @"Duplicates",
+        @"Hidden", @"Recently Deleted", @"Favorites", @"Captured by Me", @"Receipts", @"Handwriting", @"Illustrations", @"QR Codes", @"Recently Saved", @"Recently Edited"]];
+    return s;
+}
+static UIView *AlbumsPage(UIWindow *w) {
+    UIViewController *root = w.rootViewController;
+    NSMutableArray *q = [NSMutableArray arrayWithObject:root ?: [UIViewController new]];
+    int g = 0;
+    while (q.count && g++ < 80) {
+        UIViewController *v = q.firstObject; [q removeObjectAtIndex:0];
+        if ([v isKindOfClass:[UINavigationController class]]) {
+            UIViewController *top = ((UINavigationController *)v).topViewController;
+            if ([top.navigationItem.title isEqualToString:@"Albums"] && top.view.window) return top.view;
+        }
+        [q addObjectsFromArray:v.childViewControllers];
+    }
+    return nil;
+}
+static void StyleAlbumsTab(UIWindow *w) {
+    if (!w || !gEnabled || !gTopBar) return;
+    UIView *page = AlbumsPage(w);
+    if (!page) return;
+    BOOL dark = page.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:page];
+    int g = 0;
+    while (st.count && g++ < 4000) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (![v isKindOfClass:[UICollectionViewCell class]] && ![v isKindOfClass:[UITableViewCell class]]) { [st addObjectsFromArray:v.subviews]; continue; }
+        UIView *cv = [v isKindOfClass:[UICollectionViewCell class]] ? ((UICollectionViewCell *)v).contentView : ((UITableViewCell *)v).contentView;
+        // Media Types / Utilities rows: a glass card each.
+        UILabel *title = nil; UIImageView *big = nil; CGFloat bigA = 0;
+        NSMutableArray *s2 = [NSMutableArray arrayWithObject:cv];
+        int g2 = 0;
+        while (s2.count && g2++ < 80) {
+            UIView *x = s2.lastObject; [s2 removeLastObject];
+            if ([x isKindOfClass:[UILabel class]] && !title && [RowTitles() containsObject:((UILabel *)x).text]) title = (UILabel *)x;
+            if ([x isKindOfClass:[UIImageView class]] && ((UIImageView *)x).image) {
+                CGFloat a = x.bounds.size.width * x.bounds.size.height;
+                if (a > bigA) { bigA = a; big = (UIImageView *)x; }
+            }
+            [s2 addObjectsFromArray:x.subviews];
+        }
+        CGRect cb = v.bounds;
+        if (title && cb.size.height < 80 && cb.size.width > 200) {
+            PGGlass *gl = (PGGlass *)[v viewWithTag:ROWGLASS_TAG];
+            if (!gl) {
+                gl = [PGGlass new]; gl.tag = ROWGLASS_TAG;
+                [v insertSubview:gl atIndex:0];
+                if ([v isKindOfClass:[UICollectionViewCell class]]) {
+                    UICollectionViewCell *c = (UICollectionViewCell *)v;
+                    c.backgroundView.hidden = YES; c.selectedBackgroundView.alpha = 0.6;
+                    if ([c respondsToSelector:@selector(setBackgroundConfiguration:)]) ((UICollectionViewListCell *)c).backgroundConfiguration = [UIBackgroundConfiguration clearConfiguration];
+                } else { ((UITableViewCell *)v).backgroundColor = UIColor.clearColor; }
+            }
+            CGRect gf = CGRectInset(cb, 16, 4);
+            if (!CGRectEqualToRect(gl.frame, gf)) { gl.frame = gf; gl.layer.cornerRadius = 16; [gl setNeedsLayout]; }
+            if (v.subviews.firstObject != gl) [v sendSubviewToBack:gl];
+            // Separators between rows go (each row is its own card now).
+            for (UIView *x in v.subviews) if (x != gl && x.bounds.size.height <= 1.0 && x.bounds.size.width > 100) x.hidden = YES;
+            continue;
+        }
+        // Album cards: the big artwork gets iOS 26's round corners.
+        if (big && big.bounds.size.width >= 110 && fabs(big.bounds.size.width - big.bounds.size.height) < big.bounds.size.width * 0.35) {
+            UIView *clip = big;
+            for (UIView *p = big.superview; p && p != v; p = p.superview) if (fabs(p.bounds.size.width - big.bounds.size.width) < 2 && fabs(p.bounds.size.height - big.bounds.size.height) < 2) clip = p;
+            if (clip.layer.cornerRadius != 26) { clip.layer.cornerRadius = 26; clip.layer.cornerCurve = kCACornerCurveContinuous; clip.clipsToBounds = YES; }
+            if (big.layer.cornerRadius != 26) { big.layer.cornerRadius = 26; big.layer.cornerCurve = kCACornerCurveContinuous; big.clipsToBounds = YES; }
+        }
+        (void)dark;
+    }
+}
+
 static void StyleGridTop(UIWindow *w) {
     if (!w || !gDebug || HasScrubber(w)) return;
     NSMutableArray *found = [NSMutableArray array];
@@ -1928,7 +2007,7 @@ static void InitScrubber(void) { static BOOL done; if (done) return; done = YES;
             UIWindow *key = nil;
             for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
                 if ([s isKindOfClass:[UIWindowScene class]]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) key = w;
-            @try { StyleGridTop(key); StyleSegments(key); } @catch (__unused id e) {}
+            @try { StyleGridTop(key); StyleSegments(key); StyleAlbumsTab(key); } @catch (__unused id e) {}
         }];
     });
     // Photos' own classes load late on a cold start (right after a reboot it's
