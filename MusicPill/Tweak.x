@@ -1,4 +1,5 @@
-// MusicPill 1.2.27 - made by nano
+// MusicPill 1.2.28 - made by nano
+// 1.2.28: title swipe is faster and bounces into place like iOS 26 (slight squish while dragging)
 // 1.2.27: title swipe reads where your finger went down correctly
 // 1.2.26: title swipe really gets the touch now (it was checking the wrong window)
 // 1.2.25: title swipe listens on the whole window (it never got the touch before)
@@ -1279,7 +1280,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.27 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.28 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5807,7 +5808,9 @@ static NSArray *TitleRows(void) {
 }
 static void SetRowsOffset(NSArray *rows, CGFloat dx, CGFloat alpha) {
     for (UIView *m in rows) {
-        m.transform = CGAffineTransformMakeTranslation(dx, 0);
+        // A little squish while it moves (iOS 26 feel); back to full size at rest.
+        CGFloat sc = 1 - MIN(fabs(dx) / 900.0, 0.06);
+        m.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(dx, 0), sc, sc);
         m.alpha = alpha;
     }
 }
@@ -5878,7 +5881,7 @@ static void TitleSkip(BOOL next) {
     CGFloat vx = [g velocityInView:g.view].x;
     BOOL commit = g.state == UIGestureRecognizerStateEnded && (fabs(dx) > W * 0.22 || (fabs(vx) > 650 && dx * vx > 0));
     if (!commit) {
-        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+        [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
             SetRowsOffset(rows, 0, 1);
         } completion:nil];
         self.rows = nil;
@@ -5888,17 +5891,18 @@ static void TitleSkip(BOOL next) {
     self.busy = YES;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     CGFloat out = next ? -W : W;
-    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        SetRowsOffset(rows, out * 0.6, 0);
+    [UIView animateWithDuration:0.11 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        SetRowsOffset(rows, out * 0.45, 0);
     } completion:^(__unused BOOL f) {
         @try { TitleSkip(next); } @catch (__unused id e) {}
         // The new song's text comes in from the other side.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             NSArray *now = TitleRows();
             NSMutableSet *all = [NSMutableSet setWithArray:rows];
             [all addObjectsFromArray:now];
-            [UIView performWithoutAnimation:^{ SetRowsOffset(all.allObjects, -out * 0.35, 0); }];
-            [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            [UIView performWithoutAnimation:^{ SetRowsOffset(all.allObjects, -out * 0.3, 0); }];
+            // Springs in fast and overshoots a touch past its spot, then settles: the bounce.
+            [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.58 initialSpringVelocity:1.2 options:UIViewAnimationOptionAllowUserInteraction animations:^{
                 SetRowsOffset(all.allObjects, 0, 1);
             } completion:^(__unused BOOL f2) { self.busy = NO; }];
             // Never leave the title stuck off-screen.
