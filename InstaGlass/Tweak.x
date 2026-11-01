@@ -1,4 +1,7 @@
-// InstaGlass 0.2.0 - made by nano
+// InstaGlass 0.3.0 - made by nano
+// 0.3.0: no more glass on the like / comment row of posts (the tab bar is never
+//        inside a list); the bubble follows the tab you're on, also when you swipe
+//        between pages; hold the bubble, drag it to a tab and let go to open it
 // 0.2.0: also the normal full-width tab bar (profile etc.): it becomes a floating
 //        glass pill with a glass bubble under the tab you tap
 // 0.1.0: Instagram's floating tab bar becomes a liquid glass pill (light / dark),
@@ -7,6 +10,7 @@
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 #define GLASS_TAG 0x49474C41
 #define DEBUG_TAG 0x49474442
@@ -27,9 +31,9 @@ static UIView *FindBar(UIWindow *w) {
     while (st.count && g++ < 6000) {
         UIView *v = st.lastObject; [st removeLastObject];
         if (v.hidden || v.alpha < 0.05 || v.tag == DEBUG_TAG || v.tag == GLASS_TAG) continue;
-        if ([v isKindOfClass:[UIScrollView class]] && v.bounds.size.height > H * 0.5) { [st addObjectsFromArray:v.subviews]; continue; }
+        if ([v isKindOfClass:[UIScrollView class]]) continue;   // the tab bar is never inside a list (posts' like rows are)
         CGRect f = [v convertRect:v.bounds toView:nil];
-        BOOL shape = f.size.width > W * 0.55 && f.size.width <= W + 1 && f.size.height >= 44 && f.size.height <= 130 && CGRectGetMidY(f) > H * 0.8 && CGRectGetMaxY(f) <= H + 2;
+        BOOL shape = f.size.width > W * 0.55 && f.size.width <= W + 1 && f.size.height >= 44 && f.size.height <= 130 && CGRectGetMidY(f) > H * 0.8 && CGRectGetMaxY(f) <= H + 2 && CGRectGetMaxY(f) > H - 140;
         if (shape) {
             // count the icon-ish things inside, spread across the width
             int icons = 0;
@@ -162,7 +166,7 @@ static UIView *FindBubble(UIView *bar) {
     int g = 0;
     while (st.count && g++ < 200) {
         UIView *v = st.lastObject; [st removeLastObject];
-        if (v.tag == GLASS_TAG || v.hidden) continue;
+        if (v.tag == GLASS_TAG || v.tag == GLASS_TAG + 1 || v.hidden) continue;
         CGSize s = v.bounds.size;
         BOOL sized = s.width > B.width * 0.12 && s.width < B.width * 0.4 && s.height > B.height * 0.6 && s.height <= B.height;
         BOOL filled = (v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) > 0.02) || [v isKindOfClass:[UIVisualEffectView class]] || objc_getAssociatedObject(v, "igBubble");
@@ -229,11 +233,91 @@ static void StyleBubble(UIView *b) {
 }
 @end
 
+
+// Which tab is on.
+// Floating bar: where Instagram's own bubble is. Full bar: the outline icon that
+// is filled in right now (each icon's ink is measured; the filled look has more).
+static NSMapTable *gInk;
+static CGFloat InkOf(UIImage *img) {
+    if (!img.CGImage) return 0;
+    if (!gInk) gInk = [NSMapTable weakToStrongObjectsMapTable];
+    NSNumber *c = [gInk objectForKey:img];
+    if (c) return c.doubleValue;
+    const int N = 24; uint8_t px[N * N]; memset(px, 0, sizeof(px));
+    CGContextRef ctx = CGBitmapContextCreate(px, N, N, 8, N, NULL, (CGBitmapInfo)kCGImageAlphaOnly);
+    if (!ctx) return 0;
+    CGContextDrawImage(ctx, CGRectMake(0, 0, N, N), img.CGImage);
+    CGContextRelease(ctx);
+    double sum = 0; for (int i = 0; i < N * N; i++) sum += px[i];
+    CGFloat ink = sum / (N * N * 255.0);
+    [gInk setObject:@(ink) forKey:img];
+    return ink;
+}
+static NSArray *IconViews(UIView *bar) {
+    CGSize B = bar.bounds.size;
+    NSMutableDictionary *cols = [NSMutableDictionary dictionary];
+    NSMutableArray *st = [NSMutableArray arrayWithArray:bar.subviews];
+    int g = 0;
+    while (st.count && g++ < 300) {
+        UIView *x = st.lastObject; [st removeLastObject];
+        if (x.hidden || x.tag == GLASS_TAG || x.tag == GLASS_TAG + 1) continue;
+        CGSize sz = x.bounds.size;
+        if ([x isKindOfClass:[UIImageView class]] && ((UIImageView *)x).image && sz.width >= 18 && sz.width <= 60 && sz.height >= 18 && sz.height <= 60) {
+            CGRect f = [x convertRect:x.bounds toView:bar];
+            NSNumber *col = @((int)(CGRectGetMidX(f) / (B.width / 10)));
+            UIView *old = cols[col];
+            if (!old || sz.width * sz.height > old.bounds.size.width * old.bounds.size.height) cols[col] = x;
+            continue;
+        }
+        [st addObjectsFromArray:x.subviews];
+    }
+    NSArray *keys = [cols.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSNumber *k in keys) [out addObject:cols[k]];
+    return out;
+}
 static NSInteger gSelected = 0;
+static NSString *gSelWhy = @"-";
+static NSInteger SelectedTab(UIView *bar, UIView *igBubble) {
+    NSArray *iv = IconViews(bar);
+    if (!iv.count) return gSelected;
+    if (igBubble.window) {
+        CGFloat bx = CGRectGetMidX([igBubble convertRect:igBubble.bounds toView:bar]), best = CGFLOAT_MAX; NSInteger bi = 0;
+        for (NSUInteger i = 0; i < iv.count; i++) { CGFloat d = fabs(CGRectGetMidX([iv[i] convertRect:[iv[i] bounds] toView:bar]) - bx); if (d < best) { best = d; bi = i; } }
+        gSelWhy = @"ig bubble";
+        return bi;
+    }
+    if ([bar isKindOfClass:[UITabBar class]]) {
+        UITabBar *tb = (UITabBar *)bar; NSUInteger i = tb.selectedItem ? [tb.items indexOfObject:tb.selectedItem] : NSNotFound;
+        if (i != NSNotFound) { gSelWhy = @"tabbar"; return i; }
+    }
+    // per icon: the most and least ink it has had; filled = near its most
+    static NSMutableDictionary *range;
+    if (!range) range = [NSMutableDictionary dictionary];
+    NSInteger pick = -1; CGFloat pickGain = 0;
+    NSMutableString *dbg = [NSMutableString string];
+    for (NSUInteger i = 0; i < iv.count; i++) {
+        UIImageView *v = iv[i];
+        BOOL photo = v.image.renderingMode != UIImageRenderingModeAlwaysTemplate && v.layer.cornerRadius >= v.bounds.size.width * 0.3;
+        if (photo) { [dbg appendString:@"p "]; continue; }
+        CGFloat ink = InkOf(v.image);
+        NSArray *r = range[@(i)];
+        CGFloat lo = r ? MIN([r[0] doubleValue], ink) : ink, hi = r ? MAX([r[1] doubleValue], ink) : ink;
+        range[@(i)] = @[@(lo), @(hi)];
+        [dbg appendFormat:@"%.2f ", ink];
+        if (hi - lo > 0.04 && ink > lo + (hi - lo) * 0.6 && ink - lo > pickGain) { pick = i; pickGain = ink - lo; }
+    }
+    gSelWhy = [NSString stringWithFormat:@"ink %@", dbg];
+    if (pick >= 0) return pick;
+    // no outline icon is filled in: the profile picture (last) is the one on
+    BOOL anyKnown = NO; for (NSNumber *k in range) { NSArray *r = range[k]; if ([r[1] doubleValue] - [r[0] doubleValue] > 0.04) anyKnown = YES; }
+    return anyKnown ? (NSInteger)iv.count - 1 : gSelected;
+}
+static BOOL gDragging = NO;
 static void PlaceOwnBubble(UIView *bar, BOOL animated) {
     UIView *g = [bar viewWithTag:GLASS_TAG];
     NSArray *ic = IconFrames(bar);
-    if (!g || !ic.count) return;
+    if (!g || !ic.count || gDragging) return;
     UIView *b = [bar viewWithTag:GLASS_TAG + 1];
     if (!b) {
         b = [UIView new]; b.tag = GLASS_TAG + 1; b.userInteractionEnabled = NO;
@@ -250,6 +334,33 @@ static void PlaceOwnBubble(UIView *bar, BOOL animated) {
     if (!animated || CGRectIsEmpty(b.frame)) { b.frame = want; return; }
     [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.4 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ b.frame = want; } completion:nil];
 }
+// Open tab i the way a tap would.
+static void OpenTab(UIView *bar, NSInteger i) {
+    NSArray *iv = IconViews(bar);
+    if (i < 0 || i >= (NSInteger)iv.count) return;
+    if ([bar isKindOfClass:[UITabBar class]]) {
+        UITabBar *tb = (UITabBar *)bar;
+        if (i < (NSInteger)tb.items.count) {
+            UITabBarController *tc = [tb.delegate isKindOfClass:[UITabBarController class]] ? (UITabBarController *)tb.delegate : nil;
+            if (tc && i < (NSInteger)tc.viewControllers.count) { tc.selectedIndex = i; return; }
+        }
+    }
+    for (UIView *p = iv[i]; p && p != bar.superview; p = p.superview) {
+        if ([p isKindOfClass:[UIControl class]]) { [(UIControl *)p sendActionsForControlEvents:UIControlEventTouchUpInside]; return; }
+        for (UIGestureRecognizer *gr in p.gestureRecognizers) if ([gr isKindOfClass:[UITapGestureRecognizer class]] && gr != (id)objc_getAssociatedObject(bar, "igTap")) {
+            // a tap recognizer's targets: call them
+            NSArray *targets = nil; @try { targets = [gr valueForKey:@"_targets"]; } @catch (__unused id e) {}
+            for (id t in targets) {
+                id target = nil; SEL action = NULL;
+                @try { target = [t valueForKey:@"_target"]; } @catch (__unused id e) {}
+                Ivar ai = class_getInstanceVariable([t class], "_action");
+                if (ai) action = *(SEL *)((__bridge void *)t + ivar_getOffset(ai));
+                if (target && action && [target respondsToSelector:action]) { ((void (*)(id, SEL, id))objc_msgSend)(target, action, gr); return; }
+            }
+        }
+        if (p.isAccessibilityElement) { [p accessibilityActivate]; return; }
+    }
+}
 @interface IGTap : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 @end
@@ -262,8 +373,48 @@ static void PlaceOwnBubble(UIView *bar, BOOL animated) {
     CGFloat x = [tg locationInView:bar].x, best = CGFLOAT_MAX; NSInteger bi = 0;
     for (NSUInteger i = 0; i < ic.count; i++) { CGFloat d = fabs(CGRectGetMidX([ic[i] CGRectValue]) - x); if (d < best) { best = d; bi = i; } }
     gSelected = bi;
+    objc_setAssociatedObject(bar, "igPinUntil", @(CACurrentMediaTime() + 0.8), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-    if (IsFullBar(bar)) PlaceOwnBubble(bar, YES);
+    PlaceOwnBubble(bar, YES);
+}
+// Hold the bubble, slide it, let go on a tab: it opens.
+- (void)hold:(UILongPressGestureRecognizer *)lp {
+    UIView *bar = lp.view;
+    UIView *b = [bar viewWithTag:GLASS_TAG + 1], *g = [bar viewWithTag:GLASS_TAG];
+    NSArray *iv = IconViews(bar);
+    if (!b || !g || !iv.count) return;
+    CGFloat x = [lp locationInView:bar].x;
+    CGRect gf = g.frame;
+    if (lp.state == UIGestureRecognizerStateBegan) {
+        if (!CGRectContainsPoint(CGRectInset(b.frame, -14, -10), [lp locationInView:bar])) { lp.enabled = NO; lp.enabled = YES; return; }
+        gDragging = YES;
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+        [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ b.transform = CGAffineTransformMakeScale(1.12, 1.12); } completion:nil];
+        objc_setAssociatedObject(bar, "igHover", @(-1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (!gDragging) return;
+    if (lp.state == UIGestureRecognizerStateChanged || lp.state == UIGestureRecognizerStateBegan) {
+        CGFloat w = b.bounds.size.width;
+        CGFloat cx = MIN(MAX(x, CGRectGetMinX(gf) + 5 + w / 2), CGRectGetMaxX(gf) - 5 - w / 2);
+        b.center = CGPointMake(cx, b.center.y);
+        // a tick each time it passes over a new tab
+        NSInteger near = 0; CGFloat best = CGFLOAT_MAX;
+        for (NSUInteger i = 0; i < iv.count; i++) { CGFloat d = fabs(CGRectGetMidX([iv[i] convertRect:[iv[i] bounds] toView:bar]) - cx); if (d < best) { best = d; near = i; } }
+        if ([objc_getAssociatedObject(bar, "igHover") integerValue] != near) {
+            objc_setAssociatedObject(bar, "igHover", @(near), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [[UISelectionFeedbackGenerator new] selectionChanged];
+        }
+        return;
+    }
+    gDragging = NO;
+    NSInteger near = [objc_getAssociatedObject(bar, "igHover") integerValue];
+    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
+    if (lp.state == UIGestureRecognizerStateEnded && near >= 0) {
+        gSelected = near;
+        objc_setAssociatedObject(bar, "igPinUntil", @(CACurrentMediaTime() + 0.8), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        PlaceOwnBubble(bar, YES);
+        OpenTab(bar, near);
+    } else PlaceOwnBubble(bar, YES);
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
 @end
@@ -277,7 +428,7 @@ static void DebugBox(UIWindow *w) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" InstaGlass 0.2.0 debug\n %@", gDebug];
+    l.text = [NSString stringWithFormat:@" InstaGlass 0.3.0 debug\n %@", gDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 600)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 60, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
@@ -324,21 +475,20 @@ static void Tick(void) {
             UITapGestureRecognizer *tg = [[UITapGestureRecognizer alloc] initWithTarget:[IGTap shared] action:@selector(tap:)];
             tg.cancelsTouchesInView = NO; tg.delaysTouchesEnded = NO; tg.delegate = [IGTap shared];
             [bar addGestureRecognizer:tg];
+            objc_setAssociatedObject(bar, "igTap", tg, OBJC_ASSOCIATION_ASSIGN);
+            UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[IGTap shared] action:@selector(hold:)];
+            lp.minimumPressDuration = 0.25; lp.cancelsTouchesInView = YES; lp.delegate = [IGTap shared];
+            [bar addGestureRecognizer:lp];
         }
-        UIView *b = nil;
-        if (IsFullBar(bar)) {
-            // Which tab is on: Instagram's own UITabBar knows, if it is one.
-            if ([bar isKindOfClass:[UITabBar class]]) { UITabBar *tb = (UITabBar *)bar; NSUInteger i = tb.selectedItem ? [tb.items indexOfObject:tb.selectedItem] : NSNotFound; if (i != NSNotFound) gSelected = i; }
-            PlaceOwnBubble(bar, YES);
-            b = [bar viewWithTag:GLASS_TAG + 1];
-        } else {
-            [[bar viewWithTag:GLASS_TAG + 1] removeFromSuperview];
-            b = FindBubble(bar);
-            if (b) { StyleBubble(b); gBubble = b; }
-        }
+        // Instagram's own bubble (floating bar) only tells us where it is; ours is shown.
+        UIView *ig = IsFullBar(bar) ? nil : FindBubble(bar);
+        if (ig && ig.tag != GLASS_TAG + 1 && ig.alpha > 0) ig.alpha = 0.001;
+        if (!gDragging && CACurrentMediaTime() > [objc_getAssociatedObject(bar, "igPinUntil") doubleValue]) gSelected = SelectedTab(bar, ig);
+        PlaceOwnBubble(bar, YES);
+        UIView *b = [bar viewWithTag:GLASS_TAG + 1];
         CGRect f = [bar convertRect:bar.bounds toView:nil];
-        gDebug = [NSString stringWithFormat:@"bar=%@ %.0fx%.0f @%.0f full=%d icons=%lu sel=%ld\n parent=%@\n bubble=%@ %.0fx%.0f\n dark=%d",
-                  NSStringFromClass([bar class]), f.size.width, f.size.height, f.origin.y, IsFullBar(bar), (unsigned long)IconFrames(bar).count, (long)gSelected, NSStringFromClass([bar.superview class]),
+        gDebug = [NSString stringWithFormat:@"bar=%@ %.0fx%.0f @%.0f full=%d icons=%lu sel=%ld (%@)\n parent=%@\n bubble=%@ %.0fx%.0f\n dark=%d",
+                  NSStringFromClass([bar class]), f.size.width, f.size.height, f.origin.y, IsFullBar(bar), (unsigned long)IconFrames(bar).count, (long)gSelected, gSelWhy, NSStringFromClass([bar.superview class]),
                   b ? NSStringFromClass([b class]) : @"none", b.bounds.size.width, b.bounds.size.height, IsDark(bar)];
     } else {
         NSMutableArray *c = [NSMutableArray array];

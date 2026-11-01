@@ -1,6 +1,6 @@
 Package: com.nano.instaglass
 Name: InstaGlass
-Version: 0.2.0
+Version: 0.3.0
 Architecture: iphoneos-arm
 Description: Turns Instagram's floating tab bar into an iOS 26 liquid glass pill, with a glass selection bubble that stretches like liquid when you switch tabs. Made by nano.
 Maintainer: nano
