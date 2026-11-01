@@ -1,4 +1,7 @@
-// Messages26 0.2.0 - made by nano
+// Messages26 0.3.0 - made by nano
+// 0.3.0: app icons in the + menu, faster liquid open, smaller glass on the top buttons,
+//        names no longer cut off, the conversation list is left alone, hold + for Photos,
+//        the field sits at the bottom (no gap where the app row was)
 // 0.2.0: + and the field work again (they were outside the bar), bigger glass field and +,
 //        lower; glass back / FaceTime / name on the real top bar; settings page
 // 0.1.0: liquid glass message field + glass "+" (camera / App Store buttons and the
@@ -102,12 +105,21 @@ static NSArray *StripApps(void) {
             int g = 0;
             while (st.count && g++ < 60) {
                 UIView *v = st.lastObject; [st removeLastObject];
-                if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image && v.bounds.size.width * v.bounds.size.height > area) { icon = ((UIImageView *)v).image; area = v.bounds.size.width * v.bounds.size.height; }
+                CGFloat a = v.bounds.size.width * v.bounds.size.height;
+                UIImage *im = [v isKindOfClass:[UIImageView class]] ? ((UIImageView *)v).image : nil;
+                if (!im && v.layer.contents && CFGetTypeID((__bridge CFTypeRef)v.layer.contents) == CGImageGetTypeID()) im = [UIImage imageWithCGImage:(__bridge CGImageRef)v.layer.contents];
+                if (!im) for (CALayer *l in v.layer.sublayers) if (l.contents && CFGetTypeID((__bridge CFTypeRef)l.contents) == CGImageGetTypeID()) { im = [UIImage imageWithCGImage:(__bridge CGImageRef)l.contents]; a = l.bounds.size.width * l.bounds.size.height; break; }
+                if (im && a > area && a > 200) { icon = im; area = a; }
                 if (!name.length && [v isKindOfClass:[UILabel class]]) name = ((UILabel *)v).text;
                 if (!name.length && v.accessibilityLabel.length) name = v.accessibilityLabel;
                 [st addObjectsFromArray:v.subviews];
             }
             if (!name.length) name = [NSString stringWithFormat:@"App %ld", (long)i + 1];
+            if (!icon && cell.bounds.size.width > 10) {
+                // draw the cell itself (its own icon), whatever holds the picture
+                UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:cell.bounds.size];
+                icon = [r imageWithActions:^(UIGraphicsImageRendererContext *c) { [cell.layer renderInContext:c.CGContext]; }];
+            }
             [out addObject:@{@"name": name, @"icon": icon ?: [UIImage systemImageNamed:@"app.fill"], @"ip": ip}];
         }
     }
@@ -120,6 +132,11 @@ static void OpenStripApp(NSIndexPath *ip) {
     if ([cv.delegate respondsToSelector:@selector(collectionView:didSelectItemAtIndexPath:)]) [cv.delegate collectionView:cv didSelectItemAtIndexPath:ip];
 }
 
+static NSDictionary *PhotosApp(void) {
+    for (NSDictionary *a in StripApps()) if ([[a[@"name"] lowercaseString] isEqualToString:@"photos"]) return a;
+    for (NSDictionary *a in StripApps()) if ([[a[@"name"] lowercaseString] containsString:@"photos"] && ![[a[@"name"] lowercaseString] containsString:@"google"]) return a;
+    return nil;
+}
 @implementation M26Menu {
     UIView *_dim, *_panel;
     __weak UIButton *_plus;
@@ -136,8 +153,7 @@ static void OpenStripApp(NSIndexPath *ip) {
     // Photos first, then Camera, then the rest of the apps.
     NSMutableArray *items = [NSMutableArray array];
     NSArray *apps = StripApps();
-    NSDictionary *photos = nil;
-    for (NSDictionary *a in apps) if ([[a[@"name"] lowercaseString] containsString:@"photo"]) photos = a;
+    NSDictionary *photos = PhotosApp();
     if (photos) [items addObject:photos];
     [items addObject:@{@"name": @"Camera", @"icon": [UIImage systemImageNamed:@"camera.fill"], @"camera": @YES}];
     for (NSDictionary *a in apps) if (a != photos && ![[a[@"name"] lowercaseString] containsString:@"app store"]) [items addObject:a];
@@ -171,7 +187,7 @@ static void OpenStripApp(NSIndexPath *ip) {
         [row addTarget:self action:@selector(down:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
         [row addTarget:self action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchDragExit | UIControlEventTouchCancel];
         UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(22, 9, 44, 44)];
-        iv.image = it[@"icon"]; iv.contentMode = UIViewContentModeScaleAspectFill;
+        iv.image = [it[@"icon"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]; iv.contentMode = UIViewContentModeScaleAspectFill;
         iv.layer.cornerRadius = 22; iv.clipsToBounds = YES;
         if (it[@"camera"]) { iv.contentMode = UIViewContentModeCenter; iv.tintColor = UIColor.whiteColor; iv.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1];
             iv.image = [UIImage systemImageNamed:@"camera.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]]; }
@@ -184,21 +200,31 @@ static void OpenStripApp(NSIndexPath *ip) {
         [sv addSubview:row];
         // rows float in one after another
         row.alpha = 0; row.transform = CGAffineTransformMakeTranslation(0, 14);
-        [UIView animateWithDuration:0.4 delay:0.08 + 0.025 * i usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:0 animations:^{ row.alpha = 1; row.transform = CGAffineTransformIdentity; } completion:nil];
+        [UIView animateWithDuration:0.3 delay:0.05 + 0.015 * i usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:0 animations:^{ row.alpha = 1; row.transform = CGAffineTransformIdentity; } completion:nil];
     }
     [w addSubview:_panel];
     // Liquid open: a drop leaves the "+", stretches up and swells into the menu.
     CGPoint from = CGPointMake(CGRectGetMidX(pf) - _panel.center.x, CGRectGetMidY(pf) - _panel.center.y);
     _panel.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(from.x, from.y), 44 / W, 44 / H);
     g.layer.cornerRadius = 34;
-    [UIView animateKeyframesWithDuration:0.5 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
+    [UIView animateKeyframesWithDuration:0.32 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
         [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.35 animations:^{
             self->_panel.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(from.x * 0.45, from.y * 0.45), 0.35, 0.62);
         }];
         [UIView addKeyframeWithRelativeStartTime:0.35 relativeDuration:0.45 animations:^{ self->_panel.transform = CGAffineTransformMakeScale(1.03, 0.98); }];
         [UIView addKeyframeWithRelativeStartTime:0.8 relativeDuration:0.2 animations:^{ self->_panel.transform = CGAffineTransformIdentity; }];
     } completion:nil];
-    [UIView animateWithDuration:0.3 animations:^{ self->_dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25]; plus.transform = CGAffineTransformMakeRotation(M_PI_4); }];
+    [UIView animateWithDuration:0.22 animations:^{ self->_dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25]; plus.transform = CGAffineTransformMakeRotation(M_PI_4); }];
+}
+- (void)hold:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan || !gMenuOn) return;
+    UIView *plus = g.view;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy] impactOccurred];
+    CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    k.values = @[@1, @1.2, @0.92, @1]; k.duration = 0.35;
+    [plus.layer addAnimation:k forKey:@"m26.hold"];
+    NSDictionary *p = PhotosApp();
+    if (p) { [plus.window endEditing:YES]; OpenStripApp(p[@"ip"]); }
 }
 - (void)down:(UIButton *)b { [UIView animateWithDuration:0.15 animations:^{ b.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.18]; b.transform = CGAffineTransformMakeScale(0.97, 0.97); }]; }
 - (void)up:(UIButton *)b { [UIView animateWithDuration:0.25 animations:^{ b.backgroundColor = UIColor.clearColor; b.transform = CGAffineTransformIdentity; }]; }
@@ -209,7 +235,7 @@ static void OpenStripApp(NSIndexPath *ip) {
     CGRect pf = [plus convertRect:plus.bounds toView:panel.superview];
     CGPoint to = CGPointMake(CGRectGetMidX(pf) - panel.center.x, CGRectGetMidY(pf) - panel.center.y);
     CGFloat W = panel.bounds.size.width, H = panel.bounds.size.height;
-    [UIView animateKeyframesWithDuration:0.38 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
+    [UIView animateKeyframesWithDuration:0.26 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
         [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.4 animations:^{ panel.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(to.x * 0.4, to.y * 0.4), 0.4, 0.6); }];
         [UIView addKeyframeWithRelativeStartTime:0.4 relativeDuration:0.6 animations:^{ panel.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(to.x, to.y), 40 / W, 40 / H); panel.alpha = 0; }];
     } completion:^(__unused BOOL d) { [panel removeFromSuperview]; }];
@@ -296,7 +322,12 @@ static void StyleEntry(UIView *entry) {
         if (strip.userInteractionEnabled) strip.userInteractionEnabled = NO;
         CGRect sf = [strip convertRect:strip.bounds toView:entry];
         CGRect cf0 = CGRectApplyAffineTransform(container.frame, CGAffineTransformInvert(container.transform));
-        if (CGRectGetMinY(sf) >= CGRectGetMaxY(cf0) - 4 && container != strip && ![strip isDescendantOfView:container]) shift = MAX(0, sf.size.height - 10);
+        if ([strip isDescendantOfView:container]) {
+            // the app row is inside the same box: move just the field row down
+            container = field;
+            CGRect ff0 = CGRectApplyAffineTransform([field.superview convertRect:CGRectApplyAffineTransform(field.frame, CGAffineTransformInvert(field.transform)) toView:entry], CGAffineTransformIdentity);
+            if (CGRectGetMinY(sf) >= CGRectGetMaxY(ff0) - 6) shift = MAX(0, sf.size.height - 4);
+        } else if (CGRectGetMinY(sf) >= CGRectGetMaxY(cf0) - 6 && container != strip) shift = MAX(0, sf.size.height - 4);
     } else if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
     CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift);
     if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t;
@@ -316,11 +347,13 @@ static void StyleEntry(UIView *entry) {
     CGRect plusF = CGRectMake(px, round(CGRectGetMaxY(ff) + padY - D), D, D);
     CGRect pillF = CGRectMake(px + D + 10, CGRectGetMinY(ff) - padY, CGRectGetMaxX(ff) - (px + D + 10), ff.size.height + padY * 2);
     UIView *pill = [entry viewWithTag:PILL_TAG];
+    UIView *top = container;
+    while (top.superview && top.superview != entry) top = top.superview;
     if (!pill) {
         pill = GlassView(entry); pill.tag = PILL_TAG;
-        [entry insertSubview:pill belowSubview:container];
+        [entry insertSubview:pill belowSubview:top];
     }
-    if ([entry.subviews indexOfObject:pill] > [entry.subviews indexOfObject:container]) [entry insertSubview:pill belowSubview:container];
+    if ([entry.subviews indexOfObject:pill] > [entry.subviews indexOfObject:top]) [entry insertSubview:pill belowSubview:top];
     if (!CGRectEqualToRect(pill.frame, pillF)) { pill.frame = pillF; pill.layer.cornerRadius = MIN(pillF.size.height / 2, 26); }
     pill.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.17] : [UIColor colorWithWhite:0 alpha:0.08]).CGColor;
     UIButton *plus = (UIButton *)[entry viewWithTag:PLUS_TAG];
@@ -332,6 +365,9 @@ static void StyleEntry(UIView *entry) {
         [plus addSubview:g];
         [plus setImage:[UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
         [plus addTarget:[M26Menu shared] action:@selector(open:) forControlEvents:UIControlEventTouchUpInside];
+        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[M26Menu shared] action:@selector(hold:)];
+        lp.minimumPressDuration = 0.4;
+        [plus addGestureRecognizer:lp];
         [entry addSubview:plus];
     }
     plus.tintColor = Ink(entry);
@@ -357,22 +393,54 @@ static void EntryLayout(UIView *self, SEL _cmd) {
 
 #pragma mark - conversation top bar
 
+static NSHashTable *gStyled;   // nav things we put glass behind / changed
+static char kGlassKey;
+// What a view actually draws (its icons / text), not its whole tap area.
+static CGRect DrawnRect(UIView *v) {
+    CGRect u = CGRectNull;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:v];
+    int g = 0;
+    while (st.count && g++ < 40) {
+        UIView *x = st.lastObject; [st removeLastObject];
+        if (x.hidden || x.alpha < 0.05 || x.tag == GLASS_TAG) continue;
+        if (([x isKindOfClass:[UIImageView class]] && ((UIImageView *)x).image) || [x isKindOfClass:[UILabel class]]) {
+            CGRect f = [x convertRect:x.bounds toView:v.superview];
+            if ([x isKindOfClass:[UILabel class]]) {
+                CGSize ts = [(UILabel *)x sizeThatFits:CGSizeMake(1000, 100)];
+                f = CGRectMake(CGRectGetMidX(f) - MIN(ts.width, f.size.width) / 2, CGRectGetMidY(f) - ts.height / 2, MIN(ts.width, f.size.width), ts.height);
+            }
+            u = CGRectUnion(u, f);
+            continue;
+        }
+        [st addObjectsFromArray:x.subviews];
+    }
+    return CGRectIsNull(u) ? v.frame : u;
+}
 static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     UIView *host = v.superview;
     if (!host) return;
-    static const char kG = 0;
-    UIVisualEffectView *g = objc_getAssociatedObject(v, &kG);
+    if (!gStyled) gStyled = [NSHashTable weakObjectsHashTable];
+    [gStyled addObject:v];
+    UIVisualEffectView *g = objc_getAssociatedObject(v, &kGlassKey);
     if (!g || g.superview != host) {
         [g removeFromSuperview];
         g = GlassView(v); g.tag = GLASS_TAG;
         [host insertSubview:g belowSubview:v];
-        objc_setAssociatedObject(v, &kG, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(v, &kGlassKey, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    CGRect f = v.frame;
+    CGRect f = DrawnRect(v);
     CGRect want = CGRectInset(f, -padX, -padY);
     if (circle) { CGFloat d = MAX(want.size.width, want.size.height); want = CGRectMake(CGRectGetMidX(f) - d / 2, CGRectGetMidY(f) - d / 2, d, d); }
+    want = CGRectIntegral(want);
     if (!CGRectEqualToRect(g.frame, want)) { g.frame = want; g.layer.cornerRadius = MIN(want.size.width, want.size.height) / 2; }
     g.hidden = v.hidden || v.alpha < 0.05;
+}
+static NSHashTable *gFaded;   // bar backgrounds we hid
+static void UndoNav(void) {
+    for (UIView *v in [gStyled allObjects]) { [objc_getAssociatedObject(v, &kGlassKey) removeFromSuperview]; objc_setAssociatedObject(v, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    [gStyled removeAllObjects];
+    for (UIView *v in [gFaded allObjects]) { v.alpha = 1; v.hidden = NO; }
+    [gFaded removeAllObjects];
 }
 static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
     nb.tintColor = Ink(nb);
@@ -382,8 +450,9 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
     while (bs.count && gb++ < 40) {
         UIView *s = bs.firstObject; [bs removeObjectAtIndex:0];
         NSString *n = NSStringFromClass([s class]);
-        if (([n containsString:@"BarBackground"] || [n containsString:@"Backdrop"]) && s.alpha > 0) s.alpha = 0;
-        else if (s.bounds.size.width >= nb.bounds.size.width * 0.95 && s.bounds.size.height <= 1.5) s.hidden = YES;   // hairline
+        if (!gFaded) gFaded = [NSHashTable weakObjectsHashTable];
+        if (([n containsString:@"BarBackground"] || [n containsString:@"Backdrop"]) && s.alpha > 0) { s.alpha = 0; [gFaded addObject:s]; }
+        else if (s.bounds.size.width >= nb.bounds.size.width * 0.95 && s.bounds.size.height <= 1.5 && !s.hidden) { s.hidden = YES; [gFaded addObject:s]; }   // hairline
     }
     CGFloat W = nb.bounds.size.width;
     NSMutableArray *st = [NSMutableArray arrayWithArray:nb.subviews];
@@ -395,15 +464,11 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
         NSString *cn = NSStringFromClass([v class]);
         if ([v isKindOfClass:[UIControl class]] && f.size.width >= 24 && f.size.width < 170 && f.size.height >= 24 && f.size.height < 80) {
             BOOL left = CGRectGetMidX(f) < W * 0.33, right = CGRectGetMidX(f) > W * 0.67;
-            if (left || right) { GlassBehind(v, left ? 12 : 10, 8, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
+            if (left || right) { GlassBehind(v, left ? 10 : 9, right ? 9 : 7, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
         }
         if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
             UILabel *l = (UILabel *)v;
-            UIFont *bold = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
-            if (![l.font isEqual:bold]) l.font = bold;
-            l.textColor = Ink(nb);
-            UIView *holder = l.superview && l.superview.bounds.size.width < W * 0.7 && l.superview.bounds.size.height < 40 ? l.superview : l;
-            GlassBehind(holder, 14, 7, NO);
+            GlassBehind(l, 12, 6, NO);
             [found addObject:[NSString stringWithFormat:@"name:%@", l.text]];
             continue;
         }
@@ -413,7 +478,7 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
 static void StyleNav(UIWindow *w) {
     UIView *e = gEntry;
     BOOL chat = e.window != nil;
-    if (!gTopOn || !chat) { gNavDebug = chat ? @"top bar off" : @"nav: no chat open"; return; }
+    if (!gTopOn || !chat) { UndoNav(); gNavDebug = chat ? @"top bar off" : @"nav: no chat open"; return; }
     NSMutableArray *found = [NSMutableArray array];
     NSMutableArray *st = [NSMutableArray arrayWithObject:w];
     int g = 0, bars = 0;
@@ -477,7 +542,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.2.0 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.3.0 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
