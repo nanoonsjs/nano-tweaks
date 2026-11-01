@@ -7040,6 +7040,7 @@ static NSHashTable *gResponses;
 static id (*origTracklist)(id, SEL);
 static id MyTracklist(id self, SEL _cmd) {
     id r = origTracklist(self, _cmd);
+    if (![NSThread isMainThread]) return r;   // the list is only touched on the main thread
     if (!gResponses) gResponses = [NSHashTable weakObjectsHashTable];
     if (gResponses.count > 12) [gResponses removeAllObjects];
     [gResponses addObject:self];
