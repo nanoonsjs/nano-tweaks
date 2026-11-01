@@ -1,4 +1,5 @@
-// MusicPill 1.2.51 - made by nano
+// MusicPill 1.2.52 - made by nano
+// 1.2.52: Up Next finds the next song for every song (asks the way Music's queue screen does), new setting for when it shows (5-20 seconds before the end); Pin to Search removed
 // 1.2.51: Up Next shows the song name (the "E" badge was read instead), pops out of the pill as a liquid drop, follows the pill when it minimizes / expands, and drops back into it when you pull it away; Pin to Search uses the pill's song if needed
 // 1.2.50: fixed Music freezing when opening the queue (Up Next no longer asks Music's player; it reads the queue page, with covers); pins debug
 // 1.2.49: "Up Next" capsule grows out of the pill 10s before a song ends (tap to skip, swipe away); pin songs to Search from the player's ••• menu, they show as glass chips on top of Search (tap to find, hold to unpin)
@@ -403,7 +404,9 @@ static void SetFavArtist(NSString *name, BOOL fav) {
 }
 static BOOL gAlbumGlow = NO;         // pill + circles tinted with the album cover's color
 static BOOL gUpNext = YES;          // "Up Next" capsule 10s before a song ends
-static BOOL gPins = YES;            // pinned songs on the Search page
+static BOOL gPins = NO;             // pinned songs on the Search page (dropped)
+static double gUpNextSecs = 10;     // how long before the end Up Next shows (5-20)
+static NSString *gUpNextDebug = @"-";
 static BOOL gDoubleTapFav = NO;      // double-tap the player's artwork to favorite
 static UIColor *gGlowColor;
 static __weak UIView *gPlayerArt;
@@ -501,7 +504,10 @@ static void LoadPrefs(void) {
     gAlbumGlow = PrefBool(file, @"albumglow", NO);
     gDoubleTapFav = PrefBool(file, @"doubletapfav", NO);
     gUpNext = PrefBool(file, @"upnext", YES);
-    gPins = PrefBool(file, @"pins", YES);
+    gPins = NO;   // Pin to Search was dropped
+    gUpNextSecs = 10;
+    { id v = file[@"upnextsecs"]; if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("upnextsecs"), DOM); if (cf) v = (__bridge_transfer id)cf; }
+      if ([v respondsToSelector:@selector(doubleValue)]) gUpNextSecs = MAX(5, MIN(20, round([v doubleValue]))); }
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers"];
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers2"];   // 1.2.19/20's list (some wrong)   // 1.2.18's list (could hold wrong covers)
     // Turned off: forget every saved cover.
@@ -1345,7 +1351,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.51 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.52 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5745,7 +5751,7 @@ static void FloatTick(UIWindow *w) {
     if (artist && more && more != favMore) { favMore = more; @try { RefreshArtistFav(); } @catch (__unused id e) {} }
     if (!album && !artist && more) GlassCircleFor((UIControl *)more, TOPBTN);
     if (gRowParent && gRowParent.window == w) RedToWhite(gRowParent);
-    gFloatDebug = [NSString stringWithFormat:@"motion: %@ | pins: %@ | search: %@ | artist: %@ | share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gMotionDebug, gPinsDebug, gSearchDebug, gArtistDebug, gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
+    gFloatDebug = [NSString stringWithFormat:@"motion: %@ | upnext: %@ | search: %@ | artist: %@ | share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gMotionDebug, gUpNextDebug, gSearchDebug, gArtistDebug, gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
 }
 
 // Music's top buttons (Swift SymbolButton): when the download one changes state
@@ -7024,15 +7030,81 @@ __attribute__((unused)) static void FavStarTick(UIWindow *w) {
 // The song after this one, from the queue list (remembered each time the queue
 // page is open). Asking Music's player directly froze Music when the queue was
 // opened, so it isn't used.
+static id KV(id o, NSString *k) { if (!o) return nil; @try { return [o valueForKey:k]; } @catch (__unused id e) { return nil; } }
+// Ask for the queue the same way Music's own queue screen does (an async player
+// request, answered later), then take the item after the playing one.
+static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
+    Class R = NSClassFromString(@"MPCPlayerRequest"), P = NSClassFromString(@"MPCPlayerPath");
+    if (!R || !P || ![P respondsToSelector:NSSelectorFromString(@"deviceActivePlayerPath")]) { gUpNextDebug = @"no MPC"; done(nil, nil, nil); return; }
+    @try {
+        id path = ((id (*)(id, SEL))objc_msgSend)(P, NSSelectorFromString(@"deviceActivePlayerPath"));
+        id req = [R new];
+        @try { [req setValue:path forKey:@"playerPath"]; } @catch (__unused id e) {}
+        @try { [req setValue:@"MusicPill" forKey:@"label"]; } @catch (__unused id e) {}
+        SEL setRange = NSSelectorFromString(@"setTracklistRange:");
+        Method m = class_getInstanceMethod(R, setRange);
+        const char *enc = m ? method_getTypeEncoding(m) : NULL;
+        if (enc && strstr(enc, "=qq}")) {
+            struct { NSInteger a; NSInteger b; } range = {0, 3};
+            ((void (*)(id, SEL, typeof(range)))objc_msgSend)(req, setRange, range);
+        }
+        SEL perf = NSSelectorFromString(@"performWithCompletion:");
+        if (![req respondsToSelector:perf]) { gUpNextDebug = @"no perform"; done(nil, nil, nil); return; }
+        void (^cb)(id, NSError *) = ^(id resp, NSError *err) {
+            NSString *t = nil, *ar = nil; id catalog = nil;
+            @try {
+                id tl = KV(resp, @"tracklist");
+                id items = KV(tl, @"items");
+                NSIndexPath *ip = KV(tl, @"playingItemIndexPath");
+                id next = nil;
+                if (items && [ip isKindOfClass:[NSIndexPath class]]) {
+                    SEL gi = NSSelectorFromString(@"globalIndexForIndexPath:"), ig = NSSelectorFromString(@"indexPathForGlobalIndex:"), at = NSSelectorFromString(@"itemAtIndexPath:");
+                    if ([items respondsToSelector:gi] && [items respondsToSelector:ig] && [items respondsToSelector:at]) {
+                        NSInteger g = ((NSInteger (*)(id, SEL, id))objc_msgSend)(items, gi, ip);
+                        NSInteger total = [KV(items, @"totalItemCount") integerValue];
+                        if (g >= 0 && (total <= 0 || g + 1 < total)) {
+                            NSIndexPath *nip = ((id (*)(id, SEL, NSInteger))objc_msgSend)(items, ig, g + 1);
+                            if (nip) next = ((id (*)(id, SEL, id))objc_msgSend)(items, at, nip);
+                        }
+                    }
+                }
+                id meta = KV(next, @"metadataObject");
+                id song = KV(meta, @"song") ?: KV(meta, @"flattenedGenericObject");
+                t = KV(song, @"title"); ar = KV(KV(song, @"artist"), @"name");
+                catalog = KV(song, @"artworkCatalog");
+                gUpNextDebug = [NSString stringWithFormat:@"mpc next=%@ err=%@", t ?: @"nil", err ? @(err.code) : @"-"];
+            } @catch (__unused id e) { gUpNextDebug = @"mpc exception"; }
+            NSString *tt = [t isKindOfClass:[NSString class]] ? t : nil, *aa = [ar isKindOfClass:[NSString class]] ? ar : nil;
+            SEL reqImg = NSSelectorFromString(@"requestImageWithCompletionHandler:");
+            if (catalog && [catalog respondsToSelector:reqImg]) {
+                @try { [catalog setValue:[NSValue valueWithCGSize:CGSizeMake(96, 96)] forKey:@"fittingSize"]; } @catch (__unused id e) {}
+                __block BOOL called = NO;
+                void (^ic)(UIImage *) = ^(UIImage *im) {
+                    if (called) return; called = YES;
+                    dispatch_async(dispatch_get_main_queue(), ^{ done(tt, aa, [im isKindOfClass:[UIImage class]] ? im : nil); });
+                };
+                @try { ((void (*)(id, SEL, id))objc_msgSend)(catalog, reqImg, ic); }
+                @catch (__unused id e) { ic(nil); }
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ ic(nil); });
+            } else dispatch_async(dispatch_get_main_queue(), ^{ done(tt, aa, nil); });
+        };
+        ((void (*)(id, SEL, id))objc_msgSend)(req, perf, cb);
+    } @catch (__unused id e) { gUpNextDebug = @"mpc failed"; done(nil, nil, nil); }
+}
+// The song after this one: Music's player request first; the queue list
+// (remembered whenever the queue page is open) as a backup.
 static void FetchNextTrack(void (^done)(NSString *title, NSString *artist, UIImage *art)) {
     NSArray *q = gQueueCache;
     NSString *now = gNowTitle;
-    NSDictionary *next = nil;
+    NSDictionary *cached = nil;
     if (q.count && now.length) {
-        if ([gQueueCacheFor isEqualToString:now]) next = q.firstObject;
-        else for (NSUInteger i = 0; i + 1 < q.count; i++) if ([q[i][@"t"] isEqualToString:now]) { next = q[i + 1]; break; }
+        if ([gQueueCacheFor isEqualToString:now]) cached = q.firstObject;
+        else for (NSUInteger i = 0; i + 1 < q.count; i++) if ([q[i][@"t"] isEqualToString:now]) { cached = q[i + 1]; break; }
     }
-    done(next[@"t"], next[@"a"], next[@"img"]);
+    MPCNextTrack(^(NSString *t, NSString *a, UIImage *img) {
+        if (t.length) done(t, a, img ?: ([cached[@"t"] isEqualToString:t] ? cached[@"img"] : nil));
+        else done(cached[@"t"], cached[@"a"], cached[@"img"]);
+    });
 }
 #define UPNEXT_TAG 0x4D50554E
 static __weak UIView *gUpNextCap, *gUpNextPill;
@@ -7189,7 +7261,7 @@ static void UpNextCheck(NSDictionary *info, NSString *title, UIView *pill) {
     if (rate <= 0 || dur < 30) return;
     if ([ts isKindOfClass:[NSDate class]]) el += -[ts timeIntervalSinceNow] * rate;
     double left = dur - el;
-    if (left > 10.5 || left < 3) return;
+    if (left > gUpNextSecs + 0.5 || left < 2) return;
     shownFor = title;
     __weak UIView *wpill = pill;
     FetchNextTrack(^(NSString *nt, NSString *na, UIImage *art) {

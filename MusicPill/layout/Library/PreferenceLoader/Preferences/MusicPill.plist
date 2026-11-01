@@ -27,7 +27,7 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
-			<key>footerText</key><string>Up Next shows the next song above the pill 10 seconds before the current one ends. Pin songs to Search from the player's ••• menu; hold a pin to remove it.</string>
+			<key>footerText</key><string>Up Next shows the next song above the pill shortly before the current one ends (5 to 20 seconds, set below). Tap it to skip, pull it away to dismiss.</string>
 		</dict>
 		<dict>
 			<key>cell</key><string>PSSwitchCell</string>
@@ -38,10 +38,18 @@
 			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Pinned Songs in Search</string>
-			<key>key</key><string>pins</string>
-			<key>default</key><true/>
+			<key>cell</key><string>PSStaticTextCell</string>
+			<key>label</key><string>Up Next shows this many seconds before the end</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSliderCell</string>
+			<key>key</key><string>upnextsecs</string>
+			<key>default</key><real>10</real>
+			<key>min</key><real>5</real>
+			<key>max</key><real>20</real>
+			<key>showValue</key><true/>
+			<key>isSegmented</key><true/>
+			<key>segmentCount</key><integer>15</integer>
 			<key>defaults</key><string>com.user.musicpill</string>
 			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
 		</dict>
