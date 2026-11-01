@@ -7620,7 +7620,7 @@ static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb
 #pragma mark - artist About sheet
 
 #define ABOUTHIDE_KEY "mp.aboutHide"
-static char kAboutRange, kAboutData;
+static char kAboutData;
 static NSString *TextOf(UIView *v) {
     if ([v isKindOfClass:[UILabel class]]) return ((UILabel *)v).text ?: ((UILabel *)v).attributedText.string;
     if (![NSStringFromClass([v class]) containsString:@"Text"]) return nil;
@@ -7802,7 +7802,7 @@ static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
 // stack out again from time to time, so this runs after each of its layouts.
 // The gray panel Music puts behind the bottom sections (About + Similar Artists):
 // the page's own black instead.
-static void ClearGray(UIView *sec) {
+__attribute__((unused)) static void ClearGray(UIView *sec) {
     NSMutableArray *st = [NSMutableArray arrayWithObject:sec];
     int g = 0;
     while (st.count && g++ < 60) {
