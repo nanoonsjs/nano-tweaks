@@ -1,4 +1,5 @@
-// MusicPill 1.2.62 - made by nano
+// MusicPill 1.2.63 - made by nano
+// 1.2.63: About sheet reads Music's text better and finds the header photo inside layers; keeps checking the page so the bottom About is removed
 // 1.2.62: artist pages get an "i" button left of Play that opens an iOS 26 About sheet (photo, name, From / Born, Genre, About); the About part is taken off the bottom of the page
 // 1.2.61: removed Animated Tab Icons
 // 1.2.59: Up Next Preview is off by default; settings label is "Up Next Duration"
@@ -385,6 +386,8 @@ static UIView *GlyphIn(UIView *v, int depth);
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
+static __weak UICollectionView *gArtistCV;
+static NSString *gAboutDebug = @"-";
 static void FavStarTick(UIWindow *w);
 // Artists you favorited (by name), so search can show a star next to them.
 static NSMutableSet *FavArtists(void) {
@@ -1360,7 +1363,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.62 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.63 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -5064,7 +5067,7 @@ static void ArtistTick(UIView *play) {
     UIButton *stb = (UIButton *)[ov viewWithTag:4];
     if (stb.imageView && stb.subviews.lastObject != stb.imageView) [stb bringSubviewToFront:stb.imageView];
     if (gArtistFavKnown && nameText.length) SetFavArtist(nameText, gArtistFav);
-    gArtistDebug = [NSString stringWithFormat:@"ok name='%@' side=%@ fav=%d/%d%@", nameText, gSideDebug, gArtistFavKnown, gArtistFav, gAddDebug];
+    gArtistDebug = [NSString stringWithFormat:@"ok name='%@' fav=%d/%d about: %@", nameText, gArtistFavKnown, gArtistFav, gAboutDebug];
 }
 
 // Latest release: a rounded card, and a round + instead of "+ Add".
@@ -6770,6 +6773,8 @@ static void StartWatchdog(void) {
         // Album/playlist buttons and glass top buttons.
         if (w && !playerUp) {
             @try { AlbumTick(w); } @catch (__unused id e) {}
+            { static CFTimeInterval lastAb; UICollectionView *acv = gArtistCV;
+              if (acv.window == w && CACurrentMediaTime() - lastAb > 1.0) { lastAb = CACurrentMediaTime(); @try { AboutScan(acv.subviews.firstObject, NO); } @catch (__unused id e) {} } }
             @try { NavTick(TopNavBar(w)); } @catch (__unused id e) {}
             @try { FloatTick(w); } @catch (__unused id e) {}
         }
@@ -7607,16 +7612,40 @@ static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb
 static char kAboutRange, kAboutData;
 static NSString *TextOf(UIView *v) {
     if ([v isKindOfClass:[UILabel class]]) return ((UILabel *)v).text ?: ((UILabel *)v).attributedText.string;
-    if ([NSStringFromClass([v class]) containsString:@"TextDrawing"]) return DrawnText(v);
-    return nil;
+    if (![NSStringFromClass([v class]) containsString:@"Text"]) return nil;
+    // Music's text views: the longest string they hold (the first one isn't
+    // always the text you see).
+    NSString *best = nil;
+    for (Class c = [v class]; c && c != [UIView class]; c = class_getSuperclass(c)) {
+        unsigned n = 0; Ivar *iv = class_copyIvarList(c, &n);
+        for (unsigned i = 0; i < n; i++) {
+            const char *enc = ivar_getTypeEncoding(iv[i]), *nm = ivar_getName(iv[i]);
+            if (!enc || enc[0] != '@' || !nm) continue;
+            NSString *ln = [@(nm) lowercaseString];
+            if ([ln containsString:@"delegate"] || [ln containsString:@"weak"] || [ln containsString:@"parent"] || [ln containsString:@"owner"]) continue;
+            id o = nil; @try { o = object_getIvar(v, iv[i]); } @catch (__unused id e) {}
+            NSString *t = [o isKindOfClass:[NSAttributedString class]] ? ((NSAttributedString *)o).string : ([o isKindOfClass:[NSString class]] ? o : nil);
+            if (t.length > best.length && t.length < 20000) best = t;
+        }
+        free(iv);
+    }
+    for (NSString *k in @[@"attributedText", @"text"]) {
+        id o = nil; @try { o = [v valueForKey:k]; } @catch (__unused id e) {}
+        NSString *t = [o isKindOfClass:[NSAttributedString class]] ? ((NSAttributedString *)o).string : ([o isKindOfClass:[NSString class]] ? o : nil);
+        if (t.length > best.length) best = t;
+    }
+    return best ?: DrawnText(v);
 }
+
 // Reads the About part at the bottom of an artist page: the text, From, Born,
 // Genre, and the header photo. Also remembers where it sits so it can be taken
 // off the page. force: scroll the list there for a moment (invisibly) to load it.
 static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
     UICollectionView *cv = nil;
     for (UIView *p = inPage.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]]) { cv = (UICollectionView *)p; break; }
+    if (!cv && [inPage.superview isKindOfClass:[UICollectionView class]]) cv = (UICollectionView *)inPage.superview;
     if (!cv) return nil;
+    gArtistCV = cv;
     NSDictionary *have = objc_getAssociatedObject(cv, &kAboutData);
     if (have[@"about"] && !force) return have;
     NSMutableArray *rows = [NSMutableArray array];   // {t, y, top, bottom}
@@ -7649,6 +7678,11 @@ static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
         [cv layoutIfNeeded];
     }
     [rows sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"y"] compare:b[@"y"]]; }];
+    {
+        NSMutableArray *sm = [NSMutableArray array];
+        for (NSDictionary *r in rows) if (sm.count < 8 && [r[@"t"] length] < 40) [sm addObject:r[@"t"]];
+        gAboutDebug = [NSString stringWithFormat:@"rows=%lu found=%d e.g. %@", (unsigned long)rows.count, found, [sm componentsJoinedByString:@"/"]];
+    }
     NSMutableDictionary *out = [have mutableCopy] ?: [NSMutableDictionary dictionary];
     CGFloat top = CGFLOAT_MAX, bottom = 0;
     for (NSUInteger i = 0; i < rows.count; i++) {
@@ -7672,15 +7706,25 @@ static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
     if (!out[@"photo"]) {
         UIImage *best = nil; CGFloat area = 0;
         for (UIView *cell in cv.subviews) {
-            if (![cell isKindOfClass:[UICollectionReusableView class]] || CGRectGetMinY(cell.frame) > 40) continue;
+            if (![cell isKindOfClass:[UICollectionReusableView class]] || CGRectGetMinY(cell.frame) > 60) continue;
             NSMutableArray *st = [NSMutableArray arrayWithObject:cell];
             int g = 0;
             while (st.count && g++ < 300) {
                 UIView *v = st.lastObject; [st removeLastObject];
+                if (v.tag == ARTIST_TAG) continue;
                 UIImage *im = [v isKindOfClass:[UIImageView class]] ? ((UIImageView *)v).image : nil;
-                if (!im && v.layer.contents && CFGetTypeID((__bridge CFTypeRef)v.layer.contents) == CGImageGetTypeID()) im = [UIImage imageWithCGImage:(__bridge CGImageRef)v.layer.contents];
                 CGFloat a = v.bounds.size.width * v.bounds.size.height;
                 if (im && a > area && v.bounds.size.width > 200) { area = a; best = im; }
+                // or a picture held by a layer (the view's or one inside it)
+                NSMutableArray *ls = [NSMutableArray arrayWithObject:v.layer];
+                int gl = 0;
+                while (ls.count && gl++ < 30) {
+                    CALayer *l = ls.lastObject; [ls removeLastObject];
+                    id c = l.contents;
+                    CGFloat la = l.bounds.size.width * l.bounds.size.height;
+                    if (c && CFGetTypeID((__bridge CFTypeRef)c) == CGImageGetTypeID() && la > area && l.bounds.size.width > 200) { area = la; best = [UIImage imageWithCGImage:(__bridge CGImageRef)c]; }
+                    if (l == v.layer) for (CALayer *sl in l.sublayers) [ls addObject:sl];
+                }
                 [st addObjectsFromArray:v.subviews];
             }
         }
