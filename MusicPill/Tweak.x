@@ -1,4 +1,5 @@
-// MusicPill 1.2.54 - made by nano
+// MusicPill 1.2.55 - made by nano
+// 1.2.55: Up Next reads the queue from Music's own player answers (already loaded), not a new request
 // 1.2.54: Up Next asks for the queue songs' details (the answer was empty without them)
 // 1.2.53: Up Next reads the queue answer another way (walks every item), more debug
 // 1.2.52: Up Next finds the next song for every song (asks the way Music's queue screen does), new setting for when it shows (5-20 seconds before the end); Pin to Search removed
@@ -1353,7 +1354,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.54 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.55 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7033,8 +7034,74 @@ __attribute__((unused)) static void FavStarTick(UIWindow *w) {
 // page is open). Asking Music's player directly froze Music when the queue was
 // opened, so it isn't used.
 static id KV(id o, NSString *k) { if (!o) return nil; @try { return [o valueForKey:k]; } @catch (__unused id e) { return nil; } }
+// Music's own player answers (what its screens show), remembered as Music reads
+// them: the queue in them is already loaded with titles and covers.
+static NSHashTable *gResponses;
+static id (*origTracklist)(id, SEL);
+static id MyTracklist(id self, SEL _cmd) {
+    id r = origTracklist(self, _cmd);
+    if (!gResponses) gResponses = [NSHashTable weakObjectsHashTable];
+    if (gResponses.count > 12) [gResponses removeAllObjects];
+    [gResponses addObject:self];
+    return r;
+}
+static void HookResponses(void) {
+    Class C = NSClassFromString(@"MPCPlayerResponse");
+    if (C && class_getInstanceMethod(C, @selector(tracklist))) MSHookMessageEx(C, @selector(tracklist), (IMP)MyTracklist, (IMP *)&origTracklist);
+}
+// The song after the playing one in a tracklist (nil if it doesn't list one).
+static id NextInTracklist(id tl, NSUInteger *count) {
+    id items = KV(tl, @"items");
+    NSIndexPath *ip = KV(tl, @"playingItemIndexPath");
+    NSMutableArray *all = [NSMutableArray array];
+    __block NSInteger at = -1;
+    SEL en = NSSelectorFromString(@"enumerateItemsUsingBlock:");
+    if ([items respondsToSelector:en]) {
+        void (^eb)(id, NSIndexPath *, BOOL *) = ^(id it, NSIndexPath *p2, BOOL *stop) {
+            if ([ip isKindOfClass:[NSIndexPath class]] && [p2 isEqual:ip]) at = all.count;
+            if (it) [all addObject:it];
+            if (all.count > 400) *stop = YES;
+        };
+        @try { ((void (*)(id, SEL, id))objc_msgSend)(items, en, eb); } @catch (__unused id e) {}
+    }
+    if (count) *count = all.count;
+    return (at >= 0 && at + 1 < (NSInteger)all.count) ? all[at + 1] : nil;
+}
 // Ask for the queue the same way Music's own queue screen does (an async player
 // request, answered later), then take the item after the playing one.
+static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img));
+static void SongOf(id item, void (^done)(NSString *t, NSString *a, UIImage *img)) {
+    id meta = KV(item, @"metadataObject");
+    id song = KV(meta, @"song") ?: KV(meta, @"flattenedGenericObject");
+    NSString *t = KV(song, @"title"), *ar = KV(KV(song, @"artist"), @"name");
+    if (![t isKindOfClass:[NSString class]]) t = nil;
+    if (![ar isKindOfClass:[NSString class]]) ar = nil;
+    id catalog = KV(song, @"artworkCatalog");
+    SEL reqImg = NSSelectorFromString(@"requestImageWithCompletionHandler:");
+    if (t && catalog && [catalog respondsToSelector:reqImg]) {
+        @try { [catalog setValue:[NSValue valueWithCGSize:CGSizeMake(96, 96)] forKey:@"fittingSize"]; } @catch (__unused id e) {}
+        __block BOOL called = NO;
+        void (^ic)(UIImage *) = ^(UIImage *im) {
+            if (called) return; called = YES;
+            dispatch_async(dispatch_get_main_queue(), ^{ done(t, ar, [im isKindOfClass:[UIImage class]] ? im : nil); });
+        };
+        @try { ((void (*)(id, SEL, id))objc_msgSend)(catalog, reqImg, ic); } @catch (__unused id e) { ic(nil); }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ ic(nil); });
+    } else done(t, ar, nil);
+}
+static void MusicNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
+    NSUInteger best = 0, n = 0;
+    id found = nil;
+    for (id r in [gResponses allObjects]) {
+        id tl = nil; @try { tl = origTracklist ? origTracklist(r, @selector(tracklist)) : KV(r, @"tracklist"); } @catch (__unused id e) {}
+        id nx = NextInTracklist(tl, &n);
+        if (n > best) best = n;
+        if (nx) { found = nx; break; }
+    }
+    gUpNextDebug = [NSString stringWithFormat:@"music responses=%lu biggest=%lu found=%d", (unsigned long)gResponses.count, (unsigned long)best, found != nil];
+    if (found) { SongOf(found, done); return; }
+    MPCNextTrack(done);
+}
 static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
     Class R = NSClassFromString(@"MPCPlayerRequest"), P = NSClassFromString(@"MPCPlayerPath");
     if (!R || !P || ![P respondsToSelector:NSSelectorFromString(@"deviceActivePlayerPath")]) { gUpNextDebug = @"no MPC"; done(nil, nil, nil); return; }
@@ -7092,7 +7159,7 @@ static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
                     @try { ((void (*)(id, SEL, id))objc_msgSend)(items, en, eb); } @catch (__unused id e) {}
                 }
                 if (playingAt >= 0 && playingAt + 1 < (NSInteger)all.count) next = all[playingAt + 1];
-                gUpNextDebug = [NSString stringWithFormat:@"tl=%@ items=%@ n=%lu at=%ld ip=%@ ranged=%d enc=%@", NSStringFromClass([tl class]), NSStringFromClass([items class]), (unsigned long)all.count, (long)playingAt, ip, ranged, encS.length > 30 ? [encS substringToIndex:30] : encS];
+                gUpNextDebug = [NSString stringWithFormat:@"%@ | tl=%@ items=%@ n=%lu at=%ld ip=%@ ranged=%d enc=%@", gUpNextDebug, NSStringFromClass([tl class]), NSStringFromClass([items class]), (unsigned long)all.count, (long)playingAt, ip, ranged, encS.length > 30 ? [encS substringToIndex:30] : encS];
                 if (!next && items && [ip isKindOfClass:[NSIndexPath class]]) {
                     SEL gi = NSSelectorFromString(@"globalIndexForIndexPath:"), ig = NSSelectorFromString(@"indexPathForGlobalIndex:"), at = NSSelectorFromString(@"itemAtIndexPath:");
                     if ([items respondsToSelector:gi] && [items respondsToSelector:ig] && [items respondsToSelector:at]) {
@@ -7138,7 +7205,7 @@ static void FetchNextTrack(void (^done)(NSString *title, NSString *artist, UIIma
         if ([gQueueCacheFor isEqualToString:now]) cached = q.firstObject;
         else for (NSUInteger i = 0; i + 1 < q.count; i++) if ([q[i][@"t"] isEqualToString:now]) { cached = q[i + 1]; break; }
     }
-    MPCNextTrack(^(NSString *t, NSString *a, UIImage *img) {
+    MusicNextTrack(^(NSString *t, NSString *a, UIImage *img) {
         if (t.length) done(t, a, img ?: ([cached[@"t"] isEqualToString:t] ? cached[@"img"] : nil));
         else done(cached[@"t"], cached[@"a"], cached[@"img"]);
     });
@@ -7464,6 +7531,7 @@ static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     %init;
     HookMenuClasses();
+    HookResponses();
     HookSymbolButton();
     dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); });
 }
