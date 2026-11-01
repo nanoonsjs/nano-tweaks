@@ -1,4 +1,5 @@
-// MusicPill 1.2.52 - made by nano
+// MusicPill 1.2.53 - made by nano
+// 1.2.53: Up Next reads the queue answer another way (walks every item), more debug
 // 1.2.52: Up Next finds the next song for every song (asks the way Music's queue screen does), new setting for when it shows (5-20 seconds before the end); Pin to Search removed
 // 1.2.51: Up Next shows the song name (the "E" badge was read instead), pops out of the pill as a liquid drop, follows the pill when it minimizes / expands, and drops back into it when you pull it away; Pin to Search uses the pill's song if needed
 // 1.2.50: fixed Music freezing when opening the queue (Up Next no longer asks Music's player; it reads the queue page, with covers); pins debug
@@ -1351,7 +1352,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.52 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.53 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7044,10 +7045,13 @@ static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
         SEL setRange = NSSelectorFromString(@"setTracklistRange:");
         Method m = class_getInstanceMethod(R, setRange);
         const char *enc = m ? method_getTypeEncoding(m) : NULL;
+        BOOL ranged = NO;
         if (enc && strstr(enc, "=qq}")) {
             struct { NSInteger a; NSInteger b; } range = {0, 3};
             ((void (*)(id, SEL, typeof(range)))objc_msgSend)(req, setRange, range);
+            ranged = YES;
         }
+        NSString *encS = enc ? @(enc) : @"none";
         SEL perf = NSSelectorFromString(@"performWithCompletion:");
         if (![req respondsToSelector:perf]) { gUpNextDebug = @"no perform"; done(nil, nil, nil); return; }
         void (^cb)(id, NSError *) = ^(id resp, NSError *err) {
@@ -7057,7 +7061,20 @@ static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
                 id items = KV(tl, @"items");
                 NSIndexPath *ip = KV(tl, @"playingItemIndexPath");
                 id next = nil;
-                if (items && [ip isKindOfClass:[NSIndexPath class]]) {
+                // Every item in order, then the one after the playing one.
+                NSMutableArray *all = [NSMutableArray array];
+                __block NSInteger playingAt = -1;
+                SEL en = NSSelectorFromString(@"enumerateItemsUsingBlock:");
+                if ([items respondsToSelector:en]) {
+                    void (^eb)(id, NSIndexPath *, BOOL *) = ^(id it, NSIndexPath *p2, BOOL *stop) {
+                        if ([p2 isKindOfClass:[NSIndexPath class]] && [ip isKindOfClass:[NSIndexPath class]] && [p2 isEqual:ip]) playingAt = all.count;
+                        if (it) [all addObject:it];
+                    };
+                    @try { ((void (*)(id, SEL, id))objc_msgSend)(items, en, eb); } @catch (__unused id e) {}
+                }
+                if (playingAt >= 0 && playingAt + 1 < (NSInteger)all.count) next = all[playingAt + 1];
+                gUpNextDebug = [NSString stringWithFormat:@"tl=%@ items=%@ n=%lu at=%ld ip=%@ ranged=%d enc=%@", NSStringFromClass([tl class]), NSStringFromClass([items class]), (unsigned long)all.count, (long)playingAt, ip, ranged, encS.length > 30 ? [encS substringToIndex:30] : encS];
+                if (!next && items && [ip isKindOfClass:[NSIndexPath class]]) {
                     SEL gi = NSSelectorFromString(@"globalIndexForIndexPath:"), ig = NSSelectorFromString(@"indexPathForGlobalIndex:"), at = NSSelectorFromString(@"itemAtIndexPath:");
                     if ([items respondsToSelector:gi] && [items respondsToSelector:ig] && [items respondsToSelector:at]) {
                         NSInteger g = ((NSInteger (*)(id, SEL, id))objc_msgSend)(items, gi, ip);
@@ -7072,7 +7089,8 @@ static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
                 id song = KV(meta, @"song") ?: KV(meta, @"flattenedGenericObject");
                 t = KV(song, @"title"); ar = KV(KV(song, @"artist"), @"name");
                 catalog = KV(song, @"artworkCatalog");
-                gUpNextDebug = [NSString stringWithFormat:@"mpc next=%@ err=%@", t ?: @"nil", err ? @(err.code) : @"-"];
+                gUpNextDebug = [NSString stringWithFormat:@"%@ next=%@ err=%@", gUpNextDebug, t ?: @"nil", err ? @(err.code) : @"-"];
+                if (!t && next) gUpNextDebug = [gUpNextDebug stringByAppendingFormat:@" item=%@ meta=%@", NSStringFromClass([next class]), NSStringFromClass([meta class])];
             } @catch (__unused id e) { gUpNextDebug = @"mpc exception"; }
             NSString *tt = [t isKindOfClass:[NSString class]] ? t : nil, *aa = [ar isKindOfClass:[NSString class]] ? ar : nil;
             SEL reqImg = NSSelectorFromString(@"requestImageWithCompletionHandler:");
