@@ -1,4 +1,5 @@
-// InstaGlass 0.3.0 - made by nano
+// InstaGlass 0.3.1 - made by nano
+// 0.3.1: finds Instagram's tab bar (IGTabBar) again
 // 0.3.0: no more glass on the like / comment row of posts (the tab bar is never
 //        inside a list); the bubble follows the tab you're on, also when you swipe
 //        between pages; hold the bubble, drag it to a tab and let go to open it
@@ -31,7 +32,13 @@ static UIView *FindBar(UIWindow *w) {
     while (st.count && g++ < 6000) {
         UIView *v = st.lastObject; [st removeLastObject];
         if (v.hidden || v.alpha < 0.05 || v.tag == DEBUG_TAG || v.tag == GLASS_TAG) continue;
-        if ([v isKindOfClass:[UIScrollView class]]) continue;   // the tab bar is never inside a list (posts' like rows are)
+        // Not inside a post / list row (the like row under posts looks like a bar).
+        if ([v isKindOfClass:[UICollectionViewCell class]] || [v isKindOfClass:[UITableViewCell class]]) continue;
+        // Instagram's own tab bar, by name.
+        if ([NSStringFromClass([v class]) isEqualToString:@"IGTabBar"]) {
+            CGRect tf = [v convertRect:v.bounds toView:nil];
+            if (tf.size.width > W * 0.5 && CGRectGetMaxY(tf) > H - 160) return v;
+        }
         CGRect f = [v convertRect:v.bounds toView:nil];
         BOOL shape = f.size.width > W * 0.55 && f.size.width <= W + 1 && f.size.height >= 44 && f.size.height <= 130 && CGRectGetMidY(f) > H * 0.8 && CGRectGetMaxY(f) <= H + 2 && CGRectGetMaxY(f) > H - 140;
         if (shape) {
@@ -428,7 +435,7 @@ static void DebugBox(UIWindow *w) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" InstaGlass 0.3.0 debug\n %@", gDebug];
+    l.text = [NSString stringWithFormat:@" InstaGlass 0.3.1 debug\n %@", gDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 600)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 60, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
