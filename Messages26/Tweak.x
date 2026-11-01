@@ -1,4 +1,7 @@
-// Messages26 0.5.0 - made by nano
+// Messages26 0.6.0 - made by nano
+// 0.6.0: + menu and hold-for-Photos work again (the app row is switched on when it's off),
+//        the menu remembers its apps; text starts at the pill's left; no leftover name glass;
+//        soft blur behind the status bar
 // 0.5.0: apps / Camera / hold-for-Photos work after reopening and with the keyboard up
 //        (the keyboard goes down and the app row comes back first); the menu fits on
 //        screen; glass Edit / compose on the conversation list, no bar background there
@@ -56,7 +59,8 @@ static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName 
 
 static NSString *gDebug = @"-", *gNavDebug = @"-";
 static BOOL gShowDebug = NO;
-static __weak UIView *gEntry, *gStrip, *gPhotoBtn;
+static __weak UIView *gEntry, *gStrip, *gPhotoBtn, *gAppsBtn;
+static NSArray *gAppsCache;   // the last app list seen (names + icons)
 static __weak UICollectionView *gStripCV;
 
 static BOOL IsDark(UIView *v) { return v.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight; }
@@ -166,15 +170,19 @@ static void StyleEntry(UIView *entry);
 static void WithStrip(void (^then)(void)) {
     UICollectionView *cv = gStripCV;
     UIView *pb = gPhotoBtn;
-    if (cv.window && pb.window) { then(); return; }
+    if (cv.window && pb.window && cv.numberOfSections) { then(); return; }
     UIView *e = gEntry;
     [e.window endEditing:YES];
     __block int tries = 0;
+    __block BOOL toggled = NO;
     [NSTimer scheduledTimerWithTimeInterval:0.08 repeats:YES block:^(NSTimer *t) {
         UIView *e2 = gEntry;
         if (e2) { @try { StyleEntry(e2); } @catch (__unused id ex) {} }
         UICollectionView *c2 = gStripCV;
-        if ((c2.window && [c2 numberOfSections]) || ++tries > 20) { [t invalidate]; then(); }
+        if (c2.window && [c2 numberOfSections]) { [t invalidate]; then(); return; }
+        // still no app row after the keyboard went down: it's switched off; switch it on
+        if (++tries == 5 && !toggled) { toggled = YES; [(UIButton *)gAppsBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; }
+        if (tries > 24) { [t invalidate]; then(); }
     }];
 }
 static void OpenStripAppNamed(NSString *name) {
@@ -196,7 +204,9 @@ static NSArray *SavedOrder(void) { return [[NSUserDefaults standardUserDefaults]
 static NSArray *MenuItems(void) {
     NSMutableArray *items = [NSMutableArray array];
     NSArray *apps = StripApps();
-    NSDictionary *photos = PhotosApp();
+    if (apps.count) gAppsCache = apps; else apps = gAppsCache ?: @[];
+    NSDictionary *photos = nil;
+    for (NSDictionary *a in apps) if ([[a[@"name"] lowercaseString] isEqualToString:@"photos"]) photos = a;
     if (photos) [items addObject:photos];
     [items addObject:@{@"name": @"Camera", @"icon": [UIImage systemImageNamed:@"camera.fill"], @"camera": @YES}];
     for (NSDictionary *a in apps) if (a != photos && ![a[@"name"] isEqual:photos[@"name"]] && ![[a[@"name"] lowercaseString] containsString:@"app store"] && ![[a[@"name"] lowercaseString] isEqualToString:@"store"]) [items addObject:a];
@@ -257,10 +267,11 @@ static NSArray *MenuItems(void) {
     if (!w || _panel.superview) return;
     if (!gMenuOn) { OpenCamera(); return; }   // menu off: + is the camera
     // keyboard up: put it away first, then grow the menu from where + lands
-    if (!gStripCV.window) {
-        [w endEditing:YES];
+    static BOOL waiting;
+    if (!gStripCV.window && !waiting) {
+        waiting = YES;
         __weak UIButton *wp = plus;
-        WithStrip(^{ UIButton *p2 = wp; if (p2.window) [self open:p2]; });
+        WithStrip(^{ waiting = NO; UIButton *p2 = wp; if (p2.window) [self open:p2]; });
         return;
     }
     _plus = plus;
@@ -483,16 +494,27 @@ static void StyleEntry(UIView *entry) {
     }
     NSArray *left = LeftButtons(entry, field);
     for (UIView *b in left) { if (b.alpha > 0) b.alpha = 0; if (b.userInteractionEnabled) b.userInteractionEnabled = NO; }
-    for (UIView *b in left) {
-        NSString *d = [NSString stringWithFormat:@"%@ %@ %@", [[(UIButton *)b imageForState:UIControlStateNormal] description] ?: @"", b.accessibilityLabel ?: @"", b.accessibilityIdentifier ?: @""].lowercaseString;
-        if ([d containsString:@"camera"] || [NSStringFromClass([b class]) containsString:@"Photo"]) gPhotoBtn = b;
+    // left to right: camera, then App Store (switches the app row on / off)
+    if (left.count >= 2) {
+        NSArray *byX = [left sortedArrayUsingComparator:^NSComparisonResult(UIView *a, UIView *b) { return [a convertPoint:CGPointZero toView:nil].x < [b convertPoint:CGPointZero toView:nil].x ? NSOrderedAscending : NSOrderedDescending; }];
+        gPhotoBtn = byX[0]; gAppsBtn = byX[1];
     }
-    if (!gPhotoBtn.window && strip && left.count) gPhotoBtn = left.firstObject;   // with the app row showing, the first one is the camera
+    {
+        CGFloat pxx = 12, Dd = 46;
+        CGFloat want = pxx + Dd + 10 + 4;
+        CGRect cur = [field convertRect:field.bounds toView:entry];
+        CGFloat dx = CGRectGetMinX(cur) - want;
+        if (fabs(dx) > 1 && field.superview) {
+            CGRect b = field.bounds; b.size.width += dx; field.bounds = b;
+            CGPoint c = field.center; c.x -= dx / 2; field.center = c;
+            [field layoutIfNeeded];
+        }
+    }
     CGRect ff = [field convertRect:field.bounds toView:entry];   // includes the move down
     CGFloat padY = 6, D = MAX(46, MIN(ff.size.height + padY * 2, 52));
     CGFloat px = 12;
     CGRect plusF = CGRectMake(px, round(CGRectGetMaxY(ff) + padY - D), D, D);
-    CGRect pillF = CGRectMake(px + D + 10, CGRectGetMinY(ff) - padY, CGRectGetMaxX(ff) - (px + D + 10), ff.size.height + padY * 2);
+    CGRect pillF = CGRectMake(px + D + 10, CGRectGetMinY(ff) - padY, CGRectGetMaxX(ff) + 4 - (px + D + 10), ff.size.height + padY * 2);
     UIView *pill = [entry viewWithTag:PILL_TAG];
     UIView *top = container;
     while (top.superview && top.superview != entry) top = top.superview;
@@ -618,7 +640,27 @@ static void UndoNav(void) {
     [g.layer addAnimation:cr forKey:@"cr"];
 }
 @end
+static NSHashTable *gNameGlass;
+static __weak UIView *gNameNow;
+// A soft blur fading down from the top (behind the status bar and the buttons).
+static void TopBlur(UINavigationBar *nb) {
+    UIView *host = nb.superview;
+    if (!host) return;
+    UIVisualEffectView *b = (UIVisualEffectView *)[host viewWithTag:GLASS_TAG + 7];
+    if (!b) {
+        b = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial]];
+        b.tag = GLASS_TAG + 7; b.userInteractionEnabled = NO;
+        CAGradientLayer *m = [CAGradientLayer layer];
+        m.colors = @[(id)UIColor.blackColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.clearColor.CGColor];
+        m.locations = @[@0, @0.45, @1];
+        b.layer.mask = m;
+    }
+    if (b.superview != host || [host.subviews indexOfObject:b] > [host.subviews indexOfObject:nb]) [host insertSubview:b belowSubview:nb];
+    CGRect f = CGRectMake(0, 0, host.bounds.size.width, CGRectGetMaxY([nb convertRect:nb.bounds toView:host]) + 6);
+    if (!CGRectEqualToRect(b.frame, f)) { b.frame = f; [CATransaction begin]; [CATransaction setDisableActions:YES]; b.layer.mask.frame = b.bounds; [CATransaction commit]; }
+}
 static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
+    TopBlur(nb);
     nb.tintColor = Ink(nb);
     // see-through bar for good (scrolling brought the gray back)
     if (!objc_getAssociatedObject(nb, "m26app")) {
@@ -669,6 +711,9 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
             // the label and its ">" share a small parent: cover both
             if (l.superview && l.superview.bounds.size.width < W * 0.7 && l.superview.bounds.size.height < 44 && l.superview != nb) holder = l.superview;
             GlassBehind(holder, 12, 6, NO);
+            if (!gNameGlass) gNameGlass = [NSHashTable weakObjectsHashTable];
+            [gNameGlass addObject:holder];
+            gNameNow = holder;
             [found addObject:[NSString stringWithFormat:@"name:%@", l.text]];
             continue;
         }
@@ -693,6 +738,13 @@ static void StyleNav(UIWindow *w) {
         }
         [st addObjectsFromArray:v.subviews];
     }
+    // name glass left from another conversation / the list title: gone
+    for (UIView *h in [gNameGlass allObjects]) if (!chat || h != gNameNow) {
+        [objc_getAssociatedObject(h, &kGlassKey) removeFromSuperview];
+        objc_setAssociatedObject(h, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [gNameGlass removeObject:h];
+    }
+    if (!chat) gNameNow = nil;
     gNavDebug = [NSString stringWithFormat:@"nav chat=%d bars=%d items: %@", chat, bars, [found componentsJoinedByString:@" "]];
 }
 
@@ -742,7 +794,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.5.0 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.6.0 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
