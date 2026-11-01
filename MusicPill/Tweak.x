@@ -1,4 +1,5 @@
-// MusicPill 1.2.64 - made by nano
+// MusicPill 1.2.65 - made by nano
+// 1.2.65: About reading also tries spoken labels and text layers; more debug
 // 1.2.64: About sheet finds the artist page's list another way (it wasn't found before)
 // 1.2.63: About sheet reads Music's text better and finds the header photo inside layers; keeps checking the page so the bottom About is removed
 // 1.2.62: artist pages get an "i" button left of Play that opens an iOS 26 About sheet (photo, name, From / Born, Genre, About); the About part is taken off the bottom of the page
@@ -1364,7 +1365,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.64 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.65 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7671,15 +7672,21 @@ static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
     NSDictionary *have = objc_getAssociatedObject(cv, &kAboutData);
     if (have[@"about"] && !force) return have;
     NSMutableArray *rows = [NSMutableArray array];   // {t, y, top, bottom}
+    NSMutableSet *leafClasses = [NSMutableSet set];
+    __block int cellsSeen = 0;
     void (^scan)(void) = ^{
         for (UIView *cell in cv.subviews) {
             if (![cell isKindOfClass:[UICollectionReusableView class]] || cell.hidden) continue;
+            cellsSeen++;
             NSMutableArray *st = [NSMutableArray arrayWithObject:cell];
             int g = 0;
-            while (st.count && g++ < 300) {
+            while (st.count && g++ < 600) {
                 UIView *v = st.lastObject; [st removeLastObject];
                 NSString *t = TextOf(v);
+                if (!t.length && v.accessibilityLabel.length && !v.subviews.count) t = v.accessibilityLabel;
+                if (!t.length) for (CALayer *l in v.layer.sublayers) if ([l isKindOfClass:[CATextLayer class]]) { id x = ((CATextLayer *)l).string; t = [x isKindOfClass:[NSAttributedString class]] ? ((NSAttributedString *)x).string : ([x isKindOfClass:[NSString class]] ? x : nil); if (t.length) break; }
                 if (t.length) { [rows addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:cv].y), @"top": @(CGRectGetMinY(cell.frame)), @"bottom": @(CGRectGetMaxY(cell.frame))}]; continue; }
+                if (!v.subviews.count && leafClasses.count < 6) [leafClasses addObject:NSStringFromClass([v class])];
                 [st addObjectsFromArray:v.subviews];
             }
         }
@@ -7703,7 +7710,7 @@ static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
     {
         NSMutableArray *sm = [NSMutableArray array];
         for (NSDictionary *r in rows) if (sm.count < 8 && [r[@"t"] length] < 40) [sm addObject:r[@"t"]];
-        gAboutDebug = [NSString stringWithFormat:@"rows=%lu found=%d e.g. %@", (unsigned long)rows.count, found, [sm componentsJoinedByString:@"/"]];
+        gAboutDebug = [NSString stringWithFormat:@"list=%@ h=%.0f cells=%d rows=%lu found=%d e.g. %@ leaves=%@", NSStringFromClass([cv class]), cv.contentSize.height, cellsSeen, (unsigned long)rows.count, found, [sm componentsJoinedByString:@"/"], [leafClasses.allObjects componentsJoinedByString:@","]];
     }
     NSMutableDictionary *out = [have mutableCopy] ?: [NSMutableDictionary dictionary];
     CGFloat top = CGFLOAT_MAX, bottom = 0;
