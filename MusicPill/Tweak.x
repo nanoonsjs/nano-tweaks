@@ -1,4 +1,5 @@
-// MusicPill 1.2.61 - made by nano
+// MusicPill 1.2.62 - made by nano
+// 1.2.62: artist pages get an "i" button left of Play that opens an iOS 26 About sheet (photo, name, From / Born, Genre, About); the About part is taken off the bottom of the page
 // 1.2.61: removed Animated Tab Icons
 // 1.2.59: Up Next Preview is off by default; settings label is "Up Next Duration"
 // 1.2.58: Up Next is smaller (and smaller than the pill when minimized); pulling it up barely stretches
@@ -1359,7 +1360,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.61 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.62 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -4787,7 +4788,10 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
 
 @interface MPArtist : NSObject
 + (instancetype)shared;
+- (void)info:(UIButton *)b;
 @end
+static NSDictionary *AboutScan(UIView *inPage, BOOL force);
+static void ShowAboutSheet(UIView *from, NSDictionary *about);
 @implementation MPArtist
 + (instancetype)shared { static MPArtist *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPArtist new]; }); return t; }
 - (void)play:(UIButton *)b {
@@ -4796,6 +4800,14 @@ static void SetStar(UIButton *star, BOOL on, BOOL animated) {
     Forward(c);
     b.transform = CGAffineTransformMakeScale(0.88, 0.88);
     [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.45 initialSpringVelocity:1 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
+}
+- (void)info:(UIButton *)b {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    b.transform = CGAffineTransformMakeScale(0.85, 0.85);
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.45 initialSpringVelocity:1 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
+    NSDictionary *a = nil;
+    @try { a = AboutScan(b, YES); } @catch (__unused id e) {}
+    ShowAboutSheet(b, a);
 }
 - (void)star:(UIButton *)b {
     UIView *ms = gArtistStar;
@@ -4974,6 +4986,13 @@ static void ArtistTick(UIView *play) {
         [st addSubview:GlassDisc(SD)];
         [st addTarget:[MPArtist shared] action:@selector(star:) forControlEvents:UIControlEventTouchUpInside];
         [ov addSubview:st];
+        // "i": the artist's About, in its own sheet (iOS 26).
+        UIButton *ib = [UIButton buttonWithType:UIButtonTypeCustom];
+        ib.tag = 5; ib.tintColor = UIColor.whiteColor;
+        [ib addSubview:GlassDisc(SD)];
+        [ib setImage:[UIImage systemImageNamed:@"info" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+        [ib addTarget:[MPArtist shared] action:@selector(info:) forControlEvents:UIControlEventTouchUpInside];
+        [ov addSubview:ib];
         [container addSubview:ov];
         SetStar(st, NO, NO);
     }
@@ -5016,7 +5035,11 @@ static void ArtistTick(UIView *play) {
         [ov viewWithTag:1].frame = CGRectMake(20, rowY - PD / 2 - 66, W - 40, 54);
         [ov viewWithTag:3].frame = CGRectMake(W / 2 - PD / 2, rowY - PD / 2, PD, PD);
         [ov viewWithTag:4].frame = CGRectMake(W / 2 + 91 - SD / 2, rowY - SD / 2, SD, SD);
+        [ov viewWithTag:5].frame = CGRectMake(W / 2 - 91 - SD / 2, rowY - SD / 2, SD, SD);
     }
+    { UIButton *ib = (UIButton *)[ov viewWithTag:5]; if (ib.imageView && ib.subviews.lastObject != ib.imageView) [ib bringSubviewToFront:ib.imageView]; }
+    // Learn the page's About (and take it off the bottom of the page).
+    { static CFTimeInterval lastAbout; if (CACurrentMediaTime() - lastAbout > 1.5) { lastAbout = CACurrentMediaTime(); @try { AboutScan(container, NO); } @catch (__unused id e) {} } }
     UILabel *l = (UILabel *)[ov viewWithTag:1];
     if (![l.text isEqualToString:nameText]) l.text = nameText;
     UIButton *pb = (UIButton *)[ov viewWithTag:3];
@@ -7576,6 +7599,238 @@ static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb
     for (UIView *chip in strip.subviews) for (UIView *g in chip.subviews) if ([g isKindOfClass:[UIVisualEffectView class]]) { FrostGlass((UIVisualEffectView *)g, nil); ApplyGlow((UIVisualEffectView *)g, NO); }
     CGRect want2 = CGRectMake(0, -PINS_H, list.bounds.size.width, PINS_H);
     if (!CGRectEqualToRect(strip.frame, want2)) strip.frame = want2;
+}
+
+#pragma mark - artist About sheet
+
+#define ABOUTHIDE_KEY "mp.aboutHide"
+static char kAboutRange, kAboutData;
+static NSString *TextOf(UIView *v) {
+    if ([v isKindOfClass:[UILabel class]]) return ((UILabel *)v).text ?: ((UILabel *)v).attributedText.string;
+    if ([NSStringFromClass([v class]) containsString:@"TextDrawing"]) return DrawnText(v);
+    return nil;
+}
+// Reads the About part at the bottom of an artist page: the text, From, Born,
+// Genre, and the header photo. Also remembers where it sits so it can be taken
+// off the page. force: scroll the list there for a moment (invisibly) to load it.
+static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
+    UICollectionView *cv = nil;
+    for (UIView *p = inPage.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]]) { cv = (UICollectionView *)p; break; }
+    if (!cv) return nil;
+    NSDictionary *have = objc_getAssociatedObject(cv, &kAboutData);
+    if (have[@"about"] && !force) return have;
+    NSMutableArray *rows = [NSMutableArray array];   // {t, y, top, bottom}
+    void (^scan)(void) = ^{
+        for (UIView *cell in cv.subviews) {
+            if (![cell isKindOfClass:[UICollectionReusableView class]] || cell.hidden) continue;
+            NSMutableArray *st = [NSMutableArray arrayWithObject:cell];
+            int g = 0;
+            while (st.count && g++ < 300) {
+                UIView *v = st.lastObject; [st removeLastObject];
+                NSString *t = TextOf(v);
+                if (t.length) { [rows addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:cv].y), @"top": @(CGRectGetMinY(cell.frame)), @"bottom": @(CGRectGetMaxY(cell.frame))}]; continue; }
+                [st addObjectsFromArray:v.subviews];
+            }
+        }
+    };
+    scan();
+    BOOL found = NO;
+    for (NSDictionary *r in rows) if ([r[@"t"] isEqualToString:@"About"]) found = YES;
+    if (!found && force) {
+        CGPoint keep = cv.contentOffset;
+        CGFloat maxY = MAX(-cv.adjustedContentInset.top, cv.contentSize.height - cv.bounds.size.height + cv.adjustedContentInset.bottom);
+        // Two stops: the About part is near the end.
+        for (NSNumber *f in @[@1.0, @0.8, @0.6]) {
+            cv.contentOffset = CGPointMake(keep.x, maxY * f.doubleValue);
+            [cv layoutIfNeeded];
+            scan();
+        }
+        cv.contentOffset = keep;
+        [cv layoutIfNeeded];
+    }
+    [rows sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"y"] compare:b[@"y"]]; }];
+    NSMutableDictionary *out = [have mutableCopy] ?: [NSMutableDictionary dictionary];
+    CGFloat top = CGFLOAT_MAX, bottom = 0;
+    for (NSUInteger i = 0; i < rows.count; i++) {
+        NSString *t = rows[i][@"t"], *u = t.uppercaseString;
+        NSString *next = i + 1 < rows.count ? rows[i + 1][@"t"] : nil;
+        BOOL part = NO;
+        if ([t isEqualToString:@"About"]) {
+            // the longest text right after the heading is the write-up
+            NSString *body = nil;
+            for (NSUInteger j = i + 1; j < rows.count && j < i + 4; j++) if ([rows[j][@"t"] length] > body.length && [rows[j][@"t"] length] > 25) body = rows[j][@"t"];
+            if (body) { out[@"about"] = [body stringByReplacingOccurrencesOfString:@"… MORE" withString:@"…"]; part = YES; }
+        } else if (next && ([u isEqualToString:@"FROM"] || [u isEqualToString:@"HOMETOWN"])) { out[@"from"] = next; part = YES; }
+        else if (next && ([u isEqualToString:@"BORN"] || [u isEqualToString:@"FORMED"])) { out[@"born"] = next; out[@"bornLabel"] = [u isEqualToString:@"FORMED"] ? @"Formed" : @"Born"; part = YES; }
+        else if (next && [u isEqualToString:@"GENRE"]) { out[@"genre"] = next; part = YES; }
+        if (part) {
+            top = MIN(top, [rows[i][@"top"] doubleValue]);
+            bottom = MAX(bottom, [rows[MIN(i + 1, rows.count - 1)][@"bottom"] doubleValue]);
+        }
+    }
+    // Header photo: the biggest picture in the page's first cell.
+    if (!out[@"photo"]) {
+        UIImage *best = nil; CGFloat area = 0;
+        for (UIView *cell in cv.subviews) {
+            if (![cell isKindOfClass:[UICollectionReusableView class]] || CGRectGetMinY(cell.frame) > 40) continue;
+            NSMutableArray *st = [NSMutableArray arrayWithObject:cell];
+            int g = 0;
+            while (st.count && g++ < 300) {
+                UIView *v = st.lastObject; [st removeLastObject];
+                UIImage *im = [v isKindOfClass:[UIImageView class]] ? ((UIImageView *)v).image : nil;
+                if (!im && v.layer.contents && CFGetTypeID((__bridge CFTypeRef)v.layer.contents) == CGImageGetTypeID()) im = [UIImage imageWithCGImage:(__bridge CGImageRef)v.layer.contents];
+                CGFloat a = v.bounds.size.width * v.bounds.size.height;
+                if (im && a > area && v.bounds.size.width > 200) { area = a; best = im; }
+                [st addObjectsFromArray:v.subviews];
+            }
+        }
+        if (best) out[@"photo"] = best;
+    }
+    if (gArtistNameText.length) out[@"name"] = gArtistNameText;
+    objc_setAssociatedObject(cv, &kAboutData, out, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Take the About part off the page (the sheet has it now).
+    if (out[@"about"] && top < bottom && !objc_getAssociatedObject(cv, &kAboutRange)) {
+        objc_setAssociatedObject(cv, &kAboutRange, [NSValue valueWithCGPoint:CGPointMake(top, bottom)], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [cv.collectionViewLayout invalidateLayout];
+        cv.contentSize = cv.contentSize;
+    }
+    return out;
+}
+%hook UICollectionReusableView
+- (void)applyLayoutAttributes:(UICollectionViewLayoutAttributes *)a {
+    UICollectionView *cv = [self.superview isKindOfClass:[UICollectionView class]] ? (UICollectionView *)self.superview : nil;
+    NSValue *r = cv ? objc_getAssociatedObject(cv, &kAboutRange) : nil;
+    if (r && a) {
+        CGPoint range = r.CGPointValue;   // x = top, y = bottom
+        CGFloat y = a.frame.origin.y;
+        if (y >= range.x - 1 && y < range.y - 1) { a = [a copy]; a.alpha = 0; a.hidden = YES; }
+        else if (y >= range.y - 1) { a = [a copy]; a.transform = CGAffineTransformTranslate(a.transform, 0, -(range.y - range.x)); }
+    }
+    %orig(a);
+}
+%end
+%hook UICollectionView
+- (void)setContentSize:(CGSize)size {
+    NSValue *r = objc_getAssociatedObject(self, &kAboutRange);
+    if (r) { CGPoint range = r.CGPointValue; size.height = MAX(0, size.height - (range.y - range.x)); }
+    %orig(size);
+}
+%end
+
+@interface MPAboutVC : UIViewController
+@property (nonatomic, strong) NSDictionary *about;
+@end
+@implementation MPAboutVC
+- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    UIColor *bg = Dyn(UIColor.systemBackgroundColor, [UIColor colorWithRed:0.04 green:0.04 blue:0.05 alpha:1]);
+    self.view.backgroundColor = bg;
+    UIScrollView *sv = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+    sv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    sv.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+    sv.alwaysBounceVertical = YES;
+    [self.view addSubview:sv];
+    CGFloat W = self.view.bounds.size.width, pad = 24, y = 0;
+    NSDictionary *a = self.about;
+    // Photo on top, fading into the page.
+    CGFloat PH = round(W * 1.0);
+    UIImageView *photo = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, W, PH)];
+    photo.image = a[@"photo"]; photo.contentMode = UIViewContentModeScaleAspectFill; photo.clipsToBounds = YES;
+    photo.backgroundColor = Dyn([UIColor colorWithWhite:0.9 alpha:1], [UIColor colorWithWhite:0.12 alpha:1]);
+    [sv addSubview:photo];
+    CAGradientLayer *fade = [CAGradientLayer layer];
+    fade.frame = CGRectMake(0, PH * 0.45, W, PH * 0.55 + 1);
+    UIColor *bgR = [bg resolvedColorWithTraitCollection:self.traitCollection];
+    fade.colors = @[(id)[bgR colorWithAlphaComponent:0].CGColor, (id)[bgR colorWithAlphaComponent:0.75].CGColor, (id)bgR.CGColor];
+    fade.locations = @[@0, @0.6, @1];
+    [photo.layer addSublayer:fade];
+    y = PH - 70;
+    UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, W - pad * 2, 54)];
+    name.text = a[@"name"] ?: gArtistNameText; name.font = [UIFont systemFontOfSize:40 weight:UIFontWeightBold];
+    name.textColor = UIColor.labelColor; name.adjustsFontSizeToFitWidth = YES; name.minimumScaleFactor = 0.5;
+    [sv addSubview:name];
+    y += 74;
+    // From | Born
+    UIFont *capF = [UIFont systemFontOfSize:17 weight:UIFontWeightRegular], *valF = [UIFont systemFontOfSize:20 weight:UIFontWeightMedium];
+    CGFloat colW = (W - pad * 2 - 16) / 2, rowH = 0;
+    NSArray *cols = @[@[@"From", a[@"from"] ?: @""], @[a[@"bornLabel"] ?: @"Born", a[@"born"] ?: @""]];
+    for (NSUInteger i = 0; i < 2; i++) {
+        if (![cols[i][1] length]) continue;
+        CGFloat x = pad + i * (colW + 16);
+        UILabel *c = [[UILabel alloc] initWithFrame:CGRectMake(x, y, colW, 22)];
+        c.text = cols[i][0]; c.font = capF; c.textColor = UIColor.secondaryLabelColor;
+        [sv addSubview:c];
+        UILabel *v = [UILabel new]; v.text = cols[i][1]; v.font = valF; v.textColor = UIColor.labelColor; v.numberOfLines = 0;
+        CGSize vs = [v sizeThatFits:CGSizeMake(colW, 400)];
+        v.frame = CGRectMake(x, y + 26, colW, vs.height);
+        [sv addSubview:v];
+        rowH = MAX(rowH, 26 + vs.height);
+    }
+    if (rowH > 0) y += rowH + 22;
+    if ([a[@"genre"] length]) {
+        UILabel *c = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, 200, 22)];
+        c.text = @"Genre"; c.font = capF; c.textColor = UIColor.secondaryLabelColor;
+        [sv addSubview:c];
+        UILabel *chip = [UILabel new];
+        chip.text = a[@"genre"]; chip.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium]; chip.textColor = UIColor.labelColor;
+        chip.textAlignment = NSTextAlignmentCenter;
+        CGFloat cw = ceil([chip.text sizeWithAttributes:@{NSFontAttributeName: chip.font}].width) + 30;
+        chip.frame = CGRectMake(pad, y + 28, cw, 32);
+        chip.layer.cornerRadius = 16; chip.layer.borderWidth = 1;
+        chip.layer.borderColor = [UIColor.separatorColor resolvedColorWithTraitCollection:self.traitCollection].CGColor;
+        chip.backgroundColor = Dyn([UIColor colorWithWhite:0 alpha:0.04], [UIColor colorWithWhite:1 alpha:0.06]);
+        chip.clipsToBounds = YES;
+        [sv addSubview:chip];
+        y += 28 + 32 + 30;
+    }
+    if ([a[@"about"] length]) {
+        UILabel *h = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, W - pad * 2, 30)];
+        h.text = @"About"; h.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold]; h.textColor = UIColor.labelColor;
+        [sv addSubview:h];
+        y += 40;
+        UILabel *body = [UILabel new];
+        body.numberOfLines = 0; body.font = [UIFont systemFontOfSize:19 weight:UIFontWeightRegular];
+        body.textColor = UIColor.secondaryLabelColor;
+        NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.lineSpacing = 4;
+        body.attributedText = [[NSAttributedString alloc] initWithString:a[@"about"] attributes:@{NSParagraphStyleAttributeName: ps, NSFontAttributeName: body.font, NSForegroundColorAttributeName: UIColor.secondaryLabelColor}];
+        CGSize bs = [body sizeThatFits:CGSizeMake(W - pad * 2, 10000)];
+        body.frame = CGRectMake(pad, y, W - pad * 2, bs.height);
+        [sv addSubview:body];
+        y += bs.height + 40;
+    } else {
+        UILabel *none = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, W - pad * 2, 60)];
+        none.text = @"No About for this artist yet."; none.textColor = UIColor.secondaryLabelColor; none.font = valF;
+        [sv addSubview:none];
+        y += 80;
+    }
+    sv.contentSize = CGSizeMake(W, y + 30);
+    // Close: round glass X, top left.
+    UIButton *x = [UIButton buttonWithType:UIButtonTypeSystem];
+    x.frame = CGRectMake(18, 18, 48, 48);
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    g.frame = x.bounds; g.layer.cornerRadius = 24; g.clipsToBounds = YES; g.userInteractionEnabled = NO;
+    [x addSubview:g];
+    [x setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    x.tintColor = UIColor.whiteColor;
+    [x bringSubviewToFront:x.imageView];
+    [x addTarget:self action:@selector(close) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:x];
+}
+@end
+static void ShowAboutSheet(UIView *from, NSDictionary *about) {
+    UIViewController *top = from.window.rootViewController;
+    while (top.presentedViewController) top = top.presentedViewController;
+    if (!top) return;
+    MPAboutVC *vc = [MPAboutVC new];
+    vc.about = about ?: @{};
+    vc.modalPresentationStyle = UIModalPresentationPageSheet;
+    if (@available(iOS 15.0, *)) {
+        UISheetPresentationController *sp = vc.sheetPresentationController;
+        sp.detents = @[UISheetPresentationControllerDetent.largeDetent];
+        sp.preferredCornerRadius = 38;
+    }
+    [top presentViewController:vc animated:YES completion:nil];
 }
 
 %ctor {
