@@ -27,19 +27,19 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
-			<key>footerText</key><string>Up Next shows the next song above the pill shortly before the current one ends (5 to 20 seconds, set below). Tap it to skip, pull it away to dismiss.</string>
+			<key>footerText</key><string>Off by default. Shows the next song above the pill before the current one ends. Tap it to skip, pull it away to dismiss.</string>
 		</dict>
 		<dict>
 			<key>cell</key><string>PSSwitchCell</string>
 			<key>label</key><string>Up Next Preview</string>
 			<key>key</key><string>upnext</string>
-			<key>default</key><true/>
+			<key>default</key><false/>
 			<key>defaults</key><string>com.user.musicpill</string>
 			<key>PostNotification</key><string>com.user.musicpill/prefschanged</string>
 		</dict>
 		<dict>
 			<key>cell</key><string>PSStaticTextCell</string>
-			<key>label</key><string>Up Next shows this many seconds before the end</string>
+			<key>label</key><string>Up Next Duration</string>
 		</dict>
 		<dict>
 			<key>cell</key><string>PSSliderCell</string>

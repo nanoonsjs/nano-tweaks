@@ -1,4 +1,5 @@
-// MusicPill 1.2.58 - made by nano
+// MusicPill 1.2.59 - made by nano
+// 1.2.59: Up Next Preview is off by default; settings label is "Up Next Duration"
 // 1.2.58: Up Next is smaller (and smaller than the pill when minimized); pulling it up barely stretches
 // 1.2.57: Up Next shows for every song (an old queue answer pointed at the song already playing), and tries again if it found nothing
 // 1.2.56: Up Next re-sends Music's own player request asking for the songs after the playing one
@@ -409,7 +410,7 @@ static void SetFavArtist(NSString *name, BOOL fav) {
     [[NSUserDefaults standardUserDefaults] setObject:s.allObjects forKey:@"mp.favArtists"];
 }
 static BOOL gAlbumGlow = NO;         // pill + circles tinted with the album cover's color
-static BOOL gUpNext = YES;          // "Up Next" capsule 10s before a song ends
+static BOOL gUpNext = NO;           // "Up Next" capsule 10s before a song ends
 static BOOL gPins = NO;             // pinned songs on the Search page (dropped)
 static double gUpNextSecs = 10;     // how long before the end Up Next shows (5-20)
 static NSString *gUpNextDebug = @"-";
@@ -509,7 +510,7 @@ static void LoadPrefs(void) {
     gTitleSwipe = PrefBool(file, @"titleswipe", YES);
     gAlbumGlow = PrefBool(file, @"albumglow", NO);
     gDoubleTapFav = PrefBool(file, @"doubletapfav", NO);
-    gUpNext = PrefBool(file, @"upnext", YES);
+    gUpNext = PrefBool(file, @"upnext", NO);
     gPins = NO;   // Pin to Search was dropped
     gUpNextSecs = 10;
     { id v = file[@"upnextsecs"]; if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("upnextsecs"), DOM); if (cf) v = (__bridge_transfer id)cf; }
@@ -1357,7 +1358,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.58 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.59 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
