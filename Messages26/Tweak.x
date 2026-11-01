@@ -183,7 +183,7 @@ static NSArray *MenuItems(void) {
 
 #define ROW_H 62.0
 @implementation M26Menu {
-    UIView *_dim, *_panel, *_glass;
+    UIView *_dim, *_panel; UIVisualEffectView *_glass;
     UIScrollView *_sv;
     __weak UIButton *_plus;
     NSMutableArray *_items, *_rows;
@@ -314,7 +314,7 @@ static NSArray *MenuItems(void) {
     [[NSUserDefaults standardUserDefaults] setObject:names forKey:@"m26.order"];
 }
 - (void)closeThen:(void (^)(void))then {
-    UIView *panel = _panel, *dim = _dim; UIButton *plus = _plus; UIView *glass = _glass, *sv = _sv;
+    UIView *panel = _panel, *dim = _dim; UIButton *plus = _plus; UIView *glass = _glass; UIView *sv = _sv;
     _panel = nil; _dim = nil;
     if (!panel) { plus.alpha = 1; if (then) then(); return; }
     CGRect pf = [plus convertRect:plus.bounds toView:panel.superview];
