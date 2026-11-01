@@ -1,4 +1,5 @@
-// MusicPill 1.2.55 - made by nano
+// MusicPill 1.2.56 - made by nano
+// 1.2.56: Up Next re-sends Music's own player request asking for the songs after the playing one
 // 1.2.55: Up Next reads the queue from Music's own player answers (already loaded), not a new request
 // 1.2.54: Up Next asks for the queue songs' details (the answer was empty without them)
 // 1.2.53: Up Next reads the queue answer another way (walks every item), more debug
@@ -1354,7 +1355,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.55 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.56 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7101,6 +7102,40 @@ static void MusicNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img))
     }
     gUpNextDebug = [NSString stringWithFormat:@"music responses=%lu biggest=%lu found=%d", (unsigned long)gResponses.count, (unsigned long)best, found != nil];
     if (found) { SongOf(found, done); return; }
+    // Music only loads the playing song for its own screens. Re-send one of its
+    // own requests (right player, right details), asking for the songs after it.
+    id base = nil;
+    for (id r in [gResponses allObjects]) { id rq = KV(r, @"request"); if (rq) { base = rq; break; } }
+    SEL perf = NSSelectorFromString(@"performWithCompletion:");
+    if (base && [base respondsToSelector:@selector(copyWithZone:)] && [base respondsToSelector:perf]) {
+        @try {
+            id req = [base copy];
+            id itemProps = KV(req, @"playingItemProperties");
+            if (itemProps) { @try { [req setValue:itemProps forKey:@"queueItemProperties"]; } @catch (__unused id e) {} }
+            Class PS = NSClassFromString(@"MPPropertySet");
+            SEL empty = NSSelectorFromString(@"emptyPropertySet");
+            if (!KV(req, @"queueSectionProperties") && [PS respondsToSelector:empty]) { @try { [req setValue:((id (*)(id, SEL))objc_msgSend)(PS, empty) forKey:@"queueSectionProperties"]; } @catch (__unused id e) {} }
+            SEL setRange = NSSelectorFromString(@"setTracklistRange:");
+            Method m = class_getInstanceMethod([req class], setRange);
+            const char *enc = m ? method_getTypeEncoding(m) : NULL;
+            if (enc && strstr(enc, "=qq}")) {
+                struct { NSInteger a; NSInteger b; } range = {0, 4};
+                ((void (*)(id, SEL, typeof(range)))objc_msgSend)(req, setRange, range);
+            }
+            NSString *pre = gUpNextDebug;
+            void (^cb)(id, NSError *) = ^(id resp, NSError *err) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSUInteger n2 = 0;
+                    id nx = nil;
+                    @try { nx = NextInTracklist(KV(resp, @"tracklist"), &n2); } @catch (__unused id e) {}
+                    gUpNextDebug = [NSString stringWithFormat:@"%@ | resend n=%lu found=%d props=%d err=%@", pre, (unsigned long)n2, nx != nil, itemProps != nil, err ? @(err.code) : @"-"];
+                    if (nx) SongOf(nx, done); else MPCNextTrack(done);
+                });
+            };
+            ((void (*)(id, SEL, id))objc_msgSend)(req, perf, cb);
+            return;
+        } @catch (__unused id e) {}
+    }
     MPCNextTrack(done);
 }
 static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
@@ -7160,7 +7195,7 @@ static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
                     @try { ((void (*)(id, SEL, id))objc_msgSend)(items, en, eb); } @catch (__unused id e) {}
                 }
                 if (playingAt >= 0 && playingAt + 1 < (NSInteger)all.count) next = all[playingAt + 1];
-                gUpNextDebug = [NSString stringWithFormat:@"%@ | tl=%@ items=%@ n=%lu at=%ld ip=%@ ranged=%d enc=%@", gUpNextDebug, NSStringFromClass([tl class]), NSStringFromClass([items class]), (unsigned long)all.count, (long)playingAt, ip, ranged, encS.length > 30 ? [encS substringToIndex:30] : encS];
+                gUpNextDebug = [NSString stringWithFormat:@"%@ | own tl=%@ items=%@ n=%lu at=%ld ip=%@ ranged=%d enc=%@", gUpNextDebug, NSStringFromClass([tl class]), NSStringFromClass([items class]), (unsigned long)all.count, (long)playingAt, ip, ranged, encS.length > 30 ? [encS substringToIndex:30] : encS];
                 if (!next && items && [ip isKindOfClass:[NSIndexPath class]]) {
                     SEL gi = NSSelectorFromString(@"globalIndexForIndexPath:"), ig = NSSelectorFromString(@"indexPathForGlobalIndex:"), at = NSSelectorFromString(@"itemAtIndexPath:");
                     if ([items respondsToSelector:gi] && [items respondsToSelector:ig] && [items respondsToSelector:at]) {
