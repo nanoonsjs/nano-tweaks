@@ -1,4 +1,5 @@
-// MusicPill 1.2.48 - made by nano
+// MusicPill 1.2.49 - made by nano
+// 1.2.49: "Up Next" capsule grows out of the pill 10s before a song ends (tap to skip, swipe away); pin songs to Search from the player's ••• menu, they show as glass chips on top of Search (tap to find, hold to unpin)
 // 1.2.48: the X circle lines up with the search field (its own centered xmark) and has the same jelly press as the bottom circles
 // 1.2.47: X centered in its circle and level with the search field; Apple Music / Library switch a bit lower
 // 1.2.46: search field and X are bigger (46pt) with more space between them, like iOS 26
@@ -399,6 +400,8 @@ static void SetFavArtist(NSString *name, BOOL fav) {
     [[NSUserDefaults standardUserDefaults] setObject:s.allObjects forKey:@"mp.favArtists"];
 }
 static BOOL gAlbumGlow = NO;         // pill + circles tinted with the album cover's color
+static BOOL gUpNext = YES;          // "Up Next" capsule 10s before a song ends
+static BOOL gPins = YES;            // pinned songs on the Search page
 static BOOL gDoubleTapFav = NO;      // double-tap the player's artwork to favorite
 static UIColor *gGlowColor;
 static __weak UIView *gPlayerArt;
@@ -495,6 +498,8 @@ static void LoadPrefs(void) {
     gTitleSwipe = PrefBool(file, @"titleswipe", YES);
     gAlbumGlow = PrefBool(file, @"albumglow", NO);
     gDoubleTapFav = PrefBool(file, @"doubletapfav", NO);
+    gUpNext = PrefBool(file, @"upnext", YES);
+    gPins = PrefBool(file, @"pins", YES);
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers"];
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"mp.motionCovers2"];   // 1.2.19/20's list (some wrong)   // 1.2.18's list (could hold wrong covers)
     // Turned off: forget every saved cover.
@@ -889,6 +894,7 @@ static NSArray *WithoutElements(NSArray *children, NSSet *drop) {
     return out;
 }
 #define MP_ROW_ID @"com.user.musicpill.toprow"
+static UIAction *PinMenuAction(void);
 static NSArray *IOS26MenuChildren(NSArray *children, UIMenuOptions options) {
     NSMutableDictionary *found = [NSMutableDictionary dictionary];
     RestyleMenu(children, found);
@@ -900,7 +906,10 @@ static NSArray *IOS26MenuChildren(NSArray *children, UIMenuOptions options) {
     UIMenu *top = [UIMenu menuWithTitle:@"" image:nil identifier:MP_ROW_ID options:UIMenuOptionsDisplayInline children:row];
     if ([top respondsToSelector:@selector(setPreferredElementSize:)]) {
         ((void (*)(id, SEL, NSInteger))objc_msgSend)(top, @selector(setPreferredElementSize:), 1);   // medium: icon over title, side by side
-        return [@[top] arrayByAddingObjectsFromArray:WithoutElements(children, [NSSet setWithArray:row])];
+        NSArray *rest = WithoutElements(children, [NSSet setWithArray:row]);
+        UIAction *pin = PinMenuAction();
+        if (pin) rest = [rest arrayByAddingObject:[UIMenu menuWithTitle:@"" image:nil identifier:@"com.user.musicpill.pin" options:UIMenuOptionsDisplayInline children:@[pin]]];
+        return [@[top] arrayByAddingObjectsFromArray:rest];
     }
     return children;
 }
@@ -1334,7 +1343,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.48 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.49 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1690,6 +1699,7 @@ static BOOL OpenPlayer(UIView *mini) {
 
 static NSString *MusicBarTitle(UIView *mini);
 static BOOL gEverPlayed;   // something has played since Music opened
+static void UpNextCheck(NSDictionary *info, NSString *title, UIView *pill);
 static int gNowPlayingPID;  // the app whose song MediaRemote reports
 static BOOL gOtherApp;      // that app isn't Music (YouTube etc.)
 // One of Music's own (hidden) bar buttons, by its symbol: so play / next act on
@@ -1889,6 +1899,7 @@ static UIControl *MusicBarButton(NSArray *syms) {
                 return;
             }
             BOOL have = [title isKindOfClass:[NSString class]] && [title length];
+            if (have) { @try { UpNextCheck(dict, title, me); } @catch (__unused id e) {} }
             // Another app (YouTube...) is the one playing: MediaRemote reports its
             // video. Show Music's own song instead (what Music's bar says), no art.
             UIView *mb = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
@@ -2628,6 +2639,7 @@ static const void *kNarrowSeg = &kNarrowSeg;
 %end
 
 static void ScopeEval(BOOL animated);
+static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb);
 static __weak UIScrollView *gScopeList;
 static __weak UIScrollView *gAvatarList;
 static void AvatarEval(void);
@@ -4064,6 +4076,7 @@ static void ScopeAutoHide(UISearchBar *sb, UINavigationBar *nb) {
     }
     gScopeSeg = seg; gScopeBar = sb; gScopeList = list; gScopeSC = sc;
     ScopeEval(YES);
+    @try { PinsEval(list, sc, sb); } @catch (__unused id e) {}
 }
 
 static void SearchPage(UINavigationBar *nb) {
@@ -6960,6 +6973,277 @@ __attribute__((unused)) static void FavStarTick(UIWindow *w) {
 %hook UITableViewCell
 - (void)prepareForReuse { %orig; [[self viewWithTag:FAVSTAR_TAG] removeFromSuperview]; }
 %end
+
+#pragma mark - Up Next capsule
+
+// The song after this one, asked on a background queue (asking Music's player
+// from the main thread can lock the app up).
+static void FetchNextTrack(void (^done)(NSString *title, NSString *artist, UIImage *art)) {
+    static dispatch_queue_t q;
+    if (!q) q = dispatch_queue_create("musicpill.next", DISPATCH_QUEUE_SERIAL);
+    dispatch_async(q, ^{
+        NSString *t = nil, *a = nil; UIImage *img = nil;
+        @try {
+            Class C = NSClassFromString(@"MPMusicPlayerController");
+            id mp = [C respondsToSelector:@selector(systemMusicPlayer)] ? [C performSelector:@selector(systemMusicPlayer)] : nil;
+            SEL at = NSSelectorFromString(@"nowPlayingItemAtIndex:");
+            if (mp && [mp respondsToSelector:at] && [mp respondsToSelector:@selector(indexOfNowPlayingItem)]) {
+                NSUInteger i = ((NSUInteger (*)(id, SEL))objc_msgSend)(mp, @selector(indexOfNowPlayingItem));
+                if (i != NSNotFound) {
+                    MPMediaItem *it = ((id (*)(id, SEL, NSUInteger))objc_msgSend)(mp, at, i + 1);
+                    if ([it isKindOfClass:[MPMediaItem class]]) {
+                        t = it.title; a = it.artist;
+                        img = [it.artwork imageWithSize:CGSizeMake(96, 96)];
+                    }
+                }
+            }
+        } @catch (__unused id e) {}
+        dispatch_async(dispatch_get_main_queue(), ^{ done(t, a, img); });
+    });
+}
+#define UPNEXT_TAG 0x4D50554E
+@interface MPUpNext : NSObject
++ (instancetype)shared;
+@end
+@implementation MPUpNext
++ (instancetype)shared { static MPUpNext *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPUpNext new]; }); return t; }
+- (void)dismiss:(UIView *)v toward:(UIView *)pill {
+    if (!v.superview || objc_getAssociatedObject(v, @selector(dismiss:toward:))) return;
+    objc_setAssociatedObject(v, @selector(dismiss:toward:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGFloat dy = pill.superview == v.superview ? CGRectGetMidY(pill.frame) - v.center.y : 30;
+    [UIView animateWithDuration:0.32 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        v.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy * 0.7), 0.85, 0.5);
+        v.alpha = 0;
+    } completion:^(__unused BOOL d) { [v removeFromSuperview]; }];
+}
+- (void)tapped:(UITapGestureRecognizer *)g {
+    UIView *v = g.view;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    SkipTrack(YES);
+    [self dismiss:v toward:objc_getAssociatedObject(v, @selector(tapped:))];
+}
+- (void)swiped:(UISwipeGestureRecognizer *)g { [self dismiss:g.view toward:objc_getAssociatedObject(g.view, @selector(tapped:))]; }
+@end
+static void ShowUpNext(UIView *pill, NSString *title, NSString *artist, UIImage *art) {
+    UIView *host = pill.superview;
+    if (!host || pill.hidden) return;
+    [[host viewWithTag:UPNEXT_TAG] removeFromSuperview];
+    CGRect pf = pill.frame;
+    CGFloat H = 58, W = MIN(pf.size.width, 340);
+    UIView *cap = [[UIView alloc] initWithFrame:CGRectMake(round(CGRectGetMidX(pf) - W / 2), CGRectGetMinY(pf) - 10 - H, W, H)];
+    cap.tag = UPNEXT_TAG;
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+    g.frame = cap.bounds; g.clipsToBounds = YES; g.layer.cornerRadius = H / 2; g.layer.cornerCurve = kCACornerCurveContinuous;
+    g.userInteractionEnabled = NO;
+    [cap addSubview:g];
+    FrostGlass(g, cap); ApplyGlow(g, NO);
+    UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(10, (H - 40) / 2, 40, 40)];
+    iv.image = art; iv.contentMode = UIViewContentModeScaleAspectFill; iv.clipsToBounds = YES;
+    iv.layer.cornerRadius = 9; iv.layer.cornerCurve = kCACornerCurveContinuous;
+    iv.backgroundColor = Dyn([UIColor colorWithWhite:0 alpha:0.08], [UIColor colorWithWhite:1 alpha:0.1]);
+    [cap addSubview:iv];
+    UILabel *k = [[UILabel alloc] initWithFrame:CGRectMake(62, 9, W - 62 - 48, 15)];
+    k.text = @"Up Next"; k.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold]; k.textColor = GlassIconDim();
+    [cap addSubview:k];
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(62, 25, W - 62 - 48, 22)];
+    t.text = artist.length ? [NSString stringWithFormat:@"%@ · %@", title, artist] : title;
+    t.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; t.textColor = GlassIcon();
+    [cap addSubview:t];
+    UIImageView *fw = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"forward.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]];
+    fw.tintColor = GlassIcon(); fw.contentMode = UIViewContentModeCenter;
+    fw.frame = CGRectMake(W - 46, 0, 36, H);
+    [cap addSubview:fw];
+    objc_setAssociatedObject(cap, @selector(tapped:), pill, OBJC_ASSOCIATION_ASSIGN);
+    [cap addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:[MPUpNext shared] action:@selector(tapped:)]];
+    for (NSNumber *d in @[@(UISwipeGestureRecognizerDirectionDown), @(UISwipeGestureRecognizerDirectionLeft), @(UISwipeGestureRecognizerDirectionRight)]) {
+        UISwipeGestureRecognizer *sw = [[UISwipeGestureRecognizer alloc] initWithTarget:[MPUpNext shared] action:@selector(swiped:)];
+        sw.direction = d.unsignedIntegerValue;
+        [cap addGestureRecognizer:sw];
+    }
+    [host insertSubview:cap belowSubview:pill];
+    // Grows up out of the pill, with a bounce.
+    CGFloat dy = CGRectGetMidY(pf) - cap.center.y;
+    cap.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy * 0.8), 0.8, 0.4);
+    cap.alpha = 0;
+    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        cap.transform = CGAffineTransformIdentity; cap.alpha = 1;
+    } completion:nil];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+    __weak UIView *wcap = cap; __weak UIView *wpill = pill;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(11 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (wcap) [[MPUpNext shared] dismiss:wcap toward:wpill];
+    });
+}
+static void UpNextCheck(NSDictionary *info, NSString *title, UIView *pill) {
+    static NSString *shownFor, *lastTitle;
+    UIView *host = pill.superview;
+    if (![title isEqualToString:lastTitle]) {
+        lastTitle = title;
+        UIView *old = [host viewWithTag:UPNEXT_TAG];
+        if (old) [[MPUpNext shared] dismiss:old toward:pill];   // the song changed: it's done its job
+    }
+    if (!gUpNext || gOtherApp || [shownFor isEqualToString:title] || pill.hidden) return;
+    double dur = [info[@"kMRMediaRemoteNowPlayingInfoDuration"] doubleValue];
+    double el = [info[@"kMRMediaRemoteNowPlayingInfoElapsedTime"] doubleValue];
+    double rate = [info[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"] doubleValue];
+    NSDate *ts = info[@"kMRMediaRemoteNowPlayingInfoTimestamp"];
+    if (rate <= 0 || dur < 30) return;
+    if ([ts isKindOfClass:[NSDate class]]) el += -[ts timeIntervalSinceNow] * rate;
+    double left = dur - el;
+    if (left > 10.5 || left < 3) return;
+    shownFor = title;
+    __weak UIView *wpill = pill;
+    FetchNextTrack(^(NSString *nt, NSString *na, UIImage *art) {
+        UIView *p = wpill;
+        if (!p || !nt.length || [nt isEqualToString:title] || ![lastTitle isEqualToString:title]) return;
+        ShowUpNext(p, nt, na, art);
+    });
+}
+
+#pragma mark - pinned songs on Search
+
+#define PINS_TAG 0x4D50504E
+#define PINS_H 60.0
+static NSArray *Pins(void) { return [[NSUserDefaults standardUserDefaults] arrayForKey:@"mp.pins"] ?: @[]; }
+static void SavePins(NSArray *a) { [[NSUserDefaults standardUserDefaults] setObject:a forKey:@"mp.pins"]; }
+static NSInteger PinIndex(NSString *t, NSString *a) {
+    NSArray *ps = Pins();
+    for (NSUInteger i = 0; i < ps.count; i++) if ([ps[i][@"t"] isEqualToString:t ?: @""] && [ps[i][@"a"] isEqualToString:a ?: @""]) return i;
+    return -1;
+}
+// "Pin to Search" in the player's ••• menu (the song playing).
+static UIAction *PinMenuAction(void) {
+    if (!gPins) return nil;
+    UIWindow *w = gLastTabBar.window;
+    if (!w || !PlayerIsUp(w, NULL) || !gNowTitle.length) return nil;
+    NSString *t = gNowTitle, *a = gNowArtist ?: @"";
+    BOOL pinned = PinIndex(t, a) >= 0;
+    return [UIAction actionWithTitle:pinned ? @"Unpin from Search" : @"Pin to Search" image:[UIImage systemImageNamed:pinned ? @"pin.slash" : @"pin"] identifier:nil handler:^(__unused UIAction *x) {
+        NSMutableArray *ps = [Pins() mutableCopy];
+        NSInteger i = PinIndex(t, a);
+        if (i >= 0) [ps removeObjectAtIndex:i];
+        else {
+            NSMutableDictionary *d = [@{@"t": t, @"a": a} mutableCopy];
+            UIImage *img = ((MPMiniPill *)gPillObj).art.image;
+            if (img) {
+                UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(80, 80)];
+                NSData *jpg = UIImageJPEGRepresentation([r imageWithActions:^(__unused UIGraphicsImageRendererContext *c) { [img drawInRect:CGRectMake(0, 0, 80, 80)]; }], 0.8);
+                if (jpg) d[@"img"] = jpg;
+            }
+            [ps insertObject:d atIndex:0];
+            while (ps.count > 10) [ps removeLastObject];
+        }
+        SavePins(ps);
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+        ShowToast(nil, i >= 0 ? @"pin.slash.fill" : @"pin.fill", i >= 0 ? @"Unpinned" : @"Pinned to Search");
+    }];
+}
+static __weak UISearchController *gPinsSC;
+@interface MPPins : NSObject
++ (instancetype)shared;
+@end
+@implementation MPPins
++ (instancetype)shared { static MPPins *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPPins new]; }); return t; }
+// Tap: search for it (the song comes up first).
+- (void)tap:(UITapGestureRecognizer *)g {
+    NSArray *ps = Pins();
+    NSInteger i = g.view.tag - 1;
+    if (i < 0 || i >= (NSInteger)ps.count) return;
+    UISearchController *sc = gPinsSC;
+    UISearchBar *sb = sc.searchBar;
+    if (!sb) return;
+    NSString *q = [NSString stringWithFormat:@"%@ %@", ps[i][@"t"], ps[i][@"a"]];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    sb.text = q;
+    @try {
+        if ([sb.delegate respondsToSelector:@selector(searchBar:textDidChange:)]) [sb.delegate searchBar:sb textDidChange:q];
+        if ([sc.searchResultsUpdater respondsToSelector:@selector(updateSearchResultsForSearchController:)]) [sc.searchResultsUpdater updateSearchResultsForSearchController:sc];
+        if ([sb.delegate respondsToSelector:@selector(searchBarSearchButtonClicked:)]) [sb.delegate searchBarSearchButtonClicked:sb];
+    } @catch (__unused id e) {}
+    [sb.searchTextField resignFirstResponder];
+}
+// Hold: unpin (it squishes away).
+- (void)hold:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    UIView *chip = g.view;
+    NSInteger i = chip.tag - 1;
+    NSMutableArray *ps = [Pins() mutableCopy];
+    if (i < 0 || i >= (NSInteger)ps.count) return;
+    [ps removeObjectAtIndex:i];
+    SavePins(ps);
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    [UIView animateWithDuration:0.3 animations:^{ chip.transform = CGAffineTransformMakeScale(0.2, 0.2); chip.alpha = 0; }
+                     completion:^(__unused BOOL d) { [[chip.superview.superview viewWithTag:PINS_TAG] setNeedsLayout]; objc_setAssociatedObject(chip.superview, @selector(hold:), nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }];
+}
+@end
+static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb) {
+    if (!list) return;
+    UIView *row = [list viewWithTag:PINS_TAG];
+    NSArray *ps = Pins();
+    BOOL want = gPins && sc.isActive && sb.text.length == 0 && ps.count > 0;
+    BOOL inset = objc_getAssociatedObject(list, &gPinsSC) != nil;
+    if (!want) {
+        if (inset) {
+            objc_setAssociatedObject(list, &gPinsSC, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            UIEdgeInsets i = list.contentInset; i.top -= PINS_H; list.contentInset = i;
+        }
+        [row removeFromSuperview];
+        return;
+    }
+    gPinsSC = sc;
+    if (!inset) {
+        objc_setAssociatedObject(list, &gPinsSC, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIEdgeInsets i = list.contentInset; i.top += PINS_H; list.contentInset = i;
+        if (list.contentOffset.y > -list.adjustedContentInset.top - 1) list.contentOffset = CGPointMake(0, -list.adjustedContentInset.top);
+    }
+    UIScrollView *strip = (UIScrollView *)row;
+    // Rebuild only when the pins changed.
+    NSString *sig = [[ps valueForKey:@"t"] componentsJoinedByString:@"|"];
+    if (!strip || ![objc_getAssociatedObject(strip, &gPinsSC) isEqualToString:sig]) {
+        [strip removeFromSuperview];
+        strip = [UIScrollView new];
+        strip.tag = PINS_TAG; strip.showsHorizontalScrollIndicator = NO; strip.alwaysBounceHorizontal = YES;
+        strip.clipsToBounds = NO;
+        objc_setAssociatedObject(strip, &gPinsSC, sig, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        CGFloat x = 20, H = 44;
+        for (NSUInteger i = 0; i < ps.count; i++) {
+            NSDictionary *p = ps[i];
+            UIFont *f = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+            NSString *t = p[@"t"];
+            CGFloat tw = MIN(ceil([t sizeWithAttributes:@{NSFontAttributeName: f}].width), 170);
+            CGFloat W = 6 + 32 + 10 + tw + 16;
+            UIView *chip = [[UIView alloc] initWithFrame:CGRectMake(x, (PINS_H - H) / 2, W, H)];
+            chip.tag = i + 1;
+            UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+            g.frame = chip.bounds; g.clipsToBounds = YES; g.layer.cornerRadius = H / 2; g.layer.cornerCurve = kCACornerCurveContinuous;
+            g.userInteractionEnabled = NO;
+            [chip addSubview:g];
+            UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(6, 6, 32, 32)];
+            iv.image = [p[@"img"] isKindOfClass:[NSData class]] ? [UIImage imageWithData:p[@"img"]] : nil;
+            iv.contentMode = UIViewContentModeScaleAspectFill; iv.clipsToBounds = YES; iv.layer.cornerRadius = 16;
+            iv.backgroundColor = Dyn([UIColor colorWithWhite:0 alpha:0.08], [UIColor colorWithWhite:1 alpha:0.1]);
+            [chip addSubview:iv];
+            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(48, 0, tw, H)];
+            l.text = t; l.font = f; l.textColor = GlassIcon();
+            [chip addSubview:l];
+            [chip addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:[MPPins shared] action:@selector(tap:)]];
+            UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPPins shared] action:@selector(hold:)];
+            lp.minimumPressDuration = 0.5;
+            [chip addGestureRecognizer:lp];
+            [strip addSubview:chip];
+            x += W + 10;
+            // pop in one after another
+            chip.alpha = 0; chip.transform = CGAffineTransformMakeScale(0.6, 0.6);
+            [UIView animateWithDuration:0.45 delay:0.04 * i usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:0 animations:^{ chip.alpha = 1; chip.transform = CGAffineTransformIdentity; } completion:nil];
+        }
+        strip.contentSize = CGSizeMake(x + 10, PINS_H);
+        [list addSubview:strip];
+    }
+    // Glass look follows light / dark.
+    for (UIView *chip in strip.subviews) for (UIView *g in chip.subviews) if ([g isKindOfClass:[UIVisualEffectView class]]) { FrostGlass((UIVisualEffectView *)g, nil); ApplyGlow((UIVisualEffectView *)g, NO); }
+    CGRect want2 = CGRectMake(0, -PINS_H, list.bounds.size.width, PINS_H);
+    if (!CGRectEqualToRect(strip.frame, want2)) strip.frame = want2;
+}
 
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
