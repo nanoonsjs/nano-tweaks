@@ -2640,6 +2640,7 @@ static const void *kNarrowSeg = &kNarrowSeg;
 
 static void ScopeEval(BOOL animated);
 static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb);
+static char kPinsInset;
 static __weak UIScrollView *gScopeList;
 static __weak UIScrollView *gAvatarList;
 static void AvatarEval(void);
@@ -2647,7 +2648,8 @@ static void AvatarEval(void);
 - (void)setContentInset:(UIEdgeInsets)inset {
     // Queue list is slid down 54pt; add 54pt at the bottom so the last song
     // can still scroll fully into view above the trimmed edge.
-    if (objc_getAssociatedObject(self, kQueueTable)) inset.bottom += QUEUE_EXTRA;   // last song still reachable above the trimmed edge
+    if (objc_getAssociatedObject(self, kQueueTable)) inset.bottom += QUEUE_EXTRA;
+    if (objc_getAssociatedObject(self, &kPinsInset)) inset.top += 60;   // room for the pinned songs row   // last song still reachable above the trimmed edge
     %orig(inset);
 }
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)event {
@@ -7181,19 +7183,20 @@ static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb
     UIView *row = [list viewWithTag:PINS_TAG];
     NSArray *ps = Pins();
     BOOL want = gPins && sc.isActive && sb.text.length == 0 && ps.count > 0;
-    BOOL inset = objc_getAssociatedObject(list, &gPinsSC) != nil;
+    BOOL inset = objc_getAssociatedObject(list, &kPinsInset) != nil;
     if (!want) {
         if (inset) {
-            objc_setAssociatedObject(list, &gPinsSC, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            UIEdgeInsets i = list.contentInset; i.top -= PINS_H; list.contentInset = i;
+            UIEdgeInsets i = list.contentInset; i.top -= PINS_H;
+            objc_setAssociatedObject(list, &kPinsInset, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            list.contentInset = i;
         }
         [row removeFromSuperview];
         return;
     }
     gPinsSC = sc;
     if (!inset) {
-        objc_setAssociatedObject(list, &gPinsSC, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        UIEdgeInsets i = list.contentInset; i.top += PINS_H; list.contentInset = i;
+        objc_setAssociatedObject(list, &kPinsInset, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        list.contentInset = list.contentInset;   // the hook adds the room
         if (list.contentOffset.y > -list.adjustedContentInset.top - 1) list.contentOffset = CGPointMake(0, -list.adjustedContentInset.top);
     }
     UIScrollView *strip = (UIScrollView *)row;
