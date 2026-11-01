@@ -1,4 +1,5 @@
-// MusicPill 1.2.67 - made by nano
+// MusicPill 1.2.68 - made by nano
+// 1.2.68: the old About no longer flickers back while scrolling (re-hidden right after Music lays out the page); no gray panel behind Similar Artists
 // 1.2.67: About works on Music's stacked artist page (sections in one scroll view): reads About / From / Born / Genre, hides that section and pulls Similar Artists up
 // 1.2.66: About reads the artist page's main list (it was reading a small list inside the header)
 // 1.2.65: About reading also tries spoken labels and text layers; more debug
@@ -1368,7 +1369,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.67 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.68 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7678,10 +7679,32 @@ static NSArray *TextsIn(UIView *root) {
 }
 static char kAboutHidden;   // on the scroll view: NSHashTable of hidden sections
 static void ApplyAboutHide(UIScrollView *sv);
+static NSMutableDictionary *gPageLayoutIMPs;
+static void PageLayout(UIScrollView *self, SEL _cmd) {
+    IMP orig = NULL;
+    for (Class c = object_getClass(self); c && !orig; c = class_getSuperclass(c)) orig = [gPageLayoutIMPs[NSStringFromClass(c)] pointerValue];
+    if (orig) ((void (*)(id, SEL))orig)(self, _cmd);
+    if (objc_getAssociatedObject(self, &kAboutHidden)) { @try { ApplyAboutHide(self); } @catch (__unused id e) {} }
+}
+static void HookPageLayout(UIScrollView *sv) {
+    Class c = object_getClass(sv);
+    if (!gPageLayoutIMPs) gPageLayoutIMPs = [NSMutableDictionary dictionary];
+    NSString *k = NSStringFromClass(c);
+    if (gPageLayoutIMPs[k] || c == [UIScrollView class]) return;
+    // only a class that has its own layoutSubviews (else we'd hook UIScrollView for everyone)
+    unsigned n = 0; Method *ms = class_copyMethodList(c, &n); BOOL own = NO;
+    for (unsigned i = 0; i < n; i++) if (method_getName(ms[i]) == @selector(layoutSubviews)) own = YES;
+    free(ms);
+    if (!own) { class_addMethod(c, @selector(layoutSubviews), class_getMethodImplementation([UIScrollView class], @selector(layoutSubviews)), "v@:"); }
+    IMP old = NULL;
+    MSHookMessageEx(c, @selector(layoutSubviews), (IMP)PageLayout, &old);
+    if (old) gPageLayoutIMPs[k] = [NSValue valueWithPointer:(const void *)old];
+}
 static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
     UIScrollView *sv = [inPage isKindOfClass:[UIScrollView class]] && inPage.bounds.size.height > 300 ? (UIScrollView *)inPage : PageScroller(inPage);
     if (!sv) { gAboutDebug = @"no page"; return nil; }
     gArtistCV = (id)sv;
+    HookPageLayout(sv);
     NSDictionary *have = objc_getAssociatedObject(sv, &kAboutData);
     if (have[@"about"] && !force) { ApplyAboutHide(sv); return have; }
     NSMutableDictionary *out = [have mutableCopy] ?: [NSMutableDictionary dictionary];
@@ -7755,11 +7778,33 @@ static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
 }
 // Hide the About sections and pull everything under them up. Music lays the
 // stack out again from time to time, so this runs after each of its layouts.
+// The gray panel Music puts behind the bottom sections (About + Similar Artists):
+// the page's own black instead.
+static void ClearGray(UIView *sec) {
+    NSMutableArray *st = [NSMutableArray arrayWithObject:sec];
+    int g = 0;
+    while (st.count && g++ < 60) {
+        UIView *v = st.firstObject; [st removeObjectAtIndex:0];
+        UIColor *c = v.backgroundColor;
+        CGFloat w = 0, a = 0;
+        if (c && [c getWhite:&w alpha:&a] && a > 0.5 && v.bounds.size.width > sec.bounds.size.width * 0.8) {
+            BOOL dark = v.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+            if ((dark && w > 0.04 && w < 0.35) || (!dark && w > 0.8 && w < 0.985)) v.backgroundColor = UIColor.clearColor;
+        } else if (c && a == 0) {
+            CGFloat r = 0, gg = 0, b = 0;
+            if ([c getRed:&r green:&gg blue:&b alpha:&a] && a > 0.5 && fabs(r - gg) < 0.03 && fabs(gg - b) < 0.04 && v.bounds.size.width > sec.bounds.size.width * 0.8) {
+                BOOL dark = v.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+                if ((dark && r > 0.04 && r < 0.35) || (!dark && r > 0.8 && r < 0.985)) v.backgroundColor = UIColor.clearColor;
+            }
+        }
+        if (st.count < 40) [st addObjectsFromArray:v.subviews];
+    }
+}
 static void ApplyAboutHide(UIScrollView *sv) {
     NSHashTable *hide = objc_getAssociatedObject(sv, &kAboutHidden);
     if (!hide.count) return;
     CGFloat gap = 0, top = CGFLOAT_MAX;
-    for (UIView *v in hide) { if (!v.hidden) v.hidden = YES; gap += v.bounds.size.height; top = MIN(top, v.frame.origin.y); }
+    for (UIView *v in hide) { if (!v.hidden) v.hidden = YES; if (v.alpha > 0) v.alpha = 0; gap += v.bounds.size.height; top = MIN(top, v.frame.origin.y); }
     NSNumber *applied = objc_getAssociatedObject(sv, &kAboutRange);
     for (UIView *v in Sections(sv)) {
         if ([hide containsObject:v]) continue;
@@ -7771,6 +7816,7 @@ static void ApplyAboutHide(UIScrollView *sv) {
             objc_setAssociatedObject(v, &kAboutRange, @(f.origin.y), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
     }
+    for (UIView *v in Sections(sv)) if (![hide containsObject:v] && v.frame.origin.y >= top - gap - 0.5) ClearGray(v);
     CGFloat want = 0;
     for (UIView *v in Sections(sv)) want = MAX(want, CGRectGetMaxY(v.frame));
     if (want > 0 && (!applied || fabs(sv.contentSize.height - want) > 1)) {
