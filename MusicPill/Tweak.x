@@ -7802,7 +7802,7 @@ static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
 // stack out again from time to time, so this runs after each of its layouts.
 // The gray panel Music puts behind the bottom sections (About + Similar Artists):
 // the page's own black instead.
-__attribute__((unused)) static void ClearGray(UIView *sec) {
+static void ClearGray(UIView *sec) {
     NSMutableArray *st = [NSMutableArray arrayWithObject:sec];
     int g = 0;
     while (st.count && g++ < 60) {
@@ -7829,10 +7829,13 @@ static char kAboutZero;
 static void ApplyAboutHide(UIScrollView *sv) {
     NSArray *sig = objc_getAssociatedObject(sv, &kAboutSig);
     if (!sig.count) return;
+    BOOL after = NO;
     for (UIView *v in Sections(sv)) {
+        if (after && !v.hidden) ClearGray(v);   // no gray panel behind Similar Artists
         BOOL match = NO;
         for (NSDictionary *d in sig) if ([NSStringFromClass([v class]) isEqualToString:d[@"cls"]] && [objc_getAssociatedObject(v, &kAboutSig) boolValue]) match = YES;
         if (!match) continue;
+        after = YES;
         if (!v.hidden) v.hidden = YES;
         if (!v.clipsToBounds) v.clipsToBounds = YES;
         if (!objc_getAssociatedObject(v, &kAboutZero) && !v.translatesAutoresizingMaskIntoConstraints) {
