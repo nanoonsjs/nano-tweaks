@@ -1,4 +1,5 @@
-// MusicPill 1.2.70 - made by nano
+// MusicPill 1.2.71 - made by nano
+// 1.2.71: the artist page's own About and its gray background are left as they are; the "i" About sheet stays
 // 1.2.70: stopped moving the artist page's sections by hand (broke the header); the old About is collapsed through the page's own layout instead
 // 1.2.69: the old About stays gone (also when Music swaps its views) and the page end no longer jumps; the About sheet keeps the artist name
 // 1.2.68: the old About no longer flickers back while scrolling (re-hidden right after Music lays out the page); no gray panel behind Similar Artists
@@ -1371,7 +1372,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.70 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.71 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7827,6 +7828,7 @@ static void ClearGray(UIView *sec) {
 // under them moves up by itself, no fighting, no flicker).
 static char kAboutZero;
 static void ApplyAboutHide(UIScrollView *sv) {
+    return;   // the page's own About stays as Music shows it
     NSArray *sig = objc_getAssociatedObject(sv, &kAboutSig);
     if (!sig.count) return;
     BOOL after = NO;
