@@ -1,4 +1,7 @@
-// Messages26 0.4.0 - made by nano
+// Messages26 0.5.0 - made by nano
+// 0.5.0: apps / Camera / hold-for-Photos work after reopening and with the keyboard up
+//        (the keyboard goes down and the app row comes back first); the menu fits on
+//        screen; glass Edit / compose on the conversation list, no bar background there
 // 0.4.0: + grows into the menu (iOS 26 morph); hold and drag apps to reorder them;
 //        icons never black out; hold + opens Photos every time; field background
 //        lined up; name glass covers the whole name; FaceTime glass morphs open;
@@ -157,6 +160,31 @@ static void OpenStripApp(NSIndexPath *ip) {
     [cv selectItemAtIndexPath:ip animated:NO scrollPosition:UICollectionViewScrollPositionNone];
     if ([cv.delegate respondsToSelector:@selector(collectionView:didSelectItemAtIndexPath:)]) [cv.delegate collectionView:cv didSelectItemAtIndexPath:ip];
 }
+static void StyleEntry(UIView *entry);
+// The app row is only there with the keyboard down: put it away, wait for the
+// row to come back, then do the thing.
+static void WithStrip(void (^then)(void)) {
+    UICollectionView *cv = gStripCV;
+    UIView *pb = gPhotoBtn;
+    if (cv.window && pb.window) { then(); return; }
+    UIView *e = gEntry;
+    [e.window endEditing:YES];
+    __block int tries = 0;
+    [NSTimer scheduledTimerWithTimeInterval:0.08 repeats:YES block:^(NSTimer *t) {
+        UIView *e2 = gEntry;
+        if (e2) { @try { StyleEntry(e2); } @catch (__unused id ex) {} }
+        UICollectionView *c2 = gStripCV;
+        if ((c2.window && [c2 numberOfSections]) || ++tries > 20) { [t invalidate]; then(); }
+    }];
+}
+static void OpenStripAppNamed(NSString *name) {
+    WithStrip(^{
+        for (NSDictionary *a in StripApps()) if ([a[@"name"] isEqualToString:name]) { OpenStripApp(a[@"ip"]); return; }
+    });
+}
+static void OpenCamera(void) {
+    WithStrip(^{ [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; });
+}
 static NSDictionary *PhotosApp(void) {
     NSArray *apps = StripApps();
     for (NSDictionary *a in apps) if ([[a[@"name"] lowercaseString] isEqualToString:@"photos"]) return a;
@@ -227,7 +255,14 @@ static NSArray *MenuItems(void) {
 - (void)open:(UIButton *)plus {
     UIWindow *w = plus.window;
     if (!w || _panel.superview) return;
-    if (!gMenuOn) { [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; return; }   // menu off: + is the camera
+    if (!gMenuOn) { OpenCamera(); return; }   // menu off: + is the camera
+    // keyboard up: put it away first, then grow the menu from where + lands
+    if (!gStripCV.window) {
+        [w endEditing:YES];
+        __weak UIButton *wp = plus;
+        WithStrip(^{ UIButton *p2 = wp; if (p2.window) [self open:p2]; });
+        return;
+    }
     _plus = plus;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     [w endEditing:YES];
@@ -240,7 +275,7 @@ static NSArray *MenuItems(void) {
 
     CGRect pf = [plus convertRect:plus.bounds toView:w];
     CGFloat W = MIN(w.bounds.size.width - 40, 330);
-    CGFloat H = MIN(_items.count * ROW_H + 24, w.bounds.size.height * 0.62);
+    CGFloat H = MIN(MIN(_items.count * ROW_H + 24, w.bounds.size.height * 0.62), CGRectGetMinY(pf) - 12 - w.safeAreaInsets.top - 8);
     CGRect full = CGRectMake(CGRectGetMinX(pf), CGRectGetMinY(pf) - 12 - H, W, H);
     // The panel IS the "+" glass growing: it starts as the circle and stretches
     // up and right into the menu (iOS 26), its corners easing from round to soft.
@@ -341,8 +376,8 @@ static NSArray *MenuItems(void) {
     NSDictionary *it = i < _items.count ? _items[i] : nil;
     [[UISelectionFeedbackGenerator new] selectionChanged];
     [self closeThen:^{
-        if (it[@"camera"]) { UIButton *pb = (UIButton *)gPhotoBtn; [pb sendActionsForControlEvents:UIControlEventTouchUpInside]; }
-        else if (it[@"ip"]) OpenStripApp(it[@"ip"]);
+        if (it[@"camera"]) OpenCamera();
+        else if (it[@"name"]) OpenStripAppNamed(it[@"name"]);
     }];
 }
 - (void)hold:(UILongPressGestureRecognizer *)g {
@@ -352,8 +387,7 @@ static NSArray *MenuItems(void) {
     CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
     k.values = @[@1, @1.2, @0.92, @1]; k.duration = 0.35;
     [plus.layer addAnimation:k forKey:@"m26.hold"];
-    NSDictionary *p = PhotosApp();
-    if (p) { [plus.window endEditing:YES]; OpenStripApp(p[@"ip"]); }
+    WithStrip(^{ NSDictionary *p = PhotosApp(); if (p) OpenStripApp(p[@"ip"]); });
 }
 @end
 
@@ -450,10 +484,10 @@ static void StyleEntry(UIView *entry) {
     NSArray *left = LeftButtons(entry, field);
     for (UIView *b in left) { if (b.alpha > 0) b.alpha = 0; if (b.userInteractionEnabled) b.userInteractionEnabled = NO; }
     for (UIView *b in left) {
-        NSString *d = [[(UIButton *)b imageForState:UIControlStateNormal] description] ?: @"";
+        NSString *d = [NSString stringWithFormat:@"%@ %@ %@", [[(UIButton *)b imageForState:UIControlStateNormal] description] ?: @"", b.accessibilityLabel ?: @"", b.accessibilityIdentifier ?: @""].lowercaseString;
         if ([d containsString:@"camera"] || [NSStringFromClass([b class]) containsString:@"Photo"]) gPhotoBtn = b;
     }
-    if (!gPhotoBtn && left.count) gPhotoBtn = left.firstObject;
+    if (!gPhotoBtn.window && strip && left.count) gPhotoBtn = left.firstObject;   // with the app row showing, the first one is the camera
     CGRect ff = [field convertRect:field.bounds toView:entry];   // includes the move down
     CGFloat padY = 6, D = MAX(46, MIN(ff.size.height + padY * 2, 52));
     CGFloat px = 12;
@@ -584,8 +618,18 @@ static void UndoNav(void) {
     [g.layer addAnimation:cr forKey:@"cr"];
 }
 @end
-static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
+static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
     nb.tintColor = Ink(nb);
+    // see-through bar for good (scrolling brought the gray back)
+    if (!objc_getAssociatedObject(nb, "m26app")) {
+        objc_setAssociatedObject(nb, "m26app", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UINavigationBarAppearance *a = [nb.standardAppearance copy] ?: [UINavigationBarAppearance new];
+        [a configureWithTransparentBackground];
+        a.titleTextAttributes = nb.standardAppearance.titleTextAttributes ?: @{};
+        a.largeTitleTextAttributes = nb.standardAppearance.largeTitleTextAttributes ?: @{};
+        nb.standardAppearance = a; nb.scrollEdgeAppearance = a; nb.compactAppearance = a;
+        if (@available(iOS 15.0, *)) nb.compactScrollEdgeAppearance = a;
+    }
     // no bar background: the buttons float on the chat
     NSMutableArray *bs = [NSMutableArray arrayWithArray:nb.subviews];
     int gb = 0;
@@ -619,7 +663,7 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
             }
             if (left || right) { GlassBehind(v, left ? 10 : 9, right ? 9 : 7, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
         }
-        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
+        if (chat && [v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
             UILabel *l = (UILabel *)v;
             UIView *holder = l;
             // the label and its ">" share a small parent: cover both
@@ -634,7 +678,7 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
 static void StyleNav(UIWindow *w) {
     UIView *e = gEntry;
     BOOL chat = e.window != nil;
-    if (!gTopOn || !chat) { UndoNav(); gNavDebug = chat ? @"top bar off" : @"nav: no chat open"; return; }
+    if (!gTopOn) { UndoNav(); gNavDebug = @"top bar off"; return; }
     NSMutableArray *found = [NSMutableArray array];
     NSMutableArray *st = [NSMutableArray arrayWithObject:w];
     int g = 0, bars = 0;
@@ -644,12 +688,12 @@ static void StyleNav(UIWindow *w) {
         if ([v isKindOfClass:[UINavigationBar class]]) {
             CGRect f = [v convertRect:v.bounds toView:nil];
             // the chat's bar (on the right side on iPad-style splits)
-            if (CGRectGetMaxX(f) >= w.bounds.size.width - 2) { bars++; StyleOneNav((UINavigationBar *)v, found); }
+            if (CGRectGetMaxX(f) >= w.bounds.size.width - 2) { bars++; StyleOneNav((UINavigationBar *)v, found, chat); }
             continue;
         }
         [st addObjectsFromArray:v.subviews];
     }
-    gNavDebug = [NSString stringWithFormat:@"nav bars=%d items: %@", bars, [found componentsJoinedByString:@" "]];
+    gNavDebug = [NSString stringWithFormat:@"nav chat=%d bars=%d items: %@", chat, bars, [found componentsJoinedByString:@" "]];
 }
 
 #pragma mark - debug + tick
@@ -698,7 +742,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.4.0 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.5.0 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
