@@ -1,4 +1,5 @@
-// MusicPill 1.2.50 - made by nano
+// MusicPill 1.2.51 - made by nano
+// 1.2.51: Up Next shows the song name (the "E" badge was read instead), pops out of the pill as a liquid drop, follows the pill when it minimizes / expands, and drops back into it when you pull it away; Pin to Search uses the pill's song if needed
 // 1.2.50: fixed Music freezing when opening the queue (Up Next no longer asks Music's player; it reads the queue page, with covers); pins debug
 // 1.2.49: "Up Next" capsule grows out of the pill 10s before a song ends (tap to skip, swipe away); pin songs to Search from the player's ••• menu, they show as glass chips on top of Search (tap to find, hold to unpin)
 // 1.2.48: the X circle lines up with the search field (its own centered xmark) and has the same jelly press as the bottom circles
@@ -1344,7 +1345,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.50 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.51 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -6094,7 +6095,10 @@ static void QueueTick(UIView *player) {
                     UIView *v = cs.lastObject; [cs removeLastObject];
                     if (v.hidden) continue;
                     NSString *t = [v isKindOfClass:[UILabel class]] ? ((UILabel *)v).text : ([NSStringFromClass([v class]) containsString:@"TextDrawing"] ? DrawnText(v) : nil);
-                    if (t.length > 1) { [texts addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:cell].y)}]; continue; }
+                    // Not the explicit "E" badge (a symbol, no real letters).
+                    NSString *letters = [[t componentsSeparatedByCharactersInSet:NSCharacterSet.alphanumericCharacterSet.invertedSet] componentsJoinedByString:@""];
+                    if (letters.length < 1 || [t isEqualToString:@"E"]) t = nil;
+                    if (t.length) { [texts addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:cell].y)}]; continue; }
                     UIImage *im = [v isKindOfClass:[UIImageView class]] ? ((UIImageView *)v).image : nil;
                     if (!im && v.layer.contents && CFGetTypeID((__bridge CFTypeRef)v.layer.contents) == CGImageGetTypeID()) im = [UIImage imageWithCGImage:(__bridge CGImageRef)v.layer.contents];
                     CGFloat ar = v.bounds.size.width * v.bounds.size.height;
@@ -7031,39 +7035,93 @@ static void FetchNextTrack(void (^done)(NSString *title, NSString *artist, UIIma
     done(next[@"t"], next[@"a"], next[@"img"]);
 }
 #define UPNEXT_TAG 0x4D50554E
+static __weak UIView *gUpNextCap, *gUpNextPill;
+static CGRect UpNextFrame(UIView *pill, CGRect pf) {
+    CGFloat H = 58, W = MAX(240, MIN(pf.size.width, 340));
+    return CGRectMake(round(CGRectGetMidX(pf) - W / 2), round(CGRectGetMinY(pf) - 10 - H), W, H);
+}
 @interface MPUpNext : NSObject
+@property (nonatomic, strong) CADisplayLink *link;
+@property (nonatomic) BOOL dragging;
 + (instancetype)shared;
 @end
 @implementation MPUpNext
 + (instancetype)shared { static MPUpNext *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [MPUpNext new]; }); return t; }
+// Stays over the pill as it minimizes / expands.
+- (void)follow:(CADisplayLink *)l {
+    UIView *cap = gUpNextCap, *pill = gUpNextPill;
+    if (!cap.superview || !pill) { [self.link invalidate]; self.link = nil; return; }
+    if (pill.hidden || pill.alpha < 0.05) { cap.hidden = YES; return; }
+    cap.hidden = NO;
+    if (self.dragging || objc_getAssociatedObject(cap, @selector(follow:))) return;   // being pulled / animating
+    CALayer *pl = pill.layer.presentationLayer ?: pill.layer;
+    CGRect f = UpNextFrame(pill, pl.frame);
+    if (CGAffineTransformIsIdentity(cap.transform)) {
+        if (fabs(cap.bounds.size.width - f.size.width) > 0.5) cap.bounds = CGRectMake(0, 0, f.size.width, f.size.height);
+        CGPoint c = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
+        if (hypot(cap.center.x - c.x, cap.center.y - c.y) > 0.5) cap.center = c;
+    }
+}
+- (void)busy:(UIView *)v on:(BOOL)on { objc_setAssociatedObject(v, @selector(follow:), on ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+// Gone: it turns into a drop and falls back into the pill, which jiggles.
 - (void)dismiss:(UIView *)v toward:(UIView *)pill {
     if (!v.superview || objc_getAssociatedObject(v, @selector(dismiss:toward:))) return;
     objc_setAssociatedObject(v, @selector(dismiss:toward:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    CGFloat dy = pill.superview == v.superview ? CGRectGetMidY(pill.frame) - v.center.y : 30;
-    [UIView animateWithDuration:0.32 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        v.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy * 0.7), 0.85, 0.5);
-        v.alpha = 0;
-    } completion:^(__unused BOOL d) { [v removeFromSuperview]; }];
+    [self busy:v on:YES];
+    CGFloat dy = pill.superview == v.superview ? CGRectGetMinY(pill.frame) + 8 - v.center.y : 40;
+    for (UIView *s in v.subviews) if (![s isKindOfClass:[UIVisualEffectView class]]) [UIView animateWithDuration:0.12 animations:^{ s.alpha = 0; }];
+    CGAffineTransform start = v.transform;
+    [UIView animateKeyframesWithDuration:0.42 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic | UIViewKeyframeAnimationOptionBeginFromCurrentState animations:^{
+        // squeeze into a tall drop...
+        [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.4 animations:^{ v.transform = CGAffineTransformScale(CGAffineTransformTranslate(start, 0, dy * 0.25), 0.28, 0.9); }];
+        // ...that falls into the pill and is swallowed
+        [UIView addKeyframeWithRelativeStartTime:0.4 relativeDuration:0.6 animations:^{ v.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy), 0.12, 0.3); v.alpha = 0; }];
+    } completion:^(__unused BOOL d) {
+        [v removeFromSuperview];
+        CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+        k.values = @[@1, @1.05, @0.98, @1.01, @1]; k.duration = 0.45;
+        [pill.layer addAnimation:k forKey:@"mp.upnext.swallow"];
+    }];
 }
 - (void)tapped:(UITapGestureRecognizer *)g {
     UIView *v = g.view;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     SkipTrack(YES);
-    [self dismiss:v toward:objc_getAssociatedObject(v, @selector(tapped:))];
+    [self dismiss:v toward:gUpNextPill];
 }
-- (void)swiped:(UISwipeGestureRecognizer *)g { [self dismiss:g.view toward:objc_getAssociatedObject(g.view, @selector(tapped:))]; }
+// Pull it: it stretches like liquid after your finger; let go far enough (or
+// flick) and it drops into the pill, otherwise it springs back.
+- (void)pulled:(UIPanGestureRecognizer *)g {
+    UIView *v = g.view;
+    CGPoint t = [g translationInView:v.superview];
+    if (g.state == UIGestureRecognizerStateBegan) { self.dragging = YES; return; }
+    if (g.state == UIGestureRecognizerStateChanged) {
+        CGFloat ty = t.y > 0 ? t.y : t.y * 0.3, tx = t.x * 0.35;
+        CGFloat stretch = MIN(fabs(t.y) / 200, 0.35);
+        v.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(tx, ty), 1 - stretch * 0.6, 1 + stretch * 0.5);
+        return;
+    }
+    self.dragging = NO;
+    CGPoint vel = [g velocityInView:v.superview];
+    if (t.y > 34 || vel.y > 500 || fabs(t.x) > 110 || fabs(vel.x) > 900) {
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+        [self dismiss:v toward:gUpNextPill];
+    } else {
+        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{ v.transform = CGAffineTransformIdentity; } completion:nil];
+    }
+}
 @end
 static void ShowUpNext(UIView *pill, NSString *title, NSString *artist, UIImage *art) {
     UIView *host = pill.superview;
     if (!host || pill.hidden) return;
     [[host viewWithTag:UPNEXT_TAG] removeFromSuperview];
-    CGRect pf = pill.frame;
-    CGFloat H = 58, W = MIN(pf.size.width, 340);
-    UIView *cap = [[UIView alloc] initWithFrame:CGRectMake(round(CGRectGetMidX(pf) - W / 2), CGRectGetMinY(pf) - 10 - H, W, H)];
+    CGRect f = UpNextFrame(pill, pill.frame);
+    CGFloat H = f.size.height, W = f.size.width;
+    UIView *cap = [[UIView alloc] initWithFrame:f];
     cap.tag = UPNEXT_TAG;
     UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
     g.frame = cap.bounds; g.clipsToBounds = YES; g.layer.cornerRadius = H / 2; g.layer.cornerCurve = kCACornerCurveContinuous;
-    g.userInteractionEnabled = NO;
+    g.userInteractionEnabled = NO; g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [cap addSubview:g];
     FrostGlass(g, cap); ApplyGlow(g, NO);
     UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(10, (H - 40) / 2, 40, 40)];
@@ -7073,34 +7131,46 @@ static void ShowUpNext(UIView *pill, NSString *title, NSString *artist, UIImage 
     [cap addSubview:iv];
     UILabel *k = [[UILabel alloc] initWithFrame:CGRectMake(62, 9, W - 62 - 48, 15)];
     k.text = @"Up Next"; k.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold]; k.textColor = GlassIconDim();
+    k.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [cap addSubview:k];
     UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(62, 25, W - 62 - 48, 22)];
     t.text = artist.length ? [NSString stringWithFormat:@"%@ · %@", title, artist] : title;
     t.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; t.textColor = GlassIcon();
+    t.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [cap addSubview:t];
     UIImageView *fw = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"forward.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]];
     fw.tintColor = GlassIcon(); fw.contentMode = UIViewContentModeCenter;
-    fw.frame = CGRectMake(W - 46, 0, 36, H);
+    fw.frame = CGRectMake(W - 46, 0, 36, H); fw.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
     [cap addSubview:fw];
-    objc_setAssociatedObject(cap, @selector(tapped:), pill, OBJC_ASSOCIATION_ASSIGN);
-    [cap addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:[MPUpNext shared] action:@selector(tapped:)]];
-    for (NSNumber *d in @[@(UISwipeGestureRecognizerDirectionDown), @(UISwipeGestureRecognizerDirectionLeft), @(UISwipeGestureRecognizerDirectionRight)]) {
-        UISwipeGestureRecognizer *sw = [[UISwipeGestureRecognizer alloc] initWithTarget:[MPUpNext shared] action:@selector(swiped:)];
-        sw.direction = d.unsignedIntegerValue;
-        [cap addGestureRecognizer:sw];
-    }
+    MPUpNext *u = [MPUpNext shared];
+    [cap addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:u action:@selector(tapped:)]];
+    [cap addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:u action:@selector(pulled:)]];
     [host insertSubview:cap belowSubview:pill];
-    // Grows up out of the pill, with a bounce.
-    CGFloat dy = CGRectGetMidY(pf) - cap.center.y;
-    cap.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy * 0.8), 0.8, 0.4);
+    gUpNextCap = cap; gUpNextPill = pill;
+    if (!u.link) { u.link = [CADisplayLink displayLinkWithTarget:u selector:@selector(follow:)]; [u.link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes]; }
+    // Pops out of the pill: a small drop rises from it, stretches, then swells
+    // into the capsule with a bounce.
+    [u busy:cap on:YES];
+    for (UIView *s in @[iv, k, t, fw]) s.alpha = 0;
+    CGFloat dy = CGRectGetMinY(pill.frame) + 6 - cap.center.y;
+    cap.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy), 0.1, 0.35);
     cap.alpha = 0;
-    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{
-        cap.transform = CGAffineTransformIdentity; cap.alpha = 1;
-    } completion:nil];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+    CAKeyframeAnimation *kp = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    kp.values = @[@1, @1.04, @0.99, @1]; kp.duration = 0.35;
+    [pill.layer addAnimation:kp forKey:@"mp.upnext.pop"];
+    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        cap.alpha = 1;
+        cap.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy * 0.45), 0.24, 0.85);   // tall drop rising
+    } completion:^(__unused BOOL d) {
+        [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.58 initialSpringVelocity:0.7 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            cap.transform = CGAffineTransformIdentity;
+        } completion:^(__unused BOOL d2) { [u busy:cap on:NO]; }];
+        [UIView animateWithDuration:0.25 delay:0.12 options:0 animations:^{ for (UIView *s in @[iv, k, t, fw]) s.alpha = 1; } completion:nil];
+    }];
     __weak UIView *wcap = cap; __weak UIView *wpill = pill;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(11 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (wcap) [[MPUpNext shared] dismiss:wcap toward:wpill];
+        if (wcap && !u.dragging) [u dismiss:wcap toward:wpill];
     });
 }
 static void UpNextCheck(NSDictionary *info, NSString *title, UIView *pill) {
@@ -7144,7 +7214,9 @@ static NSInteger PinIndex(NSString *t, NSString *a) {
 static UIAction *PinMenuAction(void) {
     if (!gPins) return nil;
     UIWindow *w = gLastTabBar.window;
-    if (!w || !PlayerIsUp(w, NULL) || !gNowTitle.length) { gPinsDebug = [NSString stringWithFormat:@"menu: player=%d title=%lu", w ? PlayerIsUp(w, NULL) : -1, (unsigned long)gNowTitle.length]; return nil; }
+    if (!gNowTitle.length) gNowTitle = ((MPMiniPill *)gPillObj).title.text;
+    if (!gNowArtist.length) gNowArtist = ((MPMiniPill *)gPillObj).artist.text;
+    if (!w || !PlayerIsUp(w, NULL) || !gNowTitle.length || [gNowTitle isEqualToString:@"Not Playing"]) { gPinsDebug = [NSString stringWithFormat:@"menu: player=%d title=%lu", w ? PlayerIsUp(w, NULL) : -1, (unsigned long)gNowTitle.length]; return nil; }
     NSString *t = gNowTitle, *a = gNowArtist ?: @"";
     BOOL pinned = PinIndex(t, a) >= 0;
     return [UIAction actionWithTitle:pinned ? @"Unpin from Search" : @"Pin to Search" image:[UIImage systemImageNamed:pinned ? @"pin.slash" : @"pin"] identifier:nil handler:^(__unused UIAction *x) {
