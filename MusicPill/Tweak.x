@@ -1,4 +1,5 @@
-// MusicPill 1.2.63 - made by nano
+// MusicPill 1.2.64 - made by nano
+// 1.2.64: About sheet finds the artist page's list another way (it wasn't found before)
 // 1.2.63: About sheet reads Music's text better and finds the header photo inside layers; keeps checking the page so the bottom About is removed
 // 1.2.62: artist pages get an "i" button left of Play that opens an iOS 26 About sheet (photo, name, From / Born, Genre, About); the About part is taken off the bottom of the page
 // 1.2.61: removed Animated Tab Icons
@@ -1363,7 +1364,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.63 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.64 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7644,7 +7645,28 @@ static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
     UICollectionView *cv = nil;
     for (UIView *p = inPage.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]]) { cv = (UICollectionView *)p; break; }
     if (!cv && [inPage.superview isKindOfClass:[UICollectionView class]]) cv = (UICollectionView *)inPage.superview;
-    if (!cv) return nil;
+    if (!cv && inPage.window) {
+        // The page's main list: the biggest vertical list on screen.
+        NSMutableArray *st = [NSMutableArray arrayWithObject:inPage.window];
+        int g = 0; CGFloat best = 0;
+        while (st.count && g++ < 3000) {
+            UIView *v = st.lastObject; [st removeLastObject];
+            if (v.hidden || v.alpha < 0.01) continue;
+            if ([v isKindOfClass:[UICollectionView class]] && v.window) {
+                UICollectionView *c = (UICollectionView *)v;
+                CGFloat a = c.bounds.size.width * c.bounds.size.height;
+                if (c.bounds.size.width > inPage.window.bounds.size.width * 0.9 && c.contentSize.height > c.bounds.size.height && a > best) { best = a; cv = c; }
+                continue;
+            }
+            [st addObjectsFromArray:v.subviews];
+        }
+    }
+    if (!cv) {
+        NSMutableArray *chain = [NSMutableArray array];
+        for (UIView *p = inPage; p && chain.count < 8; p = p.superview) [chain addObject:NSStringFromClass([p class])];
+        gAboutDebug = [NSString stringWithFormat:@"no list: %@", [chain componentsJoinedByString:@"<"]];
+        return nil;
+    }
     gArtistCV = cv;
     NSDictionary *have = objc_getAssociatedObject(cv, &kAboutData);
     if (have[@"about"] && !force) return have;
