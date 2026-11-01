@@ -1,5 +1,4 @@
-// MusicPill 1.2.60 - made by nano
-// 1.2.60: new setting "Animated Tab Icons" (off by default): each tab icon does its own little animation when tapped
+// MusicPill 1.2.59 - made by nano
 // 1.2.59: Up Next Preview is off by default; settings label is "Up Next Duration"
 // 1.2.58: Up Next is smaller (and smaller than the pill when minimized); pulling it up barely stretches
 // 1.2.57: Up Next shows for every song (an old queue answer pointed at the song already playing), and tries again if it found nothing
@@ -411,7 +410,6 @@ static void SetFavArtist(NSString *name, BOOL fav) {
     [[NSUserDefaults standardUserDefaults] setObject:s.allObjects forKey:@"mp.favArtists"];
 }
 static BOOL gAlbumGlow = NO;         // pill + circles tinted with the album cover's color
-static BOOL gTabAnim = NO;          // little animation on the tab icon you tap
 static BOOL gUpNext = NO;           // "Up Next" capsule 10s before a song ends
 static BOOL gPins = NO;             // pinned songs on the Search page (dropped)
 static double gUpNextSecs = 10;     // how long before the end Up Next shows (5-20)
@@ -513,7 +511,6 @@ static void LoadPrefs(void) {
     gAlbumGlow = PrefBool(file, @"albumglow", NO);
     gDoubleTapFav = PrefBool(file, @"doubletapfav", NO);
     gUpNext = PrefBool(file, @"upnext", NO);
-    gTabAnim = PrefBool(file, @"tabanim", NO);
     gPins = NO;   // Pin to Search was dropped
     gUpNextSecs = 10;
     { id v = file[@"upnextsecs"]; if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("upnextsecs"), DOM); if (cf) v = (__bridge_transfer id)cf; }
@@ -1361,7 +1358,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.60 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.59 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1474,8 +1471,6 @@ static UIView *TabButtonRow(UITabBar *tb, CGFloat *rowY, UIView *root) {
 }
 
 static __weak UITabBarItem *gLastOtherTab;
-static void AnimateTabIcon(UIView *iv, NSString *kind);
-static NSString *TabKind(UITabBar *tb, UITabBarItem *it);
 static BOOL IsSearchItem(UITabBar *tb, UITabBarItem *it) {
     if (!it) return NO;
     if ([it.title.lowercaseString containsString:@"search"]) return YES;
@@ -2448,9 +2443,6 @@ static void PlayerStarSync(void);
     // Go to the tab the circle shows (the current one, or the last one before Search).
     UITabBar *tb = gLastTabBar;
     UITabBarItem *it = tb.selectedItem;
-    if (gTabAnim) { UIView *c = nil; for (UIView *v in tb.superview ? [[tb.superview viewWithTag:COLLAPSE_TAG] subviews] : @[]) if ([v.accessibilityIdentifier isEqualToString:@"tab"]) c = v;
-        UITabBarItem *shown = IsSearchItem(tb, it) ? (gLastOtherTab ?: it) : it;
-        AnimateTabIcon([c viewWithTag:2], TabKind(tb, shown)); }
     if (IsSearchItem(tb, it)) it = gLastOtherTab ?: (tb.items.count >= 2 ? tb.items[tb.items.count - 2] : nil);
     NSUInteger idx = it ? [tb.items indexOfObject:it] : NSNotFound;
     SetCollapsed(NO, YES);
@@ -2567,7 +2559,6 @@ static void PlayerStarSync(void);
 }
 - (void)tapSearch {
     UITabBar *tb = gLastTabBar;
-    if (gTabAnim) { for (UIView *v in tb.superview ? [[tb.superview viewWithTag:COLLAPSE_TAG] subviews] : @[]) if ([v.accessibilityIdentifier isEqualToString:@"search"]) AnimateTabIcon([v viewWithTag:2], @"search"); }
     UITabBarController *tc = [tb.delegate isKindOfClass:[UITabBarController class]] ? (UITabBarController *)tb.delegate : nil;
     NSUInteger idx = NSNotFound;
     for (NSUInteger i = 0; i < tb.items.count; i++) {
@@ -2807,77 +2798,6 @@ static UIControl *HideMusicEdit(UINavigationBar *nb, BOOL *editingOut);
 }
 %end
 
-
-// Animated tab icons: each tab's icon does its own little liquid move when tapped.
-// Home hops and squishes, Browse/New wiggles, Radio pulses like waves, Library
-// bounces up, Search wobbles like a magnifier being picked up.
-static void AnimateTabIcon(UIView *iv, NSString *kind) {
-    if (!iv) return;
-    CALayer *l = iv.layer;
-    [l removeAnimationForKey:@"mp.tab"];
-    CAAnimation *a = nil;
-    CAMediaTimingFunction *ease = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-    if ([kind isEqualToString:@"home"]) {
-        CAKeyframeAnimation *y = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
-        y.values = @[@0, @(-7), @0, @(-2), @0]; y.keyTimes = @[@0, @0.3, @0.55, @0.75, @1];
-        CAKeyframeAnimation *sx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"];
-        sx.values = @[@1, @0.9, @1.18, @0.96, @1]; sx.keyTimes = y.keyTimes;
-        CAKeyframeAnimation *sy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
-        sy.values = @[@1, @1.12, @0.82, @1.04, @1]; sy.keyTimes = y.keyTimes;
-        CAAnimationGroup *g = [CAAnimationGroup animation]; g.animations = @[y, sx, sy]; g.duration = 0.55; a = g;
-    } else if ([kind isEqualToString:@"browse"]) {
-        CAKeyframeAnimation *r = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"];
-        r.values = @[@0, @(-0.22), @0.18, @(-0.1), @0.05, @0]; r.duration = 0.55;
-        CAKeyframeAnimation *sc = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-        sc.values = @[@1, @1.15, @1]; sc.duration = 0.4;
-        CAAnimationGroup *g = [CAAnimationGroup animation]; g.animations = @[r, sc]; g.duration = 0.55; a = g;
-    } else if ([kind isEqualToString:@"radio"]) {
-        CAKeyframeAnimation *sc = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-        sc.values = @[@1, @1.2, @0.95, @1.14, @0.98, @1]; sc.duration = 0.7;
-        CAKeyframeAnimation *op = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
-        op.values = @[@1, @0.55, @1, @0.65, @1]; op.duration = 0.7;
-        CAAnimationGroup *g = [CAAnimationGroup animation]; g.animations = @[sc, op]; g.duration = 0.7; a = g;
-    } else if ([kind isEqualToString:@"library"]) {
-        CAKeyframeAnimation *y = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
-        y.values = @[@0, @(-9), @0, @(-3), @0]; y.keyTimes = @[@0, @0.35, @0.6, @0.8, @1];
-        CAKeyframeAnimation *sy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
-        sy.values = @[@1, @1.08, @0.86, @1.03, @1]; sy.keyTimes = y.keyTimes;
-        CAAnimationGroup *g = [CAAnimationGroup animation]; g.animations = @[y, sy]; g.duration = 0.6; a = g;
-    } else if ([kind isEqualToString:@"search"]) {
-        CAKeyframeAnimation *r = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"];
-        r.values = @[@0, @0.35, @(-0.25), @0.14, @(-0.06), @0]; r.duration = 0.6;
-        CAKeyframeAnimation *sc = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-        sc.values = @[@1, @1.18, @1]; sc.duration = 0.45;
-        CAAnimationGroup *g = [CAAnimationGroup animation]; g.animations = @[r, sc]; g.duration = 0.6; a = g;
-    } else {
-        CAKeyframeAnimation *sc = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-        sc.values = @[@1, @1.2, @0.92, @1.04, @1]; sc.duration = 0.5; a = sc;
-    }
-    a.timingFunction = ease;
-    [l addAnimation:a forKey:@"mp.tab"];
-}
-static NSString *TabKind(UITabBar *tb, UITabBarItem *it) {
-    if (IsSearchItem(tb, it)) return @"search";
-    NSString *t = it.title.lowercaseString ?: @"";
-    if ([t containsString:@"home"] || [t containsString:@"listen"]) return @"home";
-    if ([t containsString:@"browse"] || [t containsString:@"new"]) return @"browse";
-    if ([t containsString:@"radio"]) return @"radio";
-    if ([t containsString:@"library"]) return @"library";
-    return @"other";
-}
-static void TabIconTapped(UITabBar *tb, UITabBarItem *it) {
-    if (!gTabAnim || !tb.window || !it) return;
-    NSUInteger idx = [tb.items indexOfObject:it];
-    if (idx == NSNotFound) return;
-    NSMutableArray *btns = [NSMutableArray array];
-    for (UIView *v in tb.subviews) if ([v isKindOfClass:[UIControl class]] && [NSStringFromClass([v class]) containsString:@"TabBarButton"]) [btns addObject:v];
-    [btns sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) { return a.frame.origin.x < b.frame.origin.x ? NSOrderedAscending : NSOrderedDescending; }];
-    if (idx >= btns.count) return;
-    UIView *iv = nil;
-    NSMutableArray *st = [NSMutableArray arrayWithObject:btns[idx]];
-    while (st.count && !iv) { UIView *v = st.firstObject; [st removeObjectAtIndex:0]; if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) iv = v; else [st addObjectsFromArray:v.subviews]; }
-    AnimateTabIcon(iv, TabKind(tb, it));
-}
 %hook UITabBar
 - (void)setAlpha:(CGFloat)a {
     if (gCollapsed && self == gLastTabBar && a > 0.01) { %orig(0); return; }
@@ -2890,9 +2810,7 @@ static void TabIconTapped(UITabBar *tb, UITabBarItem *it) {
     }
 }
 - (void)setSelectedItem:(UITabBarItem *)it {
-    BOOL changed = it && it != self.selectedItem;
     %orig;
-    if (changed && self == gLastTabBar) { @try { TabIconTapped(self, it); } @catch (__unused id e) {} }
     if (it && !IsSearchItem(self, it)) gLastOtherTab = it;
     if (gCollapsed && self == gLastTabBar) dispatch_async(dispatch_get_main_queue(), ^{ SetCollapsed(NO, YES); });
 }
