@@ -1,4 +1,5 @@
-// MusicPill 1.2.57 - made by nano
+// MusicPill 1.2.58 - made by nano
+// 1.2.58: Up Next is smaller (and smaller than the pill when minimized); pulling it up barely stretches
 // 1.2.57: Up Next shows for every song (an old queue answer pointed at the song already playing), and tries again if it found nothing
 // 1.2.56: Up Next re-sends Music's own player request asking for the songs after the playing one
 // 1.2.55: Up Next reads the queue from Music's own player answers (already loaded), not a new request
@@ -1356,7 +1357,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.57 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.58 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7260,7 +7261,9 @@ static void FetchNextTrack(void (^done)(NSString *title, NSString *artist, UIIma
 #define UPNEXT_TAG 0x4D50554E
 static __weak UIView *gUpNextCap, *gUpNextPill;
 static CGRect UpNextFrame(UIView *pill, CGRect pf) {
-    CGFloat H = 58, W = MAX(240, MIN(pf.size.width, 340));
+    // Smaller than the pill: a bit narrower when it's full size, and narrower
+    // still when the pill is minimized.
+    CGFloat H = 46, W = gCollapsed ? MAX(170, pf.size.width * 0.8) : MAX(220, MIN(pf.size.width * 0.86, 300));
     return CGRectMake(round(CGRectGetMidX(pf) - W / 2), round(CGRectGetMinY(pf) - 10 - H), W, H);
 }
 @interface MPUpNext : NSObject
@@ -7319,8 +7322,9 @@ static CGRect UpNextFrame(UIView *pill, CGRect pf) {
     CGPoint t = [g translationInView:v.superview];
     if (g.state == UIGestureRecognizerStateBegan) { self.dragging = YES; return; }
     if (g.state == UIGestureRecognizerStateChanged) {
-        CGFloat ty = t.y > 0 ? t.y : t.y * 0.3, tx = t.x * 0.35;
-        CGFloat stretch = MIN(fabs(t.y) / 200, 0.35);
+        CGFloat tx = t.x * 0.35, ty, stretch;
+        if (t.y > 0) { ty = t.y; stretch = MIN(t.y / 220, 0.3); }
+        else { ty = -18 * tanh(-t.y / 70); stretch = MIN(-t.y / 900, 0.05); }   // upward: barely gives, like a rubber band
         v.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(tx, ty), 1 - stretch * 0.6, 1 + stretch * 0.5);
         return;
     }
@@ -7347,23 +7351,23 @@ static void ShowUpNext(UIView *pill, NSString *title, NSString *artist, UIImage 
     g.userInteractionEnabled = NO; g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [cap addSubview:g];
     FrostGlass(g, cap); ApplyGlow(g, NO);
-    UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(10, (H - 40) / 2, 40, 40)];
+    UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(7, (H - 32) / 2, 32, 32)];
     iv.image = art; iv.contentMode = UIViewContentModeScaleAspectFill; iv.clipsToBounds = YES;
-    iv.layer.cornerRadius = 9; iv.layer.cornerCurve = kCACornerCurveContinuous;
+    iv.layer.cornerRadius = 8; iv.layer.cornerCurve = kCACornerCurveContinuous;
     iv.backgroundColor = Dyn([UIColor colorWithWhite:0 alpha:0.08], [UIColor colorWithWhite:1 alpha:0.1]);
     [cap addSubview:iv];
-    UILabel *k = [[UILabel alloc] initWithFrame:CGRectMake(62, 9, W - 62 - 48, 15)];
-    k.text = @"Up Next"; k.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold]; k.textColor = GlassIconDim();
+    UILabel *k = [[UILabel alloc] initWithFrame:CGRectMake(47, 6, W - 47 - 40, 13)];
+    k.text = @"Up Next"; k.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold]; k.textColor = GlassIconDim();
     k.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [cap addSubview:k];
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(62, 25, W - 62 - 48, 22)];
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(47, 19, W - 47 - 40, 20)];
     t.text = artist.length ? [NSString stringWithFormat:@"%@ · %@", title, artist] : title;
-    t.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; t.textColor = GlassIcon();
+    t.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]; t.textColor = GlassIcon();
     t.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [cap addSubview:t];
-    UIImageView *fw = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"forward.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]];
+    UIImageView *fw = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"forward.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]]];
     fw.tintColor = GlassIcon(); fw.contentMode = UIViewContentModeCenter;
-    fw.frame = CGRectMake(W - 46, 0, 36, H); fw.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    fw.frame = CGRectMake(W - 38, 0, 30, H); fw.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
     [cap addSubview:fw];
     MPUpNext *u = [MPUpNext shared];
     [cap addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:u action:@selector(tapped:)]];
