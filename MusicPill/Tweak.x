@@ -391,6 +391,7 @@ static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
 static __weak UIScrollView *gArtistCV;
+static void ApplyAboutHide(UIScrollView *sv);
 static NSString *gAboutDebug = @"-";
 static void FavStarTick(UIWindow *w);
 // Artists you favorited (by name), so search can show a star next to them.
