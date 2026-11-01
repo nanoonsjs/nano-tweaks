@@ -1,4 +1,5 @@
-// MusicPill 1.2.49 - made by nano
+// MusicPill 1.2.50 - made by nano
+// 1.2.50: fixed Music freezing when opening the queue (Up Next no longer asks Music's player; it reads the queue page, with covers); pins debug
 // 1.2.49: "Up Next" capsule grows out of the pill 10s before a song ends (tap to skip, swipe away); pin songs to Search from the player's ••• menu, they show as glass chips on top of Search (tap to find, hold to unpin)
 // 1.2.48: the X circle lines up with the search field (its own centered xmark) and has the same jelly press as the bottom circles
 // 1.2.47: X centered in its circle and level with the search field; Apple Music / Library switch a bit lower
@@ -1343,7 +1344,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.49 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.50 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1701,6 +1702,9 @@ static NSString *MusicBarTitle(UIView *mini);
 static BOOL gEverPlayed;   // something has played since Music opened
 static void UpNextCheck(NSDictionary *info, NSString *title, UIView *pill);
 static int gNowPlayingPID;  // the app whose song MediaRemote reports
+static NSArray *gQueueCache;          // songs after the current one, as the queue page lists them
+static NSString *gQueueCacheFor;      // the song playing when they were read
+static NSString *gPinsDebug = @"-";
 static BOOL gOtherApp;      // that app isn't Music (YouTube etc.)
 // One of Music's own (hidden) bar buttons, by its symbol: so play / next act on
 // Music even when another app is the one "now playing".
@@ -5740,7 +5744,7 @@ static void FloatTick(UIWindow *w) {
     if (artist && more && more != favMore) { favMore = more; @try { RefreshArtistFav(); } @catch (__unused id e) {} }
     if (!album && !artist && more) GlassCircleFor((UIControl *)more, TOPBTN);
     if (gRowParent && gRowParent.window == w) RedToWhite(gRowParent);
-    gFloatDebug = [NSString stringWithFormat:@"motion: %@ | search: %@ | artist: %@ | share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gMotionDebug, gSearchDebug, gArtistDebug, gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
+    gFloatDebug = [NSString stringWithFormat:@"motion: %@ | pins: %@ | search: %@ | artist: %@ | share: %@ | red: %@ | %lu icons back=%@ more=%@ dl=%@ | %@", gMotionDebug, gPinsDebug, gSearchDebug, gArtistDebug, gShareDebug, gRedDebug, (unsigned long)found.count, NSStringFromClass([back class]), NSStringFromClass([more class]), NSStringFromClass([dl class]), [dbg componentsJoinedByString:@" "]];
 }
 
 // Music's top buttons (Swift SymbolButton): when the download one changes state
@@ -6073,6 +6077,41 @@ static void QueueTick(UIView *player) {
     gQShuffle = sh; gQRepeat = rp; gQAuto = ap;
     gQueueTable = table;
     gQueueHeader = header;
+    // Remember the songs listed under the header (the "Up Next" capsule uses them).
+    static CFTimeInterval lastCache;
+    if (CACurrentMediaTime() - lastCache > 1.0) {
+        lastCache = CACurrentMediaTime();
+        @try {
+            CGFloat hy = CGRectGetMaxY([header convertRect:header.bounds toView:table]);
+            NSMutableArray *rows = [NSMutableArray array];
+            for (UIView *cell in table.subviews) {
+                if (![cell isKindOfClass:[UITableViewCell class]] && ![cell isKindOfClass:[UICollectionViewCell class]]) continue;
+                if (cell.hidden || CGRectGetMinY(cell.frame) < hy - 2) continue;
+                NSMutableArray *texts = [NSMutableArray array]; UIImage *img = nil; CGFloat area = 0;
+                NSMutableArray *cs = [NSMutableArray arrayWithObject:cell];
+                int gc = 0;
+                while (cs.count && gc++ < 200) {
+                    UIView *v = cs.lastObject; [cs removeLastObject];
+                    if (v.hidden) continue;
+                    NSString *t = [v isKindOfClass:[UILabel class]] ? ((UILabel *)v).text : ([NSStringFromClass([v class]) containsString:@"TextDrawing"] ? DrawnText(v) : nil);
+                    if (t.length > 1) { [texts addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:cell].y)}]; continue; }
+                    UIImage *im = [v isKindOfClass:[UIImageView class]] ? ((UIImageView *)v).image : nil;
+                    if (!im && v.layer.contents && CFGetTypeID((__bridge CFTypeRef)v.layer.contents) == CGImageGetTypeID()) im = [UIImage imageWithCGImage:(__bridge CGImageRef)v.layer.contents];
+                    CGFloat ar = v.bounds.size.width * v.bounds.size.height;
+                    if (im && ar > area && v.bounds.size.width >= 30 && fabs(v.bounds.size.width - v.bounds.size.height) < 6) { area = ar; img = im; }
+                    [cs addObjectsFromArray:v.subviews];
+                }
+                [texts sortUsingComparator:^NSComparisonResult(NSDictionary *x, NSDictionary *y2) { return [x[@"y"] compare:y2[@"y"]]; }];
+                if (!texts.count) continue;
+                NSMutableDictionary *d = [@{@"t": texts[0][@"t"], @"y": @(CGRectGetMinY(cell.frame))} mutableCopy];
+                if (texts.count > 1) d[@"a"] = texts[1][@"t"];
+                if (img) d[@"img"] = img;
+                [rows addObject:d];
+            }
+            [rows sortUsingComparator:^NSComparisonResult(NSDictionary *x, NSDictionary *y2) { return [x[@"y"] compare:y2[@"y"]]; }];
+            if (rows.count) { gQueueCache = rows; gQueueCacheFor = gNowTitle; }
+        } @catch (__unused id e) {}
+    }
 
     if (!objc_getAssociatedObject(table, kQueueTable)) {
         objc_setAssociatedObject(table, kQueuePad, @(table.clipsToBounds), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -6978,30 +7017,18 @@ __attribute__((unused)) static void FavStarTick(UIWindow *w) {
 
 #pragma mark - Up Next capsule
 
-// The song after this one, asked on a background queue (asking Music's player
-// from the main thread can lock the app up).
+// The song after this one, from the queue list (remembered each time the queue
+// page is open). Asking Music's player directly froze Music when the queue was
+// opened, so it isn't used.
 static void FetchNextTrack(void (^done)(NSString *title, NSString *artist, UIImage *art)) {
-    static dispatch_queue_t q;
-    if (!q) q = dispatch_queue_create("musicpill.next", DISPATCH_QUEUE_SERIAL);
-    dispatch_async(q, ^{
-        NSString *t = nil, *a = nil; UIImage *img = nil;
-        @try {
-            Class C = NSClassFromString(@"MPMusicPlayerController");
-            id mp = [C respondsToSelector:@selector(systemMusicPlayer)] ? [C performSelector:@selector(systemMusicPlayer)] : nil;
-            SEL at = NSSelectorFromString(@"nowPlayingItemAtIndex:");
-            if (mp && [mp respondsToSelector:at] && [mp respondsToSelector:@selector(indexOfNowPlayingItem)]) {
-                NSUInteger i = ((NSUInteger (*)(id, SEL))objc_msgSend)(mp, @selector(indexOfNowPlayingItem));
-                if (i != NSNotFound) {
-                    MPMediaItem *it = ((id (*)(id, SEL, NSUInteger))objc_msgSend)(mp, at, i + 1);
-                    if ([it isKindOfClass:[MPMediaItem class]]) {
-                        t = it.title; a = it.artist;
-                        img = [it.artwork imageWithSize:CGSizeMake(96, 96)];
-                    }
-                }
-            }
-        } @catch (__unused id e) {}
-        dispatch_async(dispatch_get_main_queue(), ^{ done(t, a, img); });
-    });
+    NSArray *q = gQueueCache;
+    NSString *now = gNowTitle;
+    NSDictionary *next = nil;
+    if (q.count && now.length) {
+        if ([gQueueCacheFor isEqualToString:now]) next = q.firstObject;
+        else for (NSUInteger i = 0; i + 1 < q.count; i++) if ([q[i][@"t"] isEqualToString:now]) { next = q[i + 1]; break; }
+    }
+    done(next[@"t"], next[@"a"], next[@"img"]);
 }
 #define UPNEXT_TAG 0x4D50554E
 @interface MPUpNext : NSObject
@@ -7117,7 +7144,7 @@ static NSInteger PinIndex(NSString *t, NSString *a) {
 static UIAction *PinMenuAction(void) {
     if (!gPins) return nil;
     UIWindow *w = gLastTabBar.window;
-    if (!w || !PlayerIsUp(w, NULL) || !gNowTitle.length) return nil;
+    if (!w || !PlayerIsUp(w, NULL) || !gNowTitle.length) { gPinsDebug = [NSString stringWithFormat:@"menu: player=%d title=%lu", w ? PlayerIsUp(w, NULL) : -1, (unsigned long)gNowTitle.length]; return nil; }
     NSString *t = gNowTitle, *a = gNowArtist ?: @"";
     BOOL pinned = PinIndex(t, a) >= 0;
     return [UIAction actionWithTitle:pinned ? @"Unpin from Search" : @"Pin to Search" image:[UIImage systemImageNamed:pinned ? @"pin.slash" : @"pin"] identifier:nil handler:^(__unused UIAction *x) {
@@ -7183,6 +7210,7 @@ static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb
     UIView *row = [list viewWithTag:PINS_TAG];
     NSArray *ps = Pins();
     BOOL want = gPins && sc.isActive && sb.text.length == 0 && ps.count > 0;
+    gPinsDebug = [NSString stringWithFormat:@"on=%d active=%d text=%lu pins=%lu", gPins, sc.isActive, (unsigned long)sb.text.length, (unsigned long)ps.count];
     BOOL inset = objc_getAssociatedObject(list, &kPinsInset) != nil;
     if (!want) {
         if (inset) {
