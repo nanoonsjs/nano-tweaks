@@ -1,4 +1,5 @@
-// MusicPill 1.2.65 - made by nano
+// MusicPill 1.2.66 - made by nano
+// 1.2.66: About reads the artist page's main list (it was reading a small list inside the header)
 // 1.2.65: About reading also tries spoken labels and text layers; more debug
 // 1.2.64: About sheet finds the artist page's list another way (it wasn't found before)
 // 1.2.63: About sheet reads Music's text better and finds the header photo inside layers; keeps checking the page so the bottom About is removed
@@ -1365,7 +1366,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.65 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.66 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -6776,7 +6777,7 @@ static void StartWatchdog(void) {
         if (w && !playerUp) {
             @try { AlbumTick(w); } @catch (__unused id e) {}
             { static CFTimeInterval lastAb; UICollectionView *acv = gArtistCV;
-              if (acv.window == w && CACurrentMediaTime() - lastAb > 1.0) { lastAb = CACurrentMediaTime(); @try { AboutScan(acv.subviews.firstObject, NO); } @catch (__unused id e) {} } }
+              if (acv.window == w && acv.bounds.size.height > w.bounds.size.height * 0.5 && CACurrentMediaTime() - lastAb > 1.0) { lastAb = CACurrentMediaTime(); @try { AboutScan(acv.subviews.firstObject, NO); } @catch (__unused id e) {} } }
             @try { NavTick(TopNavBar(w)); } @catch (__unused id e) {}
             @try { FloatTick(w); } @catch (__unused id e) {}
         }
@@ -7643,9 +7644,10 @@ static NSString *TextOf(UIView *v) {
 // Genre, and the header photo. Also remembers where it sits so it can be taken
 // off the page. force: scroll the list there for a moment (invisibly) to load it.
 static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
+    // The page's main (outermost) list: the header can sit inside a smaller list.
     UICollectionView *cv = nil;
-    for (UIView *p = inPage.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]]) { cv = (UICollectionView *)p; break; }
-    if (!cv && [inPage.superview isKindOfClass:[UICollectionView class]]) cv = (UICollectionView *)inPage.superview;
+    for (UIView *p = inPage.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]] && p.bounds.size.height > p.window.bounds.size.height * 0.5) cv = (UICollectionView *)p;
+    if (!cv) for (UIView *p = inPage.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]]) cv = (UICollectionView *)p;
     if (!cv && inPage.window) {
         // The page's main list: the biggest vertical list on screen.
         NSMutableArray *st = [NSMutableArray arrayWithObject:inPage.window];
