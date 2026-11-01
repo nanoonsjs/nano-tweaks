@@ -1,4 +1,6 @@
-// InstaGlass 0.1.0 - made by nano
+// InstaGlass 0.2.0 - made by nano
+// 0.2.0: also the normal full-width tab bar (profile etc.): it becomes a floating
+//        glass pill with a glass bubble under the tab you tap
 // 0.1.0: Instagram's floating tab bar becomes a liquid glass pill (light / dark),
 //        the selected-tab bubble becomes clear glass that stretches like liquid
 //        when it slides to another tab. Debug: hold three fingers on the screen.
@@ -27,7 +29,7 @@ static UIView *FindBar(UIWindow *w) {
         if (v.hidden || v.alpha < 0.05 || v.tag == DEBUG_TAG || v.tag == GLASS_TAG) continue;
         if ([v isKindOfClass:[UIScrollView class]] && v.bounds.size.height > H * 0.5) { [st addObjectsFromArray:v.subviews]; continue; }
         CGRect f = [v convertRect:v.bounds toView:nil];
-        BOOL shape = f.size.width > W * 0.55 && f.size.width < W * 0.99 && f.size.height >= 44 && f.size.height <= 90 && CGRectGetMidY(f) > H * 0.82;
+        BOOL shape = f.size.width > W * 0.55 && f.size.width <= W + 1 && f.size.height >= 44 && f.size.height <= 130 && CGRectGetMidY(f) > H * 0.8 && CGRectGetMaxY(f) <= H + 2;
         if (shape) {
             // count the icon-ish things inside, spread across the width
             int icons = 0;
@@ -54,6 +56,31 @@ static UIView *FindBar(UIWindow *w) {
     return best;
 }
 
+// The tab icons (one per column), in the bar's coordinates, left to right.
+static NSArray *IconFrames(UIView *bar) {
+    CGSize B = bar.bounds.size;
+    NSMutableDictionary *cols = [NSMutableDictionary dictionary];
+    NSMutableArray *st = [NSMutableArray arrayWithArray:bar.subviews];
+    int g = 0;
+    while (st.count && g++ < 300) {
+        UIView *x = st.lastObject; [st removeLastObject];
+        if (x.hidden || x.tag == GLASS_TAG || x.tag == GLASS_TAG + 1) continue;
+        CGSize s = x.bounds.size;
+        if ([x isKindOfClass:[UIImageView class]] && s.width >= 18 && s.width <= 60 && s.height >= 18 && s.height <= 60) {
+            CGRect f = [x convertRect:x.bounds toView:bar];
+            NSNumber *col = @((int)(CGRectGetMidX(f) / (B.width / 10)));
+            NSValue *old = cols[col];
+            if (!old || f.size.width * f.size.height > old.CGRectValue.size.width * old.CGRectValue.size.height) cols[col] = [NSValue valueWithCGRect:f];
+            continue;
+        }
+        [st addObjectsFromArray:x.subviews];
+    }
+    NSArray *keys = [cols.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSNumber *k in keys) [out addObject:cols[k]];
+    return out;
+}
+static BOOL IsFullBar(UIView *bar) { return bar.bounds.size.width >= bar.window.bounds.size.width - 2; }
 // Clear Instagram's own fill / blur behind the bar (views the size of the bar).
 static void ClearBackground(UIView *bar) {
     CGSize B = bar.bounds.size;
@@ -63,7 +90,8 @@ static void ClearBackground(UIView *bar) {
         UIView *v = st.lastObject; [st removeLastObject];
         if (v.tag == GLASS_TAG) continue;
         CGSize s = v.bounds.size;
-        BOOL full = s.width >= B.width * 0.95 && s.height >= B.height * 0.85;
+        BOOL full = s.width >= B.width * 0.95 && s.height >= B.height * 0.5;
+        if (s.width >= B.width * 0.95 && s.height <= 1.5 && !v.hidden) v.hidden = YES;   // the hairline on top
         if (full) {
             if (v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) > 0) v.backgroundColor = UIColor.clearColor;
             if ([v isKindOfClass:[UIVisualEffectView class]] && v != bar) v.alpha = 0;
@@ -97,6 +125,13 @@ static void Glass(UIView *bar) {
     }
     if (bar.subviews.firstObject != g) [bar sendSubviewToBack:g];
     CGRect want = bar.bounds;
+    if (IsFullBar(bar)) {
+        NSArray *ic = IconFrames(bar);
+        CGFloat midY = 0; for (NSValue *v in ic) midY += CGRectGetMidY(v.CGRectValue);
+        midY = ic.count ? midY / ic.count : 30;
+        CGFloat h = 62;
+        want = CGRectMake(14, round(midY - h / 2), bar.bounds.size.width - 28, h);
+    }
     CGFloat r = MIN(want.size.height, want.size.width) / 2;
     if (!CGRectEqualToRect(g.frame, want)) { g.frame = want; g.layer.cornerRadius = r; }
     NSNumber *was = objc_getAssociatedObject(g, "dark");
@@ -115,8 +150,8 @@ static void Glass(UIView *bar) {
         [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = CGRectMake(0, 0, want.size.width, want.size.height * 0.5); [CATransaction commit];
     }
     if (bar.clipsToBounds) bar.clipsToBounds = NO;
-    if (bar.layer.cornerRadius != r) { bar.layer.cornerRadius = r; bar.layer.cornerCurve = kCACornerCurveContinuous; }
-    bar.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:bar.bounds cornerRadius:r].CGPath;
+    if (!IsFullBar(bar) && bar.layer.cornerRadius != r) { bar.layer.cornerRadius = r; bar.layer.cornerCurve = kCACornerCurveContinuous; }
+    bar.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:want cornerRadius:r].CGPath;
 }
 
 // The selected-tab bubble: a filled capsule inside the bar, about one tab wide.
@@ -194,6 +229,44 @@ static void StyleBubble(UIView *b) {
 }
 @end
 
+static NSInteger gSelected = 0;
+static void PlaceOwnBubble(UIView *bar, BOOL animated) {
+    UIView *g = [bar viewWithTag:GLASS_TAG];
+    NSArray *ic = IconFrames(bar);
+    if (!g || !ic.count) return;
+    UIView *b = [bar viewWithTag:GLASS_TAG + 1];
+    if (!b) {
+        b = [UIView new]; b.tag = GLASS_TAG + 1; b.userInteractionEnabled = NO;
+        [bar insertSubview:b aboveSubview:g];
+    }
+    if (b.superview.subviews.count > 1 && [bar.subviews indexOfObject:b] != [bar.subviews indexOfObject:g] + 1) [bar insertSubview:b aboveSubview:g];
+    NSInteger i = MAX(0, MIN(gSelected, (NSInteger)ic.count - 1));
+    CGRect gf = g.frame, f = [ic[i] CGRectValue];
+    CGFloat w = MIN(gf.size.width / ic.count + 6, 92), h = gf.size.height - 10;
+    CGRect want = CGRectMake(round(MIN(MAX(CGRectGetMidX(f) - w / 2, CGRectGetMinX(gf) + 5), CGRectGetMaxX(gf) - 5 - w)), CGRectGetMinY(gf) + 5, w, h);
+    gBubble = b;
+    StyleBubble(b);
+    if (CGRectEqualToRect(b.frame, want)) return;
+    if (!animated || CGRectIsEmpty(b.frame)) { b.frame = want; return; }
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.4 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ b.frame = want; } completion:nil];
+}
+@interface IGTap : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+@implementation IGTap
++ (instancetype)shared { static IGTap *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [IGTap new]; }); return t; }
+- (void)tap:(UITapGestureRecognizer *)tg {
+    UIView *bar = tg.view;
+    NSArray *ic = IconFrames(bar);
+    if (!ic.count) return;
+    CGFloat x = [tg locationInView:bar].x, best = CGFLOAT_MAX; NSInteger bi = 0;
+    for (NSUInteger i = 0; i < ic.count; i++) { CGFloat d = fabs(CGRectGetMidX([ic[i] CGRectValue]) - x); if (d < best) { best = d; bi = i; } }
+    gSelected = bi;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    if (IsFullBar(bar)) PlaceOwnBubble(bar, YES);
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+@end
 static void DebugBox(UIWindow *w) {
     UILabel *l = (UILabel *)[w viewWithTag:DEBUG_TAG];
     if (!gShowDebug) { [l removeFromSuperview]; return; }
@@ -204,7 +277,7 @@ static void DebugBox(UIWindow *w) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" InstaGlass 0.1.0 debug\n %@", gDebug];
+    l.text = [NSString stringWithFormat:@" InstaGlass 0.2.0 debug\n %@", gDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 600)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 60, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
@@ -245,13 +318,42 @@ static void Tick(void) {
     if (bar) {
         ClearBackground(bar);
         Glass(bar);
-        UIView *b = FindBubble(bar);
-        if (b) { StyleBubble(b); gBubble = b; }
+        static const char kTapped = 0;
+        if (!objc_getAssociatedObject(bar, &kTapped)) {
+            objc_setAssociatedObject(bar, &kTapped, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            UITapGestureRecognizer *tg = [[UITapGestureRecognizer alloc] initWithTarget:[IGTap shared] action:@selector(tap:)];
+            tg.cancelsTouchesInView = NO; tg.delaysTouchesEnded = NO; tg.delegate = [IGTap shared];
+            [bar addGestureRecognizer:tg];
+        }
+        UIView *b = nil;
+        if (IsFullBar(bar)) {
+            // Which tab is on: Instagram's own UITabBar knows, if it is one.
+            if ([bar isKindOfClass:[UITabBar class]]) { UITabBar *tb = (UITabBar *)bar; NSUInteger i = tb.selectedItem ? [tb.items indexOfObject:tb.selectedItem] : NSNotFound; if (i != NSNotFound) gSelected = i; }
+            PlaceOwnBubble(bar, YES);
+            b = [bar viewWithTag:GLASS_TAG + 1];
+        } else {
+            [[bar viewWithTag:GLASS_TAG + 1] removeFromSuperview];
+            b = FindBubble(bar);
+            if (b) { StyleBubble(b); gBubble = b; }
+        }
         CGRect f = [bar convertRect:bar.bounds toView:nil];
-        gDebug = [NSString stringWithFormat:@"bar=%@ %.0fx%.0f @%.0f\n parent=%@\n bubble=%@ %.0fx%.0f\n dark=%d",
-                  NSStringFromClass([bar class]), f.size.width, f.size.height, f.origin.y, NSStringFromClass([bar.superview class]),
+        gDebug = [NSString stringWithFormat:@"bar=%@ %.0fx%.0f @%.0f full=%d icons=%lu sel=%ld\n parent=%@\n bubble=%@ %.0fx%.0f\n dark=%d",
+                  NSStringFromClass([bar class]), f.size.width, f.size.height, f.origin.y, IsFullBar(bar), (unsigned long)IconFrames(bar).count, (long)gSelected, NSStringFromClass([bar.superview class]),
                   b ? NSStringFromClass([b class]) : @"none", b.bounds.size.width, b.bounds.size.height, IsDark(bar)];
-    } else gDebug = @"no bar found";
+    } else {
+        NSMutableArray *c = [NSMutableArray array];
+        NSMutableArray *st = [NSMutableArray arrayWithObject:w];
+        int g = 0;
+        while (st.count && g++ < 6000 && c.count < 8) {
+            UIView *v = st.lastObject; [st removeLastObject];
+            if (v.hidden || v.tag == DEBUG_TAG) continue;
+            CGRect f = [v convertRect:v.bounds toView:nil];
+            if (f.size.width > w.bounds.size.width * 0.5 && f.size.height < 160 && f.size.height > 30 && CGRectGetMinY(f) > w.bounds.size.height * 0.75)
+                [c addObject:[NSString stringWithFormat:@"%@ %.0fx%.0f@%.0f", NSStringFromClass([v class]), f.size.width, f.size.height, f.origin.y]];
+            [st addObjectsFromArray:v.subviews];
+        }
+        gDebug = [NSString stringWithFormat:@"no bar found\n %@", [c componentsJoinedByString:@"\n "]];
+    }
     DebugBox(w);
 }
 
