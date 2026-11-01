@@ -1,4 +1,8 @@
-// Messages26 0.3.0 - made by nano
+// Messages26 0.4.0 - made by nano
+// 0.4.0: + grows into the menu (iOS 26 morph); hold and drag apps to reorder them;
+//        icons never black out; hold + opens Photos every time; field background
+//        lined up; name glass covers the whole name; FaceTime glass morphs open;
+//        the back button shows the unread count
 // 0.3.0: app icons in the + menu, faster liquid open, smaller glass on the top buttons,
 //        names no longer cut off, the conversation list is left alone, hold + for Photos,
 //        the field sits at the bottom (no gap where the app row was)
@@ -86,9 +90,25 @@ static UIView *Find(UIView *root, BOOL (^test)(UIView *v), int limit) {
 @end
 
 // Apps in the (hidden) app strip: name, icon, and how to open them.
+static NSMutableDictionary *gIconCache;   // name -> a good icon (the strip doesn't always have one drawn)
+static BOOL MostlyEmpty(UIImage *img) {
+    CGImageRef cg = img.CGImage;
+    if (!cg) return YES;
+    const int N = 12; uint8_t px[N * N * 4]; memset(px, 0, sizeof(px));
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(px, N, N, 8, N * 4, cs, kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(cs);
+    if (!ctx) return YES;
+    CGContextDrawImage(ctx, CGRectMake(0, 0, N, N), cg);
+    CGContextRelease(ctx);
+    int lit = 0;
+    for (int i = 0; i < N * N; i++) if (px[i * 4 + 3] > 40 && (px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2]) > 60) lit++;
+    return lit < N * N / 8;
+}
 static NSArray *StripApps(void) {
     UICollectionView *cv = gStripCV;
     if (!cv) return @[];
+    if (!gIconCache) gIconCache = [NSMutableDictionary dictionary];
     NSMutableArray *out = [NSMutableArray array];
     NSInteger secs = [cv numberOfSections];
     for (NSInteger s = 0; s < secs; s++) {
@@ -116,10 +136,12 @@ static NSArray *StripApps(void) {
             }
             if (!name.length) name = [NSString stringWithFormat:@"App %ld", (long)i + 1];
             if (!icon && cell.bounds.size.width > 10) {
-                // draw the cell itself (its own icon), whatever holds the picture
                 UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:cell.bounds.size];
                 icon = [r imageWithActions:^(UIGraphicsImageRendererContext *c) { [cell.layer renderInContext:c.CGContext]; }];
             }
+            // a blacked-out picture (not drawn yet): use the last good one
+            if (icon && !MostlyEmpty(icon)) gIconCache[name] = icon;
+            else icon = gIconCache[name];
             [out addObject:@{@"name": name, @"icon": icon ?: [UIImage systemImageNamed:@"app.fill"], @"ip": ip}];
         }
     }
@@ -128,21 +150,80 @@ static NSArray *StripApps(void) {
 static void OpenStripApp(NSIndexPath *ip) {
     UICollectionView *cv = gStripCV;
     if (!cv || !ip) return;
+    for (NSIndexPath *p in cv.indexPathsForSelectedItems) {
+        [cv deselectItemAtIndexPath:p animated:NO];
+        if ([cv.delegate respondsToSelector:@selector(collectionView:didDeselectItemAtIndexPath:)]) [cv.delegate collectionView:cv didDeselectItemAtIndexPath:p];
+    }
     [cv selectItemAtIndexPath:ip animated:NO scrollPosition:UICollectionViewScrollPositionNone];
     if ([cv.delegate respondsToSelector:@selector(collectionView:didSelectItemAtIndexPath:)]) [cv.delegate collectionView:cv didSelectItemAtIndexPath:ip];
 }
-
 static NSDictionary *PhotosApp(void) {
-    for (NSDictionary *a in StripApps()) if ([[a[@"name"] lowercaseString] isEqualToString:@"photos"]) return a;
-    for (NSDictionary *a in StripApps()) if ([[a[@"name"] lowercaseString] containsString:@"photos"] && ![[a[@"name"] lowercaseString] containsString:@"google"]) return a;
+    NSArray *apps = StripApps();
+    for (NSDictionary *a in apps) if ([[a[@"name"] lowercaseString] isEqualToString:@"photos"]) return a;
+    for (NSDictionary *a in apps) if ([[a[@"name"] lowercaseString] containsString:@"photos"] && ![[a[@"name"] lowercaseString] containsString:@"google"]) return a;
     return nil;
 }
+// The menu's order (names), changed by holding and dragging a row.
+static NSArray *SavedOrder(void) { return [[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.order"] ?: @[]; }
+static NSArray *MenuItems(void) {
+    NSMutableArray *items = [NSMutableArray array];
+    NSArray *apps = StripApps();
+    NSDictionary *photos = PhotosApp();
+    if (photos) [items addObject:photos];
+    [items addObject:@{@"name": @"Camera", @"icon": [UIImage systemImageNamed:@"camera.fill"], @"camera": @YES}];
+    for (NSDictionary *a in apps) if (a != photos && ![a[@"name"] isEqual:photos[@"name"]] && ![[a[@"name"] lowercaseString] containsString:@"app store"] && ![[a[@"name"] lowercaseString] isEqualToString:@"store"]) [items addObject:a];
+    NSArray *order = SavedOrder();
+    [items sortWithOptions:NSSortStable usingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        NSUInteger ia = [order indexOfObject:a[@"name"]], ib = [order indexOfObject:b[@"name"]];
+        if (ia == ib) return NSOrderedSame;
+        return ia < ib ? NSOrderedAscending : NSOrderedDescending;
+    }];
+    return items;
+}
+
+#define ROW_H 62.0
 @implementation M26Menu {
-    UIView *_dim, *_panel;
+    UIView *_dim, *_panel, *_glass;
+    UIScrollView *_sv;
     __weak UIButton *_plus;
-    NSArray *_items;
+    NSMutableArray *_items, *_rows;
+    UIView *_lifted; NSInteger _liftFrom; CGFloat _liftDY;
 }
 + (instancetype)shared { static M26Menu *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Menu new]; }); return t; }
+- (UIButton *)rowFor:(NSDictionary *)it width:(CGFloat)W ink:(UIColor *)ink {
+    UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
+    row.bounds = CGRectMake(0, 0, W, ROW_H);
+    row.layer.cornerRadius = 20; row.layer.cornerCurve = kCACornerCurveContinuous;
+    [row addTarget:self action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
+    [row addTarget:self action:@selector(down:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
+    [row addTarget:self action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchDragExit | UIControlEventTouchCancel];
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(drag:)];
+    lp.minimumPressDuration = 0.35;
+    [row addGestureRecognizer:lp];
+    UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(22, 9, 44, 44)];
+    iv.image = [it[@"icon"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]; iv.contentMode = UIViewContentModeScaleAspectFill;
+    iv.layer.cornerRadius = 22; iv.clipsToBounds = YES;
+    if (it[@"camera"]) { iv.contentMode = UIViewContentModeCenter; iv.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1];
+        iv.image = [[UIImage systemImageNamed:@"camera.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]] imageWithTintColor:UIColor.whiteColor renderingMode:UIImageRenderingModeAlwaysOriginal]; }
+    iv.userInteractionEnabled = NO;
+    [row addSubview:iv];
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(84, 0, W - 100, ROW_H)];
+    l.text = it[@"name"]; l.font = [UIFont systemFontOfSize:21 weight:UIFontWeightRegular]; l.textColor = ink;
+    l.userInteractionEnabled = NO;
+    [row addSubview:l];
+    return row;
+}
+- (void)layoutRows:(BOOL)animated except:(UIView *)skip {
+    void (^go)(void) = ^{
+        for (NSUInteger i = 0; i < self->_rows.count; i++) {
+            UIView *r = self->_rows[i];
+            if (r == skip) continue;
+            r.center = CGPointMake(r.bounds.size.width / 2, 12 + i * ROW_H + ROW_H / 2);
+        }
+    };
+    if (animated) [UIView animateWithDuration:0.28 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.2 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:go completion:nil];
+    else go();
+}
 - (void)open:(UIButton *)plus {
     UIWindow *w = plus.window;
     if (!w || _panel.superview) return;
@@ -150,71 +231,119 @@ static NSDictionary *PhotosApp(void) {
     _plus = plus;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     [w endEditing:YES];
-    // Photos first, then Camera, then the rest of the apps.
-    NSMutableArray *items = [NSMutableArray array];
-    NSArray *apps = StripApps();
-    NSDictionary *photos = PhotosApp();
-    if (photos) [items addObject:photos];
-    [items addObject:@{@"name": @"Camera", @"icon": [UIImage systemImageNamed:@"camera.fill"], @"camera": @YES}];
-    for (NSDictionary *a in apps) if (a != photos && ![[a[@"name"] lowercaseString] containsString:@"app store"]) [items addObject:a];
-    _items = items;
+    _items = [MenuItems() mutableCopy];
 
     _dim = [[UIView alloc] initWithFrame:w.bounds];
-    _dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
+    _dim.backgroundColor = UIColor.clearColor;
     [_dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(close)]];
     [w addSubview:_dim];
 
     CGRect pf = [plus convertRect:plus.bounds toView:w];
-    CGFloat W = MIN(w.bounds.size.width - 40, 330), rowH = 62;
-    CGFloat H = MIN(items.count * rowH + 24, w.bounds.size.height * 0.62);
-    CGFloat bottom = CGRectGetMinY(pf) - 12;
-    _panel = [[UIView alloc] initWithFrame:CGRectMake(16, bottom - H, W, H)];
+    CGFloat W = MIN(w.bounds.size.width - 40, 330);
+    CGFloat H = MIN(_items.count * ROW_H + 24, w.bounds.size.height * 0.62);
+    CGRect full = CGRectMake(CGRectGetMinX(pf), CGRectGetMinY(pf) - 12 - H, W, H);
+    // The panel IS the "+" glass growing: it starts as the circle and stretches
+    // up and right into the menu (iOS 26), its corners easing from round to soft.
+    _panel = [[UIView alloc] initWithFrame:pf];
     _panel.tag = MENU_TAG;
     _panel.layer.shadowColor = UIColor.blackColor.CGColor; _panel.layer.shadowOpacity = 0.35; _panel.layer.shadowRadius = 30; _panel.layer.shadowOffset = CGSizeMake(0, 12);
-    UIVisualEffectView *g = GlassView(plus);
-    g.frame = _panel.bounds; g.layer.cornerRadius = 34; g.userInteractionEnabled = YES;
-    [_panel addSubview:g];
-    UIScrollView *sv = [[UIScrollView alloc] initWithFrame:g.bounds];
-    sv.contentSize = CGSizeMake(W, items.count * rowH + 24);
-    sv.showsVerticalScrollIndicator = NO;
-    [g.contentView addSubview:sv];
-    for (NSUInteger i = 0; i < items.count; i++) {
-        NSDictionary *it = items[i];
-        UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
-        row.frame = CGRectMake(0, 12 + i * rowH, W, rowH);
-        row.tag = i;
-        [row addTarget:self action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
-        [row addTarget:self action:@selector(down:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
-        [row addTarget:self action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchDragExit | UIControlEventTouchCancel];
-        UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(22, 9, 44, 44)];
-        iv.image = [it[@"icon"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]; iv.contentMode = UIViewContentModeScaleAspectFill;
-        iv.layer.cornerRadius = 22; iv.clipsToBounds = YES;
-        if (it[@"camera"]) { iv.contentMode = UIViewContentModeCenter; iv.tintColor = UIColor.whiteColor; iv.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1];
-            iv.image = [UIImage systemImageNamed:@"camera.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]]; }
-        iv.userInteractionEnabled = NO;
-        [row addSubview:iv];
-        UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(84, 0, W - 100, rowH)];
-        l.text = it[@"name"]; l.font = [UIFont systemFontOfSize:21 weight:UIFontWeightRegular]; l.textColor = Ink(plus);
-        l.userInteractionEnabled = NO;
-        [row addSubview:l];
-        [sv addSubview:row];
-        // rows float in one after another
-        row.alpha = 0; row.transform = CGAffineTransformMakeTranslation(0, 14);
-        [UIView animateWithDuration:0.3 delay:0.05 + 0.015 * i usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:0 animations:^{ row.alpha = 1; row.transform = CGAffineTransformIdentity; } completion:nil];
-    }
+    _glass = GlassView(plus);
+    _glass.frame = _panel.bounds; _glass.layer.cornerRadius = pf.size.width / 2; _glass.userInteractionEnabled = YES;
+    _glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [_panel addSubview:_glass];
+    _sv = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, W, H)];
+    _sv.contentSize = CGSizeMake(W, _items.count * ROW_H + 24);
+    _sv.showsVerticalScrollIndicator = NO;
+    _sv.alpha = 0;
+    [_glass.contentView addSubview:_sv];
+    _rows = [NSMutableArray array];
+    UIColor *ink = Ink(plus);
+    for (NSDictionary *it in _items) { UIButton *r = [self rowFor:it width:W ink:ink]; [_sv addSubview:r]; [_rows addObject:r]; }
+    [self layoutRows:NO except:nil];
     [w addSubview:_panel];
-    // Liquid open: a drop leaves the "+", stretches up and swells into the menu.
-    CGPoint from = CGPointMake(CGRectGetMidX(pf) - _panel.center.x, CGRectGetMidY(pf) - _panel.center.y);
-    _panel.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(from.x, from.y), 44 / W, 44 / H);
-    g.layer.cornerRadius = 34;
-    [UIView animateKeyframesWithDuration:0.32 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
-        [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.35 animations:^{
-            self->_panel.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(from.x * 0.45, from.y * 0.45), 0.35, 0.62);
-        }];
-        [UIView addKeyframeWithRelativeStartTime:0.35 relativeDuration:0.45 animations:^{ self->_panel.transform = CGAffineTransformMakeScale(1.03, 0.98); }];
-        [UIView addKeyframeWithRelativeStartTime:0.8 relativeDuration:0.2 animations:^{ self->_panel.transform = CGAffineTransformIdentity; }];
+    plus.alpha = 0;   // the glass leaves the button
+    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.6 options:0 animations:^{
+        self->_panel.frame = full;
+        self->_dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25];
     } completion:nil];
-    [UIView animateWithDuration:0.22 animations:^{ self->_dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25]; plus.transform = CGAffineTransformMakeRotation(M_PI_4); }];
+    CABasicAnimation *cr = [CABasicAnimation animationWithKeyPath:@"cornerRadius"];
+    cr.fromValue = @(pf.size.width / 2); cr.toValue = @34; cr.duration = 0.3;
+    cr.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    _glass.layer.cornerRadius = 34;
+    [_glass.layer addAnimation:cr forKey:@"cr"];
+    [UIView animateWithDuration:0.2 delay:0.1 options:0 animations:^{ self->_sv.alpha = 1; } completion:nil];
+}
+- (void)down:(UIButton *)b { [UIView animateWithDuration:0.15 animations:^{ b.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.18]; b.transform = CGAffineTransformMakeScale(0.97, 0.97); }]; }
+- (void)up:(UIButton *)b { [UIView animateWithDuration:0.25 animations:^{ b.backgroundColor = UIColor.clearColor; b.transform = CGAffineTransformIdentity; }]; }
+// Hold a row, move it up or down, let go: the new order is kept.
+- (void)drag:(UILongPressGestureRecognizer *)g {
+    UIView *row = g.view;
+    CGFloat y = [g locationInView:_sv].y;
+    if (g.state == UIGestureRecognizerStateBegan) {
+        _lifted = row; _liftFrom = [_rows indexOfObject:row]; _liftDY = row.center.y - y;
+        _sv.scrollEnabled = NO;
+        [_sv bringSubviewToFront:row];
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+        [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+            row.transform = CGAffineTransformMakeScale(1.04, 1.04);
+            row.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.22];
+        } completion:nil];
+        return;
+    }
+    if (row != _lifted) return;
+    if (g.state == UIGestureRecognizerStateChanged) {
+        CGFloat cy = MIN(MAX(y + _liftDY, 12 + ROW_H / 2), 12 + (_rows.count - 0.5) * ROW_H);
+        row.center = CGPointMake(row.center.x, cy);
+        NSInteger to = MAX(0, MIN((NSInteger)_rows.count - 1, (NSInteger)floor((cy - 12) / ROW_H)));
+        NSInteger from = [_rows indexOfObject:row];
+        if (to != from) {
+            [_rows removeObjectAtIndex:from]; [_rows insertObject:row atIndex:to];
+            id it = _items[from]; [_items removeObjectAtIndex:from]; [_items insertObject:it atIndex:to];
+            [[UISelectionFeedbackGenerator new] selectionChanged];
+            [self layoutRows:YES except:row];
+        }
+        return;
+    }
+    _lifted = nil; _sv.scrollEnabled = YES;
+    [self layoutRows:YES except:nil];
+    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0.3 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        row.transform = CGAffineTransformIdentity; row.backgroundColor = UIColor.clearColor;
+    } completion:nil];
+    NSMutableArray *names = [NSMutableArray array];
+    for (NSDictionary *it in _items) [names addObject:it[@"name"]];
+    [[NSUserDefaults standardUserDefaults] setObject:names forKey:@"m26.order"];
+}
+- (void)closeThen:(void (^)(void))then {
+    UIView *panel = _panel, *dim = _dim; UIButton *plus = _plus; UIView *glass = _glass, *sv = _sv;
+    _panel = nil; _dim = nil;
+    if (!panel) { plus.alpha = 1; if (then) then(); return; }
+    CGRect pf = [plus convertRect:plus.bounds toView:panel.superview];
+    [UIView animateWithDuration:0.12 animations:^{ sv.alpha = 0; }];
+    CABasicAnimation *cr = [CABasicAnimation animationWithKeyPath:@"cornerRadius"];
+    cr.fromValue = @34; cr.toValue = @(pf.size.width / 2); cr.duration = 0.28;
+    glass.layer.cornerRadius = pf.size.width / 2;
+    [glass.layer addAnimation:cr forKey:@"cr"];
+    [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.3 options:0 animations:^{
+        panel.frame = pf;
+        dim.backgroundColor = UIColor.clearColor;
+    } completion:^(__unused BOOL d) {
+        plus.alpha = 1;
+        [panel removeFromSuperview]; [dim removeFromSuperview];
+        CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+        k.values = @[@1, @1.12, @0.96, @1]; k.duration = 0.35;
+        [plus.layer addAnimation:k forKey:@"m26.swallow"];
+    }];
+    if (then) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), then);
+}
+- (void)close { [self closeThen:nil]; }
+- (void)pick:(UIButton *)b {
+    NSUInteger i = [_rows indexOfObject:b];
+    NSDictionary *it = i < _items.count ? _items[i] : nil;
+    [[UISelectionFeedbackGenerator new] selectionChanged];
+    [self closeThen:^{
+        if (it[@"camera"]) { UIButton *pb = (UIButton *)gPhotoBtn; [pb sendActionsForControlEvents:UIControlEventTouchUpInside]; }
+        else if (it[@"ip"]) OpenStripApp(it[@"ip"]);
+    }];
 }
 - (void)hold:(UILongPressGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateBegan || !gMenuOn) return;
@@ -225,35 +354,6 @@ static NSDictionary *PhotosApp(void) {
     [plus.layer addAnimation:k forKey:@"m26.hold"];
     NSDictionary *p = PhotosApp();
     if (p) { [plus.window endEditing:YES]; OpenStripApp(p[@"ip"]); }
-}
-- (void)down:(UIButton *)b { [UIView animateWithDuration:0.15 animations:^{ b.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.18]; b.transform = CGAffineTransformMakeScale(0.97, 0.97); }]; }
-- (void)up:(UIButton *)b { [UIView animateWithDuration:0.25 animations:^{ b.backgroundColor = UIColor.clearColor; b.transform = CGAffineTransformIdentity; }]; }
-- (void)closeThen:(void (^)(void))then {
-    UIView *panel = _panel, *dim = _dim; UIButton *plus = _plus;
-    _panel = nil; _dim = nil;
-    if (!panel) { if (then) then(); return; }
-    CGRect pf = [plus convertRect:plus.bounds toView:panel.superview];
-    CGPoint to = CGPointMake(CGRectGetMidX(pf) - panel.center.x, CGRectGetMidY(pf) - panel.center.y);
-    CGFloat W = panel.bounds.size.width, H = panel.bounds.size.height;
-    [UIView animateKeyframesWithDuration:0.26 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
-        [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.4 animations:^{ panel.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(to.x * 0.4, to.y * 0.4), 0.4, 0.6); }];
-        [UIView addKeyframeWithRelativeStartTime:0.4 relativeDuration:0.6 animations:^{ panel.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(to.x, to.y), 40 / W, 40 / H); panel.alpha = 0; }];
-    } completion:^(__unused BOOL d) { [panel removeFromSuperview]; }];
-    [UIView animateWithDuration:0.3 animations:^{ dim.backgroundColor = UIColor.clearColor; plus.transform = CGAffineTransformIdentity; } completion:^(__unused BOOL d) { [dim removeFromSuperview]; }];
-    // "+" swallows the drop
-    CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-    k.values = @[@1, @1, @1.15, @0.95, @1]; k.duration = 0.6;
-    [plus.layer addAnimation:k forKey:@"m26.swallow"];
-    if (then) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), then);
-}
-- (void)close { [self closeThen:nil]; }
-- (void)pick:(UIButton *)b {
-    NSDictionary *it = b.tag < (NSInteger)_items.count ? _items[b.tag] : nil;
-    [[UISelectionFeedbackGenerator new] selectionChanged];
-    [self closeThen:^{
-        if (it[@"camera"]) { UIButton *pb = (UIButton *)gPhotoBtn; [pb sendActionsForControlEvents:UIControlEventTouchUpInside]; }
-        else if (it[@"ip"]) OpenStripApp(it[@"ip"]);
-    }];
 }
 @end
 
@@ -332,8 +432,21 @@ static void StyleEntry(UIView *entry) {
     CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift);
     if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t;
     // Instagram-style... no: iOS 26 field look is drawn by our pill behind it
-    if (field.backgroundColor && CGColorGetAlpha(field.backgroundColor.CGColor) > 0) field.backgroundColor = UIColor.clearColor;
-    if (field.layer.borderWidth > 0) field.layer.borderWidth = 0;
+    {
+        UIView *topc = field; while (topc.superview && topc.superview != entry) topc = topc.superview;
+        NSMutableArray *cs = [NSMutableArray arrayWithObject:topc];
+        int gc = 0;
+        while (cs.count && gc++ < 120) {
+            UIView *v = cs.lastObject; [cs removeLastObject];
+            if (v == strip || v.tag == PLUS_TAG) continue;
+            if (v.bounds.size.width > 140 && ![v isKindOfClass:[UITextView class]]) {
+                if (v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) > 0) v.backgroundColor = UIColor.clearColor;
+                if (v.layer.borderWidth > 0) v.layer.borderWidth = 0;
+                for (CALayer *l in v.layer.sublayers) if ([l isKindOfClass:[CAShapeLayer class]] && l.bounds.size.width > 140) { ((CAShapeLayer *)l).strokeColor = UIColor.clearColor.CGColor; ((CAShapeLayer *)l).fillColor = UIColor.clearColor.CGColor; }
+            }
+            [cs addObjectsFromArray:v.subviews];
+        }
+    }
     NSArray *left = LeftButtons(entry, field);
     for (UIView *b in left) { if (b.alpha > 0) b.alpha = 0; if (b.userInteractionEnabled) b.userInteractionEnabled = NO; }
     for (UIView *b in left) {
@@ -432,6 +545,7 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     CGRect want = CGRectInset(f, -padX, -padY);
     if (circle) { CGFloat d = MAX(want.size.width, want.size.height); want = CGRectMake(CGRectGetMidX(f) - d / 2, CGRectGetMidY(f) - d / 2, d, d); }
     want = CGRectIntegral(want);
+    if (g.layer.animationKeys.count || g.alpha < 1) return;
     if (!CGRectEqualToRect(g.frame, want)) { g.frame = want; g.layer.cornerRadius = MIN(want.size.width, want.size.height) / 2; }
     g.hidden = v.hidden || v.alpha < 0.05;
 }
@@ -442,6 +556,34 @@ static void UndoNav(void) {
     for (UIView *v in [gFaded allObjects]) { v.alpha = 1; v.hidden = NO; }
     [gFaded removeAllObjects];
 }
+// FaceTime: its glass circle swells out toward where the menu opens, then fades
+// into it (iOS 26 morph), and comes back when the menu closes.
+@interface M26FaceTime : NSObject
++ (instancetype)shared;
+- (void)tap:(UIControl *)c;
+@end
+@implementation M26FaceTime
++ (instancetype)shared { static M26FaceTime *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26FaceTime new]; }); return t; }
+- (void)tap:(UIControl *)c {
+    UIView *g = objc_getAssociatedObject(c, &kGlassKey);
+    if (!g) return;
+    CGRect from = g.frame;
+    CGFloat w = 230, h = 170;
+    CGRect to = CGRectMake(CGRectGetMaxX(from) - w, CGRectGetMinY(from), w, h);
+    CABasicAnimation *cr = [CABasicAnimation animationWithKeyPath:@"cornerRadius"];
+    cr.fromValue = @(from.size.width / 2); cr.toValue = @26; cr.duration = 0.25;
+    [UIView animateWithDuration:0.28 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5 options:0 animations:^{
+        g.frame = to;
+    } completion:^(__unused BOOL d) {
+        [UIView animateWithDuration:0.15 animations:^{ g.alpha = 0; } completion:^(__unused BOOL d2) {
+            g.frame = from; g.layer.cornerRadius = from.size.width / 2;
+            [UIView animateWithDuration:0.25 delay:0.6 options:0 animations:^{ g.alpha = 1; } completion:nil];
+        }];
+    }];
+    g.layer.cornerRadius = 26;
+    [g.layer addAnimation:cr forKey:@"cr"];
+}
+@end
 static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
     nb.tintColor = Ink(nb);
     // no bar background: the buttons float on the chat
@@ -464,11 +606,25 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
         NSString *cn = NSStringFromClass([v class]);
         if ([v isKindOfClass:[UIControl class]] && f.size.width >= 24 && f.size.width < 170 && f.size.height >= 24 && f.size.height < 80) {
             BOOL left = CGRectGetMidX(f) < W * 0.33, right = CGRectGetMidX(f) > W * 0.67;
+            if (left) {
+                // unread count on the back button: dark number on the white badge
+                NSMutableArray *ls = [NSMutableArray arrayWithObject:v]; int gl = 0;
+                while (ls.count && gl++ < 30) { UIView *x = ls.lastObject; [ls removeLastObject];
+                    if ([x isKindOfClass:[UILabel class]]) { UIColor *c = IsDark(nb) ? UIColor.blackColor : UIColor.whiteColor; if (![((UILabel *)x).textColor isEqual:c]) ((UILabel *)x).textColor = c; }
+                    [ls addObjectsFromArray:x.subviews]; }
+            }
+            if (right && [v isKindOfClass:[UIControl class]] && !objc_getAssociatedObject(v, "m26ft")) {
+                objc_setAssociatedObject(v, "m26ft", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [(UIControl *)v addTarget:[M26FaceTime shared] action:@selector(tap:) forControlEvents:UIControlEventTouchDown];
+            }
             if (left || right) { GlassBehind(v, left ? 10 : 9, right ? 9 : 7, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
         }
         if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
             UILabel *l = (UILabel *)v;
-            GlassBehind(l, 12, 6, NO);
+            UIView *holder = l;
+            // the label and its ">" share a small parent: cover both
+            if (l.superview && l.superview.bounds.size.width < W * 0.7 && l.superview.bounds.size.height < 44 && l.superview != nb) holder = l.superview;
+            GlassBehind(holder, 12, 6, NO);
             [found addObject:[NSString stringWithFormat:@"name:%@", l.text]];
             continue;
         }
@@ -542,7 +698,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.3.0 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.4.0 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
