@@ -27,7 +27,7 @@ jobs:
         run: |
           set +e +o pipefail
           mkdir -p out
-          for p in MusicPill Control26 Photos26 InstaGlass; do  # PhotosGlass replaced by Photos26, Spotlight26 ditched
+          for p in MusicPill Control26 Photos26 InstaGlass Messages26; do  # PhotosGlass replaced by Photos26, Spotlight26 ditched
             (cd "$p" && gmake clean package FINALPACKAGE=1) > "build-$p.log" 2>&1
             rc=$?
             cat "build-$p.log"
@@ -39,7 +39,7 @@ jobs:
             cp "$p"/packages/*.deb out/ || { echo "::error::copy failed for $p"; exit 3; }
           done
           # Every tweak also as a rootful package (palera1n rootful, checkra1n).
-          for p in MusicPill Control26 Photos26 InstaGlass; do
+          for p in MusicPill Control26 Photos26 InstaGlass Messages26; do
             rm -rf "$p/packages"
             (cd "$p" && gmake clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=) > "build-$p-rootful.log" 2>&1
             if [ $? -ne 0 ]; then cat "build-$p-rootful.log"; grep -E "error" "build-$p-rootful.log" | head -15 | sed 's/^/::error::/'; exit 2; fi
