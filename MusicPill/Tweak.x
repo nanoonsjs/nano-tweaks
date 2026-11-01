@@ -1,4 +1,5 @@
-// MusicPill 1.2.68 - made by nano
+// MusicPill 1.2.69 - made by nano
+// 1.2.69: the old About stays gone (also when Music swaps its views) and the page end no longer jumps; the About sheet keeps the artist name
 // 1.2.68: the old About no longer flickers back while scrolling (re-hidden right after Music lays out the page); no gray panel behind Similar Artists
 // 1.2.67: About works on Music's stacked artist page (sections in one scroll view): reads About / From / Born / Genre, hides that section and pulls Similar Artists up
 // 1.2.66: About reads the artist page's main list (it was reading a small list inside the header)
@@ -1369,7 +1370,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.68 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.69 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7677,7 +7678,8 @@ static NSArray *TextsIn(UIView *root) {
     [out sortUsingComparator:^NSComparisonResult(NSDictionary *x, NSDictionary *y) { return [x[@"y"] compare:y[@"y"]]; }];
     return out;
 }
-static char kAboutHidden;   // on the scroll view: NSHashTable of hidden sections
+static char kAboutHidden;   // on the scroll view: set once the About was found
+static char kAboutSig, kAboutGap;
 static void ApplyAboutHide(UIScrollView *sv);
 static NSMutableDictionary *gPageLayoutIMPs;
 static void PageLayout(UIScrollView *self, SEL _cmd) {
@@ -7686,8 +7688,24 @@ static void PageLayout(UIScrollView *self, SEL _cmd) {
     if (orig) ((void (*)(id, SEL))orig)(self, _cmd);
     if (objc_getAssociatedObject(self, &kAboutHidden)) { @try { ApplyAboutHide(self); } @catch (__unused id e) {} }
 }
+static NSMutableDictionary *gPageSizeIMPs;
+static void PageSetContentSize(UIScrollView *self, SEL _cmd, CGSize size) {
+    IMP orig = NULL;
+    for (Class c = object_getClass(self); c && !orig; c = class_getSuperclass(c)) orig = [gPageSizeIMPs[NSStringFromClass(c)] pointerValue];
+    NSNumber *gap = objc_getAssociatedObject(self, &kAboutGap);
+    if (gap) size.height = MAX(self.bounds.size.height, size.height - gap.doubleValue);
+    if (orig) ((void (*)(id, SEL, CGSize))orig)(self, _cmd, size);
+}
 static void HookPageLayout(UIScrollView *sv) {
     Class c = object_getClass(sv);
+    if (!gPageSizeIMPs) gPageSizeIMPs = [NSMutableDictionary dictionary];
+    if (!gPageSizeIMPs[NSStringFromClass(c)] && c != [UIScrollView class]) {
+        if (!class_getInstanceMethod(c, @selector(setContentSize:)) || method_getImplementation(class_getInstanceMethod(c, @selector(setContentSize:))) == method_getImplementation(class_getInstanceMethod([UIScrollView class], @selector(setContentSize:))))
+            class_addMethod(c, @selector(setContentSize:), method_getImplementation(class_getInstanceMethod([UIScrollView class], @selector(setContentSize:))), "v@:{CGSize=dd}");
+        IMP old = NULL;
+        MSHookMessageEx(c, @selector(setContentSize:), (IMP)PageSetContentSize, &old);
+        if (old) gPageSizeIMPs[NSStringFromClass(c)] = [NSValue valueWithPointer:(const void *)old];
+    }
     if (!gPageLayoutIMPs) gPageLayoutIMPs = [NSMutableDictionary dictionary];
     NSString *k = NSStringFromClass(c);
     if (gPageLayoutIMPs[k] || c == [UIScrollView class]) return;
@@ -7767,10 +7785,11 @@ static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
     }
     if (gArtistNameText.length) out[@"name"] = gArtistNameText;
     objc_setAssociatedObject(sv, &kAboutData, out, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (hide.count && out[@"about"]) {
-        NSHashTable *old = objc_getAssociatedObject(sv, &kAboutHidden) ?: [NSHashTable weakObjectsHashTable];
-        for (UIView *v in hide) [old addObject:v];
-        objc_setAssociatedObject(sv, &kAboutHidden, old, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (hide.count && out[@"about"] && !objc_getAssociatedObject(sv, &kAboutSig)) {
+        NSMutableArray *sig = [NSMutableArray array];
+        for (UIView *v in hide) [sig addObject:@{@"cls": NSStringFromClass([v class]), @"top": @(v.frame.origin.y), @"h": @(v.bounds.size.height)}];
+        objc_setAssociatedObject(sv, &kAboutSig, sig, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(sv, &kAboutHidden, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         ApplyAboutHide(sv);
     }
     gAboutDebug = [NSString stringWithFormat:@"page=%@ secs: %@ about=%d hide=%lu photo=%d", NSStringFromClass([sv class]).length > 20 ? [NSStringFromClass([sv class]) substringFromIndex:NSStringFromClass([sv class]).length - 20] : NSStringFromClass([sv class]), [dbg componentsJoinedByString:@" "], out[@"about"] != nil, (unsigned long)hide.count, out[@"photo"] != nil];
@@ -7801,27 +7820,35 @@ static void ClearGray(UIView *sec) {
     }
 }
 static void ApplyAboutHide(UIScrollView *sv) {
-    NSHashTable *hide = objc_getAssociatedObject(sv, &kAboutHidden);
-    if (!hide.count) return;
+    NSArray *sig = objc_getAssociatedObject(sv, &kAboutSig);   // [{cls, top, h}]
+    if (!sig.count) return;
     CGFloat gap = 0, top = CGFLOAT_MAX;
-    for (UIView *v in hide) { if (!v.hidden) v.hidden = YES; if (v.alpha > 0) v.alpha = 0; gap += v.bounds.size.height; top = MIN(top, v.frame.origin.y); }
-    NSNumber *applied = objc_getAssociatedObject(sv, &kAboutRange);
-    for (UIView *v in Sections(sv)) {
-        if ([hide containsObject:v]) continue;
-        NSNumber *mine = objc_getAssociatedObject(v, &kAboutRange);   // the y we set last time
+    for (NSDictionary *d in sig) { gap += [d[@"h"] doubleValue]; top = MIN(top, [d[@"top"] doubleValue]); }
+    NSArray *secs = Sections(sv);
+    // The About sections (Music may swap in new views for them: matched by kind and place).
+    NSMutableSet *hidden = [NSMutableSet set];
+    for (UIView *v in secs) for (NSDictionary *d in sig) {
+        if ([NSStringFromClass([v class]) isEqualToString:d[@"cls"]] && fabs(v.frame.origin.y - [d[@"top"] doubleValue]) < 3) {
+            if (!v.hidden) v.hidden = YES;
+            if (v.alpha > 0) v.alpha = 0;
+            [hidden addObject:[NSValue valueWithNonretainedObject:v]];
+        }
+    }
+    // Everything under them moves up by their height.
+    for (UIView *v in secs) {
+        if ([hidden containsObject:[NSValue valueWithNonretainedObject:v]]) continue;
+        NSNumber *mine = objc_getAssociatedObject(v, &kAboutRange);
         CGFloat y = v.frame.origin.y;
-        if (mine && fabs(mine.doubleValue - y) < 0.5) continue;   // already moved
-        if (y >= top - 0.5) {
+        if (mine && fabs(mine.doubleValue - y) < 0.5) continue;
+        if (y >= top + 1) {
             CGRect f = v.frame; f.origin.y = y - gap; v.frame = f;
             objc_setAssociatedObject(v, &kAboutRange, @(f.origin.y), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
+        if (v.frame.origin.y >= top - 1) ClearGray(v);
     }
-    for (UIView *v in Sections(sv)) if (![hide containsObject:v] && v.frame.origin.y >= top - gap - 0.5) ClearGray(v);
-    CGFloat want = 0;
-    for (UIView *v in Sections(sv)) want = MAX(want, CGRectGetMaxY(v.frame));
-    if (want > 0 && (!applied || fabs(sv.contentSize.height - want) > 1)) {
-        sv.contentSize = CGSizeMake(sv.contentSize.width, want);
-        objc_setAssociatedObject(sv, &kAboutRange, @(want), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!objc_getAssociatedObject(sv, &kAboutGap)) {
+        objc_setAssociatedObject(sv, &kAboutGap, @(gap), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [sv setContentSize:sv.contentSize];   // the hook takes the gap off
     }
 }
 @interface MPAboutVC : UIViewController
@@ -7856,6 +7883,7 @@ static void ApplyAboutHide(UIScrollView *sv) {
     UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, W - pad * 2, 54)];
     name.text = a[@"name"] ?: gArtistNameText; name.font = [UIFont systemFontOfSize:40 weight:UIFontWeightBold];
     name.textColor = UIColor.labelColor; name.adjustsFontSizeToFitWidth = YES; name.minimumScaleFactor = 0.5;
+    name.tag = ARTIST_TAG;   // not one of Music's name copies we hide on the artist page
     [sv addSubview:name];
     y += 74;
     // From | Born
