@@ -1,4 +1,5 @@
-// MusicPill 1.2.66 - made by nano
+// MusicPill 1.2.67 - made by nano
+// 1.2.67: About works on Music's stacked artist page (sections in one scroll view): reads About / From / Born / Genre, hides that section and pulls Similar Artists up
 // 1.2.66: About reads the artist page's main list (it was reading a small list inside the header)
 // 1.2.65: About reading also tries spoken labels and text layers; more debug
 // 1.2.64: About sheet finds the artist page's list another way (it wasn't found before)
@@ -389,7 +390,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
-static __weak UICollectionView *gArtistCV;
+static __weak UIScrollView *gArtistCV;
 static NSString *gAboutDebug = @"-";
 static void FavStarTick(UIWindow *w);
 // Artists you favorited (by name), so search can show a star next to them.
@@ -1366,7 +1367,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.66 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.67 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -6776,8 +6777,9 @@ static void StartWatchdog(void) {
         // Album/playlist buttons and glass top buttons.
         if (w && !playerUp) {
             @try { AlbumTick(w); } @catch (__unused id e) {}
-            { static CFTimeInterval lastAb; UICollectionView *acv = gArtistCV;
-              if (acv.window == w && acv.bounds.size.height > w.bounds.size.height * 0.5 && CACurrentMediaTime() - lastAb > 1.0) { lastAb = CACurrentMediaTime(); @try { AboutScan(acv.subviews.firstObject, NO); } @catch (__unused id e) {} } }
+            { static CFTimeInterval lastAb; UIScrollView *acv = gArtistCV;
+              if (acv.window == w) { @try { ApplyAboutHide((UIScrollView *)acv); } @catch (__unused id e) {} }
+              if (acv.window == w && CACurrentMediaTime() - lastAb > 1.0) { lastAb = CACurrentMediaTime(); @try { AboutScan(acv, NO); } @catch (__unused id e) {} } }
             @try { NavTick(TopNavBar(w)); } @catch (__unused id e) {}
             @try { FloatTick(w); } @catch (__unused id e) {}
         }
@@ -7643,155 +7645,138 @@ static NSString *TextOf(UIView *v) {
 // Reads the About part at the bottom of an artist page: the text, From, Born,
 // Genre, and the header photo. Also remembers where it sits so it can be taken
 // off the page. force: scroll the list there for a moment (invisibly) to load it.
+// The artist page is a vertical stack (one scroll view, one child per section:
+// header, Top Songs, Albums, ..., About, Similar Artists).
+static UIScrollView *PageScroller(UIView *inPage) {
+    UIScrollView *sv = nil;
+    UIWindow *w = inPage.window;
+    for (UIView *p = inPage.superview; p; p = p.superview)
+        if ([p isKindOfClass:[UIScrollView class]] && (!w || p.bounds.size.height > w.bounds.size.height * 0.5)) sv = (UIScrollView *)p;
+    return sv;
+}
+static NSArray *Sections(UIScrollView *sv) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (UIView *v in sv.subviews) if (v.bounds.size.width > sv.bounds.size.width * 0.8 && v.bounds.size.height > 8 && ![v isKindOfClass:[UIImageView class]]) [a addObject:v];
+    [a sortUsingComparator:^NSComparisonResult(UIView *x, UIView *y) { return x.frame.origin.y < y.frame.origin.y ? NSOrderedAscending : NSOrderedDescending; }];
+    return a;
+}
+static NSArray *TextsIn(UIView *root) {
+    NSMutableArray *out = [NSMutableArray array];
+    NSMutableArray *st = [NSMutableArray arrayWithObject:root];
+    int g = 0;
+    while (st.count && g++ < 1500) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (v.hidden) continue;
+        NSString *t = TextOf(v);
+        if (!t.length && v.accessibilityLabel.length && !v.subviews.count) t = v.accessibilityLabel;
+        if (t.length) { [out addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:root].y)}]; continue; }
+        [st addObjectsFromArray:v.subviews];
+    }
+    [out sortUsingComparator:^NSComparisonResult(NSDictionary *x, NSDictionary *y) { return [x[@"y"] compare:y[@"y"]]; }];
+    return out;
+}
+static char kAboutHidden;   // on the scroll view: NSHashTable of hidden sections
+static void ApplyAboutHide(UIScrollView *sv);
 static NSDictionary *AboutScan(UIView *inPage, BOOL force) {
-    // The page's main (outermost) list: the header can sit inside a smaller list.
-    UICollectionView *cv = nil;
-    for (UIView *p = inPage.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]] && p.bounds.size.height > p.window.bounds.size.height * 0.5) cv = (UICollectionView *)p;
-    if (!cv) for (UIView *p = inPage.superview; p; p = p.superview) if ([p isKindOfClass:[UICollectionView class]]) cv = (UICollectionView *)p;
-    if (!cv && inPage.window) {
-        // The page's main list: the biggest vertical list on screen.
-        NSMutableArray *st = [NSMutableArray arrayWithObject:inPage.window];
-        int g = 0; CGFloat best = 0;
-        while (st.count && g++ < 3000) {
+    UIScrollView *sv = [inPage isKindOfClass:[UIScrollView class]] && inPage.bounds.size.height > 300 ? (UIScrollView *)inPage : PageScroller(inPage);
+    if (!sv) { gAboutDebug = @"no page"; return nil; }
+    gArtistCV = (id)sv;
+    NSDictionary *have = objc_getAssociatedObject(sv, &kAboutData);
+    if (have[@"about"] && !force) { ApplyAboutHide(sv); return have; }
+    NSMutableDictionary *out = [have mutableCopy] ?: [NSMutableDictionary dictionary];
+    NSHashTable *hide = [NSHashTable weakObjectsHashTable];
+    NSMutableArray *dbg = [NSMutableArray array];
+    BOOL (^read)(void) = ^BOOL {
+        BOOL got = NO;
+        for (UIView *sec in Sections(sv)) {
+            NSArray *tx = TextsIn(sec);
+            NSString *cn = NSStringFromClass([sec class]);
+            if (dbg.count < 9) [dbg addObject:[NSString stringWithFormat:@"%@:%lu", cn.length > 18 ? [cn substringFromIndex:cn.length - 18] : cn, (unsigned long)tx.count]];
+            BOOL isAbout = NO;
+            for (NSUInteger i = 0; i < tx.count; i++) {
+                NSString *t = tx[i][@"t"], *u = t.uppercaseString, *next = i + 1 < tx.count ? tx[i + 1][@"t"] : nil;
+                if ([t isEqualToString:@"About"]) {
+                    isAbout = YES;
+                    NSString *body = nil;
+                    for (NSUInteger j = i + 1; j < tx.count && j < i + 4; j++) if ([tx[j][@"t"] length] > body.length && [tx[j][@"t"] length] > 25) body = tx[j][@"t"];
+                    if (body) { out[@"about"] = body; got = YES; }
+                } else if (next && ([u isEqualToString:@"FROM"] || [u isEqualToString:@"HOMETOWN"])) { out[@"from"] = next; isAbout = YES; }
+                else if (next && ([u isEqualToString:@"BORN"] || [u isEqualToString:@"FORMED"])) { out[@"born"] = next; out[@"bornLabel"] = [u isEqualToString:@"FORMED"] ? @"Formed" : @"Born"; isAbout = YES; }
+                else if (next && [u isEqualToString:@"GENRE"]) { out[@"genre"] = next; isAbout = YES; }
+            }
+            if (isAbout) [hide addObject:sec];
+        }
+        return got;
+    };
+    BOOL got = read();
+    if (!got && force) {
+        CGPoint keep = sv.contentOffset;
+        CGFloat maxY = MAX(-sv.adjustedContentInset.top, sv.contentSize.height - sv.bounds.size.height + sv.adjustedContentInset.bottom);
+        for (NSNumber *f in @[@1.0, @0.85, @0.7]) {
+            sv.contentOffset = CGPointMake(keep.x, maxY * f.doubleValue);
+            [sv layoutIfNeeded];
+            if ((got = read())) break;
+        }
+        sv.contentOffset = keep;
+        [sv layoutIfNeeded];
+    }
+    // Header photo: the biggest picture in the first section.
+    if (!out[@"photo"]) {
+        UIView *first = Sections(sv).firstObject;
+        UIImage *best = nil; CGFloat area = 0;
+        NSMutableArray *st = first ? [NSMutableArray arrayWithObject:first] : [NSMutableArray array];
+        int g = 0;
+        while (st.count && g++ < 600) {
             UIView *v = st.lastObject; [st removeLastObject];
-            if (v.hidden || v.alpha < 0.01) continue;
-            if ([v isKindOfClass:[UICollectionView class]] && v.window) {
-                UICollectionView *c = (UICollectionView *)v;
-                CGFloat a = c.bounds.size.width * c.bounds.size.height;
-                if (c.bounds.size.width > inPage.window.bounds.size.width * 0.9 && c.contentSize.height > c.bounds.size.height && a > best) { best = a; cv = c; }
-                continue;
+            if (v.tag == ARTIST_TAG) continue;
+            UIImage *im = [v isKindOfClass:[UIImageView class]] ? ((UIImageView *)v).image : nil;
+            CGFloat a2 = v.bounds.size.width * v.bounds.size.height;
+            if (im && a2 > area && v.bounds.size.width > 200) { area = a2; best = im; }
+            for (CALayer *l in [@[v.layer] arrayByAddingObjectsFromArray:v.layer.sublayers ?: @[]]) {
+                id c = l.contents;
+                CGFloat la = l.bounds.size.width * l.bounds.size.height;
+                if (c && CFGetTypeID((__bridge CFTypeRef)c) == CGImageGetTypeID() && la > area && l.bounds.size.width > 200) { area = la; best = [UIImage imageWithCGImage:(__bridge CGImageRef)c]; }
             }
             [st addObjectsFromArray:v.subviews];
-        }
-    }
-    if (!cv) {
-        NSMutableArray *chain = [NSMutableArray array];
-        for (UIView *p = inPage; p && chain.count < 8; p = p.superview) [chain addObject:NSStringFromClass([p class])];
-        gAboutDebug = [NSString stringWithFormat:@"no list: %@", [chain componentsJoinedByString:@"<"]];
-        return nil;
-    }
-    gArtistCV = cv;
-    NSDictionary *have = objc_getAssociatedObject(cv, &kAboutData);
-    if (have[@"about"] && !force) return have;
-    NSMutableArray *rows = [NSMutableArray array];   // {t, y, top, bottom}
-    NSMutableSet *leafClasses = [NSMutableSet set];
-    __block int cellsSeen = 0;
-    void (^scan)(void) = ^{
-        for (UIView *cell in cv.subviews) {
-            if (![cell isKindOfClass:[UICollectionReusableView class]] || cell.hidden) continue;
-            cellsSeen++;
-            NSMutableArray *st = [NSMutableArray arrayWithObject:cell];
-            int g = 0;
-            while (st.count && g++ < 600) {
-                UIView *v = st.lastObject; [st removeLastObject];
-                NSString *t = TextOf(v);
-                if (!t.length && v.accessibilityLabel.length && !v.subviews.count) t = v.accessibilityLabel;
-                if (!t.length) for (CALayer *l in v.layer.sublayers) if ([l isKindOfClass:[CATextLayer class]]) { id x = ((CATextLayer *)l).string; t = [x isKindOfClass:[NSAttributedString class]] ? ((NSAttributedString *)x).string : ([x isKindOfClass:[NSString class]] ? x : nil); if (t.length) break; }
-                if (t.length) { [rows addObject:@{@"t": t, @"y": @([v convertPoint:CGPointZero toView:cv].y), @"top": @(CGRectGetMinY(cell.frame)), @"bottom": @(CGRectGetMaxY(cell.frame))}]; continue; }
-                if (!v.subviews.count && leafClasses.count < 6) [leafClasses addObject:NSStringFromClass([v class])];
-                [st addObjectsFromArray:v.subviews];
-            }
-        }
-    };
-    scan();
-    BOOL found = NO;
-    for (NSDictionary *r in rows) if ([r[@"t"] isEqualToString:@"About"]) found = YES;
-    if (!found && force) {
-        CGPoint keep = cv.contentOffset;
-        CGFloat maxY = MAX(-cv.adjustedContentInset.top, cv.contentSize.height - cv.bounds.size.height + cv.adjustedContentInset.bottom);
-        // Two stops: the About part is near the end.
-        for (NSNumber *f in @[@1.0, @0.8, @0.6]) {
-            cv.contentOffset = CGPointMake(keep.x, maxY * f.doubleValue);
-            [cv layoutIfNeeded];
-            scan();
-        }
-        cv.contentOffset = keep;
-        [cv layoutIfNeeded];
-    }
-    [rows sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"y"] compare:b[@"y"]]; }];
-    {
-        NSMutableArray *sm = [NSMutableArray array];
-        for (NSDictionary *r in rows) if (sm.count < 8 && [r[@"t"] length] < 40) [sm addObject:r[@"t"]];
-        gAboutDebug = [NSString stringWithFormat:@"list=%@ h=%.0f cells=%d rows=%lu found=%d e.g. %@ leaves=%@", NSStringFromClass([cv class]), cv.contentSize.height, cellsSeen, (unsigned long)rows.count, found, [sm componentsJoinedByString:@"/"], [leafClasses.allObjects componentsJoinedByString:@","]];
-    }
-    NSMutableDictionary *out = [have mutableCopy] ?: [NSMutableDictionary dictionary];
-    CGFloat top = CGFLOAT_MAX, bottom = 0;
-    for (NSUInteger i = 0; i < rows.count; i++) {
-        NSString *t = rows[i][@"t"], *u = t.uppercaseString;
-        NSString *next = i + 1 < rows.count ? rows[i + 1][@"t"] : nil;
-        BOOL part = NO;
-        if ([t isEqualToString:@"About"]) {
-            // the longest text right after the heading is the write-up
-            NSString *body = nil;
-            for (NSUInteger j = i + 1; j < rows.count && j < i + 4; j++) if ([rows[j][@"t"] length] > body.length && [rows[j][@"t"] length] > 25) body = rows[j][@"t"];
-            if (body) { out[@"about"] = [body stringByReplacingOccurrencesOfString:@"… MORE" withString:@"…"]; part = YES; }
-        } else if (next && ([u isEqualToString:@"FROM"] || [u isEqualToString:@"HOMETOWN"])) { out[@"from"] = next; part = YES; }
-        else if (next && ([u isEqualToString:@"BORN"] || [u isEqualToString:@"FORMED"])) { out[@"born"] = next; out[@"bornLabel"] = [u isEqualToString:@"FORMED"] ? @"Formed" : @"Born"; part = YES; }
-        else if (next && [u isEqualToString:@"GENRE"]) { out[@"genre"] = next; part = YES; }
-        if (part) {
-            top = MIN(top, [rows[i][@"top"] doubleValue]);
-            bottom = MAX(bottom, [rows[MIN(i + 1, rows.count - 1)][@"bottom"] doubleValue]);
-        }
-    }
-    // Header photo: the biggest picture in the page's first cell.
-    if (!out[@"photo"]) {
-        UIImage *best = nil; CGFloat area = 0;
-        for (UIView *cell in cv.subviews) {
-            if (![cell isKindOfClass:[UICollectionReusableView class]] || CGRectGetMinY(cell.frame) > 60) continue;
-            NSMutableArray *st = [NSMutableArray arrayWithObject:cell];
-            int g = 0;
-            while (st.count && g++ < 300) {
-                UIView *v = st.lastObject; [st removeLastObject];
-                if (v.tag == ARTIST_TAG) continue;
-                UIImage *im = [v isKindOfClass:[UIImageView class]] ? ((UIImageView *)v).image : nil;
-                CGFloat a = v.bounds.size.width * v.bounds.size.height;
-                if (im && a > area && v.bounds.size.width > 200) { area = a; best = im; }
-                // or a picture held by a layer (the view's or one inside it)
-                NSMutableArray *ls = [NSMutableArray arrayWithObject:v.layer];
-                int gl = 0;
-                while (ls.count && gl++ < 30) {
-                    CALayer *l = ls.lastObject; [ls removeLastObject];
-                    id c = l.contents;
-                    CGFloat la = l.bounds.size.width * l.bounds.size.height;
-                    if (c && CFGetTypeID((__bridge CFTypeRef)c) == CGImageGetTypeID() && la > area && l.bounds.size.width > 200) { area = la; best = [UIImage imageWithCGImage:(__bridge CGImageRef)c]; }
-                    if (l == v.layer) for (CALayer *sl in l.sublayers) [ls addObject:sl];
-                }
-                [st addObjectsFromArray:v.subviews];
-            }
         }
         if (best) out[@"photo"] = best;
     }
     if (gArtistNameText.length) out[@"name"] = gArtistNameText;
-    objc_setAssociatedObject(cv, &kAboutData, out, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    // Take the About part off the page (the sheet has it now).
-    if (out[@"about"] && top < bottom && !objc_getAssociatedObject(cv, &kAboutRange)) {
-        objc_setAssociatedObject(cv, &kAboutRange, [NSValue valueWithCGPoint:CGPointMake(top, bottom)], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [cv.collectionViewLayout invalidateLayout];
-        cv.contentSize = cv.contentSize;
+    objc_setAssociatedObject(sv, &kAboutData, out, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (hide.count && out[@"about"]) {
+        NSHashTable *old = objc_getAssociatedObject(sv, &kAboutHidden) ?: [NSHashTable weakObjectsHashTable];
+        for (UIView *v in hide) [old addObject:v];
+        objc_setAssociatedObject(sv, &kAboutHidden, old, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        ApplyAboutHide(sv);
     }
+    gAboutDebug = [NSString stringWithFormat:@"page=%@ secs: %@ about=%d hide=%lu photo=%d", NSStringFromClass([sv class]).length > 20 ? [NSStringFromClass([sv class]) substringFromIndex:NSStringFromClass([sv class]).length - 20] : NSStringFromClass([sv class]), [dbg componentsJoinedByString:@" "], out[@"about"] != nil, (unsigned long)hide.count, out[@"photo"] != nil];
     return out;
 }
-%hook UICollectionReusableView
-- (void)applyLayoutAttributes:(UICollectionViewLayoutAttributes *)a {
-    UICollectionView *cv = [self.superview isKindOfClass:[UICollectionView class]] ? (UICollectionView *)self.superview : nil;
-    NSValue *r = cv ? objc_getAssociatedObject(cv, &kAboutRange) : nil;
-    if (r && a) {
-        CGPoint range = r.CGPointValue;   // x = top, y = bottom
-        CGFloat y = a.frame.origin.y;
-        if (y >= range.x - 1 && y < range.y - 1) { a = [a copy]; a.alpha = 0; a.hidden = YES; }
-        else if (y >= range.y - 1) { a = [a copy]; a.transform = CGAffineTransformTranslate(a.transform, 0, -(range.y - range.x)); }
+// Hide the About sections and pull everything under them up. Music lays the
+// stack out again from time to time, so this runs after each of its layouts.
+static void ApplyAboutHide(UIScrollView *sv) {
+    NSHashTable *hide = objc_getAssociatedObject(sv, &kAboutHidden);
+    if (!hide.count) return;
+    CGFloat gap = 0, top = CGFLOAT_MAX;
+    for (UIView *v in hide) { if (!v.hidden) v.hidden = YES; gap += v.bounds.size.height; top = MIN(top, v.frame.origin.y); }
+    NSNumber *applied = objc_getAssociatedObject(sv, &kAboutRange);
+    for (UIView *v in Sections(sv)) {
+        if ([hide containsObject:v]) continue;
+        NSNumber *mine = objc_getAssociatedObject(v, &kAboutRange);   // the y we set last time
+        CGFloat y = v.frame.origin.y;
+        if (mine && fabs(mine.doubleValue - y) < 0.5) continue;   // already moved
+        if (y >= top - 0.5) {
+            CGRect f = v.frame; f.origin.y = y - gap; v.frame = f;
+            objc_setAssociatedObject(v, &kAboutRange, @(f.origin.y), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
     }
-    %orig(a);
+    CGFloat want = 0;
+    for (UIView *v in Sections(sv)) want = MAX(want, CGRectGetMaxY(v.frame));
+    if (want > 0 && (!applied || fabs(sv.contentSize.height - want) > 1)) {
+        sv.contentSize = CGSizeMake(sv.contentSize.width, want);
+        objc_setAssociatedObject(sv, &kAboutRange, @(want), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
 }
-%end
-%hook UICollectionView
-- (void)setContentSize:(CGSize)size {
-    NSValue *r = objc_getAssociatedObject(self, &kAboutRange);
-    if (r) { CGPoint range = r.CGPointValue; size.height = MAX(0, size.height - (range.y - range.x)); }
-    %orig(size);
-}
-%end
-
 @interface MPAboutVC : UIViewController
 @property (nonatomic, strong) NSDictionary *about;
 @end
