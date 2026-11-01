@@ -1,4 +1,6 @@
-// Messages26 0.1.0 - made by nano
+// Messages26 0.2.0 - made by nano
+// 0.2.0: + and the field work again (they were outside the bar), bigger glass field and +,
+//        lower; glass back / FaceTime / name on the real top bar; settings page
 // 0.1.0: liquid glass message field + glass "+" (camera / App Store buttons and the
 //        app strip are gone), glass back / name / FaceTime in conversations, and a
 //        liquid glass app menu that grows out of "+" (Photos, Camera, Apple Cash...).
@@ -13,6 +15,34 @@
 #define GLASS_TAG 0x4D323647
 #define DEBUG_TAG 0x4D323644
 #define MENU_TAG  0x4D32364D
+#define PILL_TAG  0x4D323649
+
+#define DOM CFSTR("com.nano.messages26")
+static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gPrefDebug = NO;
+static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
+    id v = file[key];
+    if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM); if (cf) v = (__bridge_transfer id)cf; }
+    return v ? [v boolValue] : def;
+}
+static void LoadPrefs(void) {
+    CFPreferencesAppSynchronize(DOM);
+    NSDictionary *file = nil; NSDate *best = nil;
+    for (NSString *dir in @[@"/var/jb/var/mobile/Library/Preferences/", @"/var/mobile/Library/Preferences/"]) {
+        NSString *p = [dir stringByAppendingString:@"com.nano.messages26.plist"];
+        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
+        if (![d isKindOfClass:[NSDictionary class]]) continue;
+        NSDate *m = [[NSFileManager defaultManager] attributesOfItemAtPath:p error:nil][NSFileModificationDate];
+        if (!file || (m && best && [m compare:best] == NSOrderedDescending)) { file = d; best = m; }
+    }
+    gOn = PrefBool(file, @"enabled", YES);
+    gBarOn = gOn && PrefBool(file, @"bar", YES);
+    gMenuOn = gOn && PrefBool(file, @"menu", YES);
+    gTopOn = gOn && PrefBool(file, @"topbar", YES);
+    gPrefDebug = PrefBool(file, @"debug", NO);
+}
+static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
+    dispatch_async(dispatch_get_main_queue(), ^{ LoadPrefs(); });
+}
 
 static NSString *gDebug = @"-", *gNavDebug = @"-";
 static BOOL gShowDebug = NO;
@@ -99,6 +129,7 @@ static void OpenStripApp(NSIndexPath *ip) {
 - (void)open:(UIButton *)plus {
     UIWindow *w = plus.window;
     if (!w || _panel.superview) return;
+    if (!gMenuOn) { [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; return; }   // menu off: + is the camera
     _plus = plus;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     [w endEditing:YES];
@@ -235,19 +266,43 @@ static UIView *StripOf(UIView *entry) {
         return [n containsString:@"AppStrip"] || [n containsString:@"BrowserSwitcher"] || [n containsString:@"AppDrawer"];
     }, 400);
 }
+static void UnstyleEntry(UIView *entry, UIView *field, UIView *container) {
+    [[entry viewWithTag:PLUS_TAG] removeFromSuperview];
+    [[entry viewWithTag:PILL_TAG] removeFromSuperview];
+    if (!CGAffineTransformIsIdentity(container.transform)) container.transform = CGAffineTransformIdentity;
+    for (UIView *b in LeftButtons(entry, field)) { b.alpha = 1; b.userInteractionEnabled = YES; }
+    UIView *strip = StripOf(entry);
+    if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
+}
 static void StyleEntry(UIView *entry) {
     UIView *field = FieldOf(entry);
     if (!field) { gDebug = [NSString stringWithFormat:@"entry=%@ no field", NSStringFromClass([entry class])]; return; }
     gEntry = entry;
-    // field: dark glass pill
+    // the part of the bar holding the field (moved as one)
+    UIView *container = field;
+    while (container.superview && container.superview != entry) container = container.superview;
+    UIView *strip = StripOf(entry);
+    if (strip) {
+        gStrip = strip;
+        UICollectionView *cv = (UICollectionView *)Find(strip, ^BOOL(UIView *v) { return [v isKindOfClass:[UICollectionView class]]; }, 100);
+        if (cv) gStripCV = cv;
+    }
+    if (!gBarOn) { UnstyleEntry(entry, field, container); return; }
     BOOL dark = IsDark(entry);
-    CGFloat h = field.bounds.size.height, r = MIN(h / 2, 24);
-    if (field.layer.cornerRadius != r) { field.layer.cornerRadius = r; field.layer.cornerCurve = kCACornerCurveContinuous; }
-    UIColor *fill = dark ? [UIColor colorWithWhite:1 alpha:0.10] : [UIColor colorWithWhite:0 alpha:0.05];
-    if (![field.backgroundColor isEqual:fill]) field.backgroundColor = fill;
-    field.layer.borderWidth = 0.8;
-    field.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.16] : [UIColor colorWithWhite:0 alpha:0.10]).CGColor;
-    // camera + App Store buttons: hidden; the glass "+" takes their place
+    // app strip hidden (its apps live in the + menu); the field row moves down into its place
+    CGFloat shift = 0;
+    if (strip && gMenuOn) {
+        if (strip.alpha > 0) strip.alpha = 0;
+        if (strip.userInteractionEnabled) strip.userInteractionEnabled = NO;
+        CGRect sf = [strip convertRect:strip.bounds toView:entry];
+        CGRect cf0 = CGRectApplyAffineTransform(container.frame, CGAffineTransformInvert(container.transform));
+        if (CGRectGetMinY(sf) >= CGRectGetMaxY(cf0) - 4 && container != strip && ![strip isDescendantOfView:container]) shift = MAX(0, sf.size.height - 10);
+    } else if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
+    CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift);
+    if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t;
+    // Instagram-style... no: iOS 26 field look is drawn by our pill behind it
+    if (field.backgroundColor && CGColorGetAlpha(field.backgroundColor.CGColor) > 0) field.backgroundColor = UIColor.clearColor;
+    if (field.layer.borderWidth > 0) field.layer.borderWidth = 0;
     NSArray *left = LeftButtons(entry, field);
     for (UIView *b in left) { if (b.alpha > 0) b.alpha = 0; if (b.userInteractionEnabled) b.userInteractionEnabled = NO; }
     for (UIView *b in left) {
@@ -255,53 +310,48 @@ static void StyleEntry(UIView *entry) {
         if ([d containsString:@"camera"] || [NSStringFromClass([b class]) containsString:@"Photo"]) gPhotoBtn = b;
     }
     if (!gPhotoBtn && left.count) gPhotoBtn = left.firstObject;
-    CGRect ff = [field convertRect:field.bounds toView:entry];
+    CGRect ff = [field convertRect:field.bounds toView:entry];   // includes the move down
+    CGFloat padY = 6, D = MAX(46, MIN(ff.size.height + padY * 2, 52));
+    CGFloat px = 12;
+    CGRect plusF = CGRectMake(px, round(CGRectGetMaxY(ff) + padY - D), D, D);
+    CGRect pillF = CGRectMake(px + D + 10, CGRectGetMinY(ff) - padY, CGRectGetMaxX(ff) - (px + D + 10), ff.size.height + padY * 2);
+    UIView *pill = [entry viewWithTag:PILL_TAG];
+    if (!pill) {
+        pill = GlassView(entry); pill.tag = PILL_TAG;
+        [entry insertSubview:pill belowSubview:container];
+    }
+    if ([entry.subviews indexOfObject:pill] > [entry.subviews indexOfObject:container]) [entry insertSubview:pill belowSubview:container];
+    if (!CGRectEqualToRect(pill.frame, pillF)) { pill.frame = pillF; pill.layer.cornerRadius = MIN(pillF.size.height / 2, 26); }
+    pill.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.17] : [UIColor colorWithWhite:0 alpha:0.08]).CGColor;
     UIButton *plus = (UIButton *)[entry viewWithTag:PLUS_TAG];
-    CGFloat D = MAX(40, MIN(h, 50));
     if (!plus) {
         plus = [UIButton buttonWithType:UIButtonTypeCustom];
         plus.tag = PLUS_TAG;
         UIVisualEffectView *g = GlassView(entry);
         g.tag = GLASS_TAG;
         [plus addSubview:g];
-        [plus setImage:[UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
+        [plus setImage:[UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
         [plus addTarget:[M26Menu shared] action:@selector(open:) forControlEvents:UIControlEventTouchUpInside];
         [entry addSubview:plus];
     }
     plus.tintColor = Ink(entry);
-    CGRect pf = CGRectMake(round(MAX(8, CGRectGetMinX(ff) - D - 12)), round(CGRectGetMaxY(ff) - h / 2 - D / 2), D, D);
-    if (h > 60) pf.origin.y = round(CGRectGetMaxY(ff) - D - 2);   // multi-line: stays at the bottom
-    if (!CGRectEqualToRect(plus.frame, pf) && CGAffineTransformIsIdentity(plus.transform)) plus.frame = pf;
+    plus.hidden = !gMenuOn && !gPhotoBtn;
+    if (!CGRectEqualToRect(plus.frame, plusF) && CGAffineTransformIsIdentity(plus.transform)) plus.frame = plusF;
     UIView *g = [plus viewWithTag:GLASS_TAG];
     g.frame = plus.bounds; g.layer.cornerRadius = D / 2;
     [plus bringSubviewToFront:plus.imageView];
-    [entry bringSubviewToFront:plus];
-    // app strip: kept (its apps fill the "+" menu) but hidden
-    UIView *strip = StripOf(entry);
-    if (strip) {
-        gStrip = strip;
-        if (strip.alpha > 0) strip.alpha = 0;
-        if (strip.userInteractionEnabled) strip.userInteractionEnabled = NO;
-        UICollectionView *cv = (UICollectionView *)Find(strip, ^BOOL(UIView *v) { return [v isKindOfClass:[UICollectionView class]]; }, 100);
-        if (cv) gStripCV = cv;
-    }
-    gDebug = [NSString stringWithFormat:@"entry=%@ field=%@ %.0fx%.0f\n left=%lu photo=%@\n strip=%@ %.0f cv=%d apps=%lu",
-              NSStringFromClass([entry class]), NSStringFromClass([field class]), ff.size.width, ff.size.height,
-              (unsigned long)left.count, NSStringFromClass([gPhotoBtn class]),
+    if (entry.subviews.lastObject != plus) [entry bringSubviewToFront:plus];
+    if (entry.clipsToBounds) entry.clipsToBounds = NO;
+    gDebug = [NSString stringWithFormat:@"entry=%@ %.0f field=%@ %.0fx%.0f@%.0f shift=%.0f\n box=%@ left=%lu photo=%@\n strip=%@ %.0f cv=%d apps=%lu",
+              NSStringFromClass([entry class]), entry.bounds.size.height, NSStringFromClass([field class]), ff.size.width, ff.size.height, ff.origin.y, shift,
+              NSStringFromClass([container class]), (unsigned long)left.count, NSStringFromClass([gPhotoBtn class]),
               strip ? NSStringFromClass([strip class]) : @"none", strip.bounds.size.height, gStripCV != nil, (unsigned long)(gStripCV.numberOfSections ? [gStripCV numberOfItemsInSection:0] : 0)];
 }
 
-// The entry view's height without the (hidden) app strip.
-static CGSize (*origEntrySize)(id, SEL, CGSize);
-static CGSize EntrySize(UIView *self, SEL _cmd, CGSize s) {
-    CGSize r = origEntrySize(self, _cmd, s);
-    UIView *strip = gStrip;
-    if (strip && [strip isDescendantOfView:self] && strip.bounds.size.height > 10 && strip.bounds.size.height < r.height) r.height -= strip.bounds.size.height;
-    return r;
-}
 static void (*origEntryLayout)(id, SEL);
 static void EntryLayout(UIView *self, SEL _cmd) {
     origEntryLayout(self, _cmd);
+    if (!gOn && ![self viewWithTag:PLUS_TAG]) return;
     @try { StyleEntry(self); } @catch (__unused id e) {}
 }
 
@@ -324,42 +374,61 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     if (!CGRectEqualToRect(g.frame, want)) { g.frame = want; g.layer.cornerRadius = MIN(want.size.width, want.size.height) / 2; }
     g.hidden = v.hidden || v.alpha < 0.05;
 }
-static void StyleNav(UIWindow *w) {
-    UINavigationBar *nb = (UINavigationBar *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UINavigationBar class]] && !v.hidden && v.window; }, 3000);
-    UINavigationController *nc = [nb.delegate isKindOfClass:[UINavigationController class]] ? (UINavigationController *)nb.delegate : nil;
-    NSString *top = NSStringFromClass([nc.topViewController class]);
-    BOOL chat = ([top containsString:@"Chat"] || [top containsString:@"Transcript"] || [top containsString:@"Conversation"]) && ![top containsString:@"List"];
-    if (!nb || !chat) { gNavDebug = [NSString stringWithFormat:@"nav top=%@ (not a chat)", top]; return; }
+static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found) {
     nb.tintColor = Ink(nb);
     // no bar background: the buttons float on the chat
-    for (UIView *s in nb.subviews) if ([NSStringFromClass([s class]) containsString:@"BarBackground"] && s.alpha > 0) s.alpha = 0;
-    NSMutableArray *found = [NSMutableArray array];
+    NSMutableArray *bs = [NSMutableArray arrayWithArray:nb.subviews];
+    int gb = 0;
+    while (bs.count && gb++ < 40) {
+        UIView *s = bs.firstObject; [bs removeObjectAtIndex:0];
+        NSString *n = NSStringFromClass([s class]);
+        if (([n containsString:@"BarBackground"] || [n containsString:@"Backdrop"]) && s.alpha > 0) s.alpha = 0;
+        else if (s.bounds.size.width >= nb.bounds.size.width * 0.95 && s.bounds.size.height <= 1.5) s.hidden = YES;   // hairline
+    }
+    CGFloat W = nb.bounds.size.width;
     NSMutableArray *st = [NSMutableArray arrayWithArray:nb.subviews];
     int g = 0;
-    CGFloat W = nb.bounds.size.width;
-    while (st.count && g++ < 400) {
+    while (st.count && g++ < 500) {
         UIView *v = st.lastObject; [st removeLastObject];
         if (v.tag == GLASS_TAG || v.hidden || v.alpha < 0.05) continue;
         CGRect f = [v convertRect:v.bounds toView:nb];
         NSString *cn = NSStringFromClass([v class]);
-        // back button (left) / FaceTime (right)
-        if ([v isKindOfClass:[UIControl class]] && f.size.width >= 24 && f.size.width < 160 && f.size.height >= 24 && f.size.height < 70) {
-            BOOL left = CGRectGetMidX(f) < W * 0.3, right = CGRectGetMidX(f) > W * 0.7;
-            if (left || right) { GlassBehind(v, left ? 10 : 8, 6, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
+        if ([v isKindOfClass:[UIControl class]] && f.size.width >= 24 && f.size.width < 170 && f.size.height >= 24 && f.size.height < 80) {
+            BOOL left = CGRectGetMidX(f) < W * 0.33, right = CGRectGetMidX(f) > W * 0.67;
+            if (left || right) { GlassBehind(v, left ? 12 : 10, 8, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
         }
-        // the name under the picture
-        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && fabs(CGRectGetMidX(f) - W / 2) < W * 0.2 && f.size.height < 30) {
+        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
             UILabel *l = (UILabel *)v;
-            l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
+            UIFont *bold = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
+            if (![l.font isEqual:bold]) l.font = bold;
             l.textColor = Ink(nb);
             UIView *holder = l.superview && l.superview.bounds.size.width < W * 0.7 && l.superview.bounds.size.height < 40 ? l.superview : l;
-            GlassBehind(holder, 14, 6, NO);
+            GlassBehind(holder, 14, 7, NO);
             [found addObject:[NSString stringWithFormat:@"name:%@", l.text]];
             continue;
         }
         [st addObjectsFromArray:v.subviews];
     }
-    gNavDebug = [NSString stringWithFormat:@"nav top=%@ items: %@", top, [found componentsJoinedByString:@" "]];
+}
+static void StyleNav(UIWindow *w) {
+    UIView *e = gEntry;
+    BOOL chat = e.window != nil;
+    if (!gTopOn || !chat) { gNavDebug = chat ? @"top bar off" : @"nav: no chat open"; return; }
+    NSMutableArray *found = [NSMutableArray array];
+    NSMutableArray *st = [NSMutableArray arrayWithObject:w];
+    int g = 0, bars = 0;
+    while (st.count && g++ < 4000) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (v.hidden || v.alpha < 0.05) continue;
+        if ([v isKindOfClass:[UINavigationBar class]]) {
+            CGRect f = [v convertRect:v.bounds toView:nil];
+            // the chat's bar (on the right side on iPad-style splits)
+            if (CGRectGetMaxX(f) >= w.bounds.size.width - 2) { bars++; StyleOneNav((UINavigationBar *)v, found); }
+            continue;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+    gNavDebug = [NSString stringWithFormat:@"nav bars=%d items: %@", bars, [found componentsJoinedByString:@" "]];
 }
 
 #pragma mark - debug + tick
@@ -400,7 +469,7 @@ static void Tick(void) {
         }
     }
     UILabel *l = (UILabel *)[w viewWithTag:DEBUG_TAG];
-    if (!gShowDebug) { [l removeFromSuperview]; return; }
+    if (!gShowDebug && !gPrefDebug) { [l removeFromSuperview]; return; }
     if (!l) {
         l = [UILabel new]; l.tag = DEBUG_TAG; l.numberOfLines = 0; l.userInteractionEnabled = NO;
         l.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
@@ -408,18 +477,19 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.1.0 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.2.0 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
-    l.frame = CGRectMake(12, w.safeAreaInsets.top + 110, w.bounds.size.width - 24, s.height + 12);
+    l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
 }
 
 %ctor {
     if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.MobileSMS"]) return;
+    LoadPrefs();
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, CFSTR("com.nano.messages26/prefschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_async(dispatch_get_main_queue(), ^{
         Class E = NSClassFromString(@"CKMessageEntryView");
         if (E) {
-            MSHookMessageEx(E, @selector(sizeThatFits:), (IMP)EntrySize, (IMP *)&origEntrySize);
             MSHookMessageEx(E, @selector(layoutSubviews), (IMP)EntryLayout, (IMP *)&origEntryLayout);
         }
         [NSTimer scheduledTimerWithTimeInterval:0.3 repeats:YES block:^(__unused NSTimer *t) { @try { Tick(); } @catch (__unused id ex) {} }];

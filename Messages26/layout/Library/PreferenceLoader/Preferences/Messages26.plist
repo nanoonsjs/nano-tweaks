@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>entry</key>
+	<dict>
+		<key>cell</key><string>PSLinkCell</string>
+		<key>label</key><string>Messages26</string>
+		<key>icon</key><string>Messages26.png</string>
+	</dict>
+	<key>title</key><string>Messages26</string>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Changes apply right away. If not, close Messages from the app switcher and reopen it.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Enabled</string>
+			<key>key</key><string>enabled</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.nano.messages26</string>
+			<key>PostNotification</key><string>com.nano.messages26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Glass message field with a glass + button (the camera and App Store buttons are removed).</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Glass Message Bar</string>
+			<key>key</key><string>bar</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.nano.messages26</string>
+			<key>PostNotification</key><string>com.nano.messages26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Tapping + opens a liquid glass menu with Photos, Camera and your iMessage apps. The app row above the keyboard is hidden.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Glass + Menu</string>
+			<key>key</key><string>menu</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.nano.messages26</string>
+			<key>PostNotification</key><string>com.nano.messages26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Glass back, name and FaceTime buttons at the top of a conversation, without the bar background.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Glass Top Bar</string>
+			<key>key</key><string>topbar</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.nano.messages26</string>
+			<key>PostNotification</key><string>com.nano.messages26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>Shows what Messages26 finds on screen. Made by nano.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Debug</string>
+			<key>key</key><string>debug</string>
+			<key>default</key><false/>
+			<key>defaults</key><string>com.nano.messages26</string>
+			<key>PostNotification</key><string>com.nano.messages26/prefschanged</string>
+		</dict>
+	</array>
+</dict>
+</plist>
