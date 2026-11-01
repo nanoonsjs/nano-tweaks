@@ -1,6 +1,6 @@
 Package: com.nano.musicpill
 Name: MusicPill
-Version: 1.2.56
+Version: 1.2.57
 Architecture: iphoneos-arm
 Description: Apple Music, iOS 26 style. A small glass now-playing pill (swipe to skip, scrolling title) that collapses with the tab bar, iOS 26 album, artist, search and library pages, star favorites, glass top buttons, animated album covers in the player and more. For iOS 15 and 16, every iPhone (A11 and newer). Tested on iPhone 13 Pro Max, iOS 16. Made by nano.
 Maintainer: nano

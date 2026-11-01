@@ -1,4 +1,5 @@
-// MusicPill 1.2.56 - made by nano
+// MusicPill 1.2.57 - made by nano
+// 1.2.57: Up Next shows for every song (an old queue answer pointed at the song already playing), and tries again if it found nothing
 // 1.2.56: Up Next re-sends Music's own player request asking for the songs after the playing one
 // 1.2.55: Up Next reads the queue from Music's own player answers (already loaded), not a new request
 // 1.2.54: Up Next asks for the queue songs' details (the answer was empty without them)
@@ -1355,7 +1356,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.56 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.57 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7052,6 +7053,12 @@ static void HookResponses(void) {
     if (C && class_getInstanceMethod(C, @selector(tracklist))) MSHookMessageEx(C, @selector(tracklist), (IMP)MyTracklist, (IMP *)&origTracklist);
 }
 // The song after the playing one in a tracklist (nil if it doesn't list one).
+static NSString *ItemTitle(id item) {
+    id meta = KV(item, @"metadataObject");
+    id song = KV(meta, @"song") ?: KV(meta, @"flattenedGenericObject");
+    NSString *t = KV(song, @"title");
+    return [t isKindOfClass:[NSString class]] ? t : nil;
+}
 static id NextInTracklist(id tl, NSUInteger *count) {
     id items = KV(tl, @"items");
     NSIndexPath *ip = KV(tl, @"playingItemIndexPath");
@@ -7067,7 +7074,11 @@ static id NextInTracklist(id tl, NSUInteger *count) {
         @try { ((void (*)(id, SEL, id))objc_msgSend)(items, en, eb); } @catch (__unused id e) {}
     }
     if (count) *count = all.count;
-    return (at >= 0 && at + 1 < (NSInteger)all.count) ? all[at + 1] : nil;
+    if (at < 0 || at + 1 >= (NSInteger)all.count) return nil;
+    // An old answer (from an earlier song) would point at the wrong next song.
+    NSString *playing = ItemTitle(all[at]);
+    if (gNowTitle.length && playing.length && ![playing isEqualToString:gNowTitle]) return nil;
+    return all[at + 1];
 }
 // Ask for the queue the same way Music's own queue screen does (an async player
 // request, answered later), then take the item after the playing one.
@@ -7406,6 +7417,7 @@ static void UpNextCheck(NSDictionary *info, NSString *title, UIView *pill) {
     __weak UIView *wpill = pill;
     FetchNextTrack(^(NSString *nt, NSString *na, UIImage *art) {
         UIView *p = wpill;
+        if ((!nt.length || [nt isEqualToString:title]) && [lastTitle isEqualToString:title]) { shownFor = nil; return; }   // try again on the next refresh
         if (!p || !nt.length || [nt isEqualToString:title] || ![lastTitle isEqualToString:title]) return;
         ShowUpNext(p, nt, na, art);
     });
