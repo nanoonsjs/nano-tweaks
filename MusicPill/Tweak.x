@@ -1,4 +1,5 @@
-// MusicPill 1.2.53 - made by nano
+// MusicPill 1.2.54 - made by nano
+// 1.2.54: Up Next asks for the queue songs' details (the answer was empty without them)
 // 1.2.53: Up Next reads the queue answer another way (walks every item), more debug
 // 1.2.52: Up Next finds the next song for every song (asks the way Music's queue screen does), new setting for when it shows (5-20 seconds before the end); Pin to Search removed
 // 1.2.51: Up Next shows the song name (the "E" badge was read instead), pops out of the pill as a liquid drop, follows the pill when it minimizes / expands, and drops back into it when you pull it away; Pin to Search uses the pill's song if needed
@@ -1352,7 +1353,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.53 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.54 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -7052,6 +7053,24 @@ static void MPCNextTrack(void (^done)(NSString *t, NSString *a, UIImage *img)) {
             ranged = YES;
         }
         NSString *encS = enc ? @(enc) : @"none";
+        // Which details to load for the queue items (none by default, so the list
+        // came back empty): each item's song with its title, artist and artwork.
+        Class PS = NSClassFromString(@"MPPropertySet");
+        NSString *(^K)(const char *) = ^NSString *(const char *n) { NSString * __strong *p = (NSString * __strong *)dlsym(RTLD_DEFAULT, n); return p ? *p : nil; };
+        NSString *kTitle = K("MPModelPropertySongTitle"), *kArt = K("MPModelPropertySongArtwork"), *kArtist = K("MPModelRelationshipSongArtist");
+        NSString *kName = K("MPModelPropertyPersonName"), *kGenSong = K("MPModelRelationshipGenericSong");
+        SEL psr = NSSelectorFromString(@"propertySetWithProperties:relationships:"), psp = NSSelectorFromString(@"propertySetWithProperties:");
+        if (PS && kTitle && kGenSong && [PS respondsToSelector:psr] && [PS respondsToSelector:psp]) {
+            NSMutableArray *songProps = [NSMutableArray arrayWithObject:kTitle];
+            if (kArt) [songProps addObject:kArt];
+            NSMutableDictionary *songRel = [NSMutableDictionary dictionary];
+            if (kArtist && kName) songRel[kArtist] = ((id (*)(id, SEL, id))objc_msgSend)(PS, psp, @[kName]);
+            id songSet = ((id (*)(id, SEL, id, id))objc_msgSend)(PS, psr, songProps, songRel);
+            id itemSet = ((id (*)(id, SEL, id, id))objc_msgSend)(PS, psr, @[], @{kGenSong: songSet});
+            for (NSString *key in @[@"queueItemProperties", @"playingItemProperties"]) { @try { [req setValue:itemSet forKey:key]; } @catch (__unused id e) {} }
+            @try { [req setValue:((id (*)(id, SEL, id))objc_msgSend)(PS, psp, @[]) forKey:@"queueSectionProperties"]; } @catch (__unused id e) {}
+            encS = [encS stringByAppendingString:@" props"];
+        }
         SEL perf = NSSelectorFromString(@"performWithCompletion:");
         if (![req respondsToSelector:perf]) { gUpNextDebug = @"no perform"; done(nil, nil, nil); return; }
         void (^cb)(id, NSError *) = ^(id resp, NSError *err) {
