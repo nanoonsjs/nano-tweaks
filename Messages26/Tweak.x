@@ -1,4 +1,5 @@
-// Messages26 0.18.2 - made by nano
+// Messages26 0.18.3 - made by nano
+// 0.18.3: real 3D tapback icons (iOS 18 style) on bubbles and in the tapback picker
 // 0.18.2: Custom frames (any 3 emojis + color / match photo), Ignored Words for Spelling Fix, much richer 3D reactions
 // 0.18.1: 3D tapbacks (glossy emoji that turns) and 3D reaction bursts
 // 0.18.0: animations removed; Spelling Fix, Mood Detection, Reaction Effects (+sounds), Saved Messages, Message Reminders
@@ -3936,6 +3937,7 @@ static void StyleFeatures(UIWindow *w) {
     @try { IncomingFx(w); } @catch (__unused id ex) {}
     @try { SmartBadge(w); } @catch (__unused id ex) {}
     @try { SpellFix(w); } @catch (__unused id ex) {}
+    @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) Glyphs3DIn(x); } @catch (__unused id ex) {}
     @try { MoodPill(w); } @catch (__unused id ex) {}
 }
 
@@ -4329,43 +4331,150 @@ static void ReactBurst(UIView *v, NSString *emoji) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [host removeFromSuperview]; });
 }
 static void (*origAckCfg)(id, SEL, id);
-// the tapback on the bubble: Apple's flat glyph becomes a glossy 3D emoji that gently turns
-static void Ack3D(UIView *b, id item) {
-    CALayer *mine = nil; for (CALayer *x in b.layer.sublayers) if ([x.name isEqualToString:@"m26ack3d"]) mine = x;
-    long long tp = 0; @try { tp = [[item valueForKey:@"latestAcknowledgmentType"] longLongValue]; } @catch (__unused id e) {}
-    UIImageView *glyph = nil; CGFloat best = 0;
-    NSMutableArray *st = [NSMutableArray arrayWithArray:b.subviews]; int g = 0;
-    while (st.count && g++ < 40) { UIView *v = st.lastObject; [st removeLastObject];
-        if ([v isKindOfClass:[UIImageView class]] && v.bounds.size.width < b.bounds.size.width * 0.9 && v.bounds.size.width * v.bounds.size.height > best) { best = v.bounds.size.width * v.bounds.size.height; glyph = (UIImageView *)v; }
-        [st addObjectsFromArray:v.subviews]; }
-    if (!Opt(@"react") || !glyph) { [mine removeFromSuperlayer]; if (glyph) glyph.alpha = 1; return; }
-    glyph.alpha = 0;
-    CGRect gr = [glyph convertRect:glyph.bounds toView:b];
-    CGFloat d = MAX(gr.size.width, gr.size.height) * 1.25;
-    NSString *em = AckEmoji(tp);
-    if (![objc_getAssociatedObject(b, "m26ackem") isEqual:em] || ![objc_getAssociatedObject(b, "m26acksz") isEqual:@((int)d)]) {
-        BOOL was = mine != nil;
+// ---- iOS 18-style 3D tapback icons (drawn here, cached) ----
+static NSString *GlyphType(UIView *g) {
+    NSString *n = NSStringFromClass([g class]);
+    if ([n containsString:@"Heart"]) return @"heart";
+    if ([n containsString:@"ThumbsUp"]) return @"up";
+    if ([n containsString:@"ThumbsDown"]) return @"down";
+    if ([n containsString:@"Ha"]) return @"ha";
+    if ([n containsString:@"Exclamation"]) return @"bang";
+    if ([n containsString:@"Question"]) return @"q";
+    long long t = -1; @try { t = [[g valueForKey:@"acknowledgmentType"] longLongValue] % 1000; } @catch (__unused id e) {}
+    return @[@"heart", @"up", @"down", @"ha", @"bang", @"q"][(t >= 0 && t < 6) ? t : 0];
+}
+static CGImageRef ShapeMask(NSString *type, CGFloat S) {
+    CGColorSpaceRef gs = CGColorSpaceCreateDeviceGray();
+    CGContextRef m = CGBitmapContextCreate(NULL, S, S, 8, 0, gs, kCGImageAlphaNone);
+    CGColorSpaceRelease(gs);
+    CGContextSetGrayFillColor(m, 0, 1); CGContextFillRect(m, CGRectMake(0, 0, S, S));
+    CGContextSetGrayFillColor(m, 1, 1);
+    UIGraphicsPushContext(m);
+    CGContextTranslateCTM(m, 0, S); CGContextScaleCTM(m, 1, -1);
+    if ([type isEqualToString:@"heart"]) {
+        CGFloat w = S * 0.84, x = (S - w) / 2, y = S * 0.14, h = S * 0.74;
+        UIBezierPath *p = [UIBezierPath bezierPath];
+        [p moveToPoint:CGPointMake(S / 2, y + h)];
+        [p addCurveToPoint:CGPointMake(x, y + h * 0.3) controlPoint1:CGPointMake(S / 2 - w * 0.12, y + h * 0.84) controlPoint2:CGPointMake(x, y + h * 0.62)];
+        [p addCurveToPoint:CGPointMake(S / 2, y + h * 0.12) controlPoint1:CGPointMake(x, y - h * 0.06) controlPoint2:CGPointMake(S / 2 - w * 0.06, y - h * 0.06)];
+        [p addCurveToPoint:CGPointMake(x + w, y + h * 0.3) controlPoint1:CGPointMake(S / 2 + w * 0.06, y - h * 0.06) controlPoint2:CGPointMake(x + w, y - h * 0.06)];
+        [p addCurveToPoint:CGPointMake(S / 2, y + h) controlPoint1:CGPointMake(x + w, y + h * 0.62) controlPoint2:CGPointMake(S / 2 + w * 0.12, y + h * 0.84)];
+        [p closePath];
+        [UIColor.whiteColor setFill]; [p fill];
+    } else {
+        NSString *t = [type isEqualToString:@"ha"] ? @"HA\nHA" : [type isEqualToString:@"bang"] ? @"!!" : @"?";
+        CGFloat fs = [type isEqualToString:@"ha"] ? S * 0.42 : S * 0.86;
+        UIFont *f = [UIFont systemFontOfSize:fs weight:UIFontWeightBlack];
+        UIFontDescriptor *rd = [f.fontDescriptor fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded]; if (rd) f = [UIFont fontWithDescriptor:rd size:fs];
+        NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = NSTextAlignmentCenter; ps.lineHeightMultiple = 0.78;
+        NSAttributedString *as = [[NSAttributedString alloc] initWithString:t attributes:@{NSFontAttributeName: f, NSForegroundColorAttributeName: UIColor.whiteColor, NSParagraphStyleAttributeName: ps, NSKernAttributeName: @(-fs * 0.02)}];
+        CGRect br = [as boundingRectWithSize:CGSizeMake(S, S) options:NSStringDrawingUsesLineFragmentOrigin context:nil];
+        [as drawWithRect:CGRectMake(0, (S - br.size.height) / 2, S, br.size.height) options:NSStringDrawingUsesLineFragmentOrigin context:nil];
+    }
+    UIGraphicsPopContext();
+    CGImageRef img = CGBitmapContextCreateImage(m); CGContextRelease(m);
+    return img;
+}
+static NSMutableDictionary *gGlyphCache;
+static UIImage *Glyph3DImage(NSString *type) {
+    if (!gGlyphCache) gGlyphCache = [NSMutableDictionary dictionary];
+    UIImage *c = gGlyphCache[type]; if (c) return c;
+    if ([type isEqualToString:@"up"] || [type isEqualToString:@"down"]) { c = EmojiImage([type isEqualToString:@"up"] ? @"👍" : @"👎", 180); gGlyphCache[type] = c; return c; }
+    CGFloat S = 180;
+    NSArray *pal = [type isEqualToString:@"heart"] ? @[@[@1, @0.8, @0.88], @[@1, @0.42, @0.66], @[@0.86, @0.18, @0.46]]
+                 : [type isEqualToString:@"ha"] ? @[@[@0.62, @0.86, @1], @[@0.2, @0.6, @1], @[@0.05, @0.35, @0.85]]
+                 : [type isEqualToString:@"bang"] ? @[@[@1, @0.62, @0.55], @[@1, @0.28, @0.28], @[@0.78, @0.06, @0.14]]
+                 : @[@[@0.82, @0.72, @1], @[@0.6, @0.42, @1], @[@0.38, @0.2, @0.85]];
+    UIColor *(^col)(NSArray *, CGFloat) = ^UIColor *(NSArray *a, CGFloat al) { return [UIColor colorWithRed:[a[0] doubleValue] green:[a[1] doubleValue] blue:[a[2] doubleValue] alpha:al]; };
+    CGImageRef mask = ShapeMask(type, S);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(NULL, S, S, 8, 0, cs, kCGImageAlphaPremultipliedLast);
+    CGRect R = CGRectMake(0, 0, S, S);
+    // soft drop shadow + extruded back (depth)
+    CGContextSaveGState(ctx);
+    CGContextSetShadowWithColor(ctx, CGSizeMake(0, -S * 0.04), S * 0.05, [UIColor colorWithWhite:0 alpha:0.45].CGColor);
+    for (int i = 6; i >= 1; i--) {
+        CGContextSaveGState(ctx); CGContextTranslateCTM(ctx, 0, -i * S * 0.008); CGContextClipToMask(ctx, R, mask);
+        CGContextSetFillColorWithColor(ctx, col(pal[2], 1).CGColor); CGContextFillRect(ctx, R); CGContextRestoreGState(ctx);
+    }
+    CGContextRestoreGState(ctx);
+    // the face: light top, rich middle, deep bottom
+    CGContextSaveGState(ctx); CGContextClipToMask(ctx, R, mask);
+    CGGradientRef gr = CGGradientCreateWithColors(cs, (__bridge CFArrayRef)@[(id)col(pal[0], 1).CGColor, (id)col(pal[1], 1).CGColor, (id)col(pal[2], 1).CGColor], (CGFloat[]){0, 0.55, 1});
+    CGContextDrawLinearGradient(ctx, gr, CGPointMake(S * 0.3, S), CGPointMake(S * 0.7, 0), 0); CGGradientRelease(gr);
+    // inner bottom shade + glossy top highlight
+    CGGradientRef hl = CGGradientCreateWithColors(cs, (__bridge CFArrayRef)@[(id)[UIColor colorWithWhite:1 alpha:0.75].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor], (CGFloat[]){0, 1});
+    CGContextDrawRadialGradient(ctx, hl, CGPointMake(S * 0.36, S * 0.72), 0, CGPointMake(S * 0.36, S * 0.72), S * 0.3, 0); CGGradientRelease(hl);
+    CGGradientRef rim = CGGradientCreateWithColors(cs, (__bridge CFArrayRef)@[(id)[UIColor colorWithWhite:0 alpha:0].CGColor, (id)[UIColor colorWithWhite:0 alpha:0.22].CGColor], (CGFloat[]){0.55, 1});
+    CGContextDrawRadialGradient(ctx, rim, CGPointMake(S * 0.45, S * 0.6), 0, CGPointMake(S * 0.5, S * 0.5), S * 0.55, 0); CGGradientRelease(rim);
+    CGContextRestoreGState(ctx);
+    CGImageRef out = CGBitmapContextCreateImage(ctx);
+    c = [UIImage imageWithCGImage:out scale:3 orientation:UIImageOrientationUp];
+    CGImageRelease(out); CGContextRelease(ctx); CGColorSpaceRelease(cs); CGImageRelease(mask);
+    gGlyphCache[type] = c;
+    return c;
+}
+// put the 3D icon over a tapback glyph (on a bubble or in the tapback picker)
+static void Glyph3D(UIView *g, BOOL popIn) {
+    CALayer *mine = nil; for (CALayer *x in g.layer.sublayers) if ([x.name isEqualToString:@"m26g3d"]) mine = x;
+    if (!Opt(@"react")) {
+        if (mine) { [mine removeFromSuperlayer]; for (CALayer *x in g.layer.sublayers) x.opacity = 1; for (UIView *v in g.subviews) v.alpha = 1; }
+        return;
+    }
+    NSString *type = GlyphType(g);
+    for (CALayer *x in g.layer.sublayers) if (x != mine && x.opacity > 0) x.opacity = 0;   // Apple's flat drawing
+    CGFloat d = MAX(g.bounds.size.width, g.bounds.size.height) * 1.08;
+    if (d < 8) return;
+    if (!mine || ![[mine valueForKey:@"m26type"] isEqual:type]) {
         [mine removeFromSuperlayer];
-        objc_setAssociatedObject(b, "m26ackem", em, OBJC_ASSOCIATION_RETAIN_NONATOMIC); objc_setAssociatedObject(b, "m26acksz", @((int)d), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        mine = Emoji3D(em, d); mine.name = @"m26ack3d";
-        mine.shadowOpacity = 0.45; mine.shadowRadius = 2.5; mine.shadowOffset = CGSizeMake(0, 2.5);
-        [b.layer addSublayer:mine];
-        CATransform3D p = CATransform3DIdentity; p.m34 = -1.0 / 110; b.layer.sublayerTransform = p;
-        // floats and tilts in 3D
-        CAKeyframeAnimation *ry = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.y"]; ry.values = @[@0, @0.6, @0, @-0.6, @0]; ry.duration = 3.4; ry.repeatCount = HUGE_VALF; ry.removedOnCompletion = NO;
-        CAKeyframeAnimation *rx = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.x"]; rx.values = @[@0.25, @-0.25, @0.25]; rx.duration = 2.6; rx.repeatCount = HUGE_VALF; rx.removedOnCompletion = NO;
-        CAKeyframeAnimation *fy = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"]; fy.values = @[@0, @(-d * 0.08), @0]; fy.duration = 2.0; fy.repeatCount = HUGE_VALF; fy.removedOnCompletion = NO;
-        for (CAKeyframeAnimation *a in @[ry, rx, fy]) { a.calculationMode = kCAAnimationCubic; [mine addAnimation:a forKey:a.keyPath]; }
-        if (was || [NSDate date].timeIntervalSince1970 > gAckReadyAt) {
-            // a new reaction pops in with a full spin
+        UIImage *im = Glyph3DImage(type);
+        mine = [CALayer layer]; mine.name = @"m26g3d"; [mine setValue:type forKey:@"m26type"];
+        mine.contents = (id)im.CGImage; mine.contentsGravity = kCAGravityResizeAspect;
+        // a moving shine across the icon
+        CAGradientLayer *sh = [CAGradientLayer layer]; sh.name = @"sh";
+        sh.colors = @[(id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.7].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+        sh.startPoint = CGPointMake(0, 0.2); sh.endPoint = CGPointMake(1, 0.8); sh.locations = @[@0.42, @0.5, @0.58];
+        CALayer *hold = [CALayer layer]; hold.name = @"hold"; CALayer *mk = [CALayer layer]; mk.contents = (id)im.CGImage; mk.contentsGravity = kCAGravityResizeAspect; hold.mask = mk;
+        [hold addSublayer:sh]; [mine addSublayer:hold];
+        [g.layer addSublayer:mine];
+        CATransform3D p = CATransform3DIdentity; p.m34 = -1.0 / 90; g.layer.sublayerTransform = p;
+        CAKeyframeAnimation *ry = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.y"]; ry.values = @[@0, @0.5, @0, @-0.5, @0]; ry.duration = 3.6; ry.repeatCount = HUGE_VALF; ry.removedOnCompletion = NO; ry.calculationMode = kCAAnimationCubic;
+        CAKeyframeAnimation *rx = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.x"]; rx.values = @[@0.22, @-0.22, @0.22]; rx.duration = 2.8; rx.repeatCount = HUGE_VALF; rx.removedOnCompletion = NO; rx.calculationMode = kCAAnimationCubic;
+        [mine addAnimation:ry forKey:@"ry"]; [mine addAnimation:rx forKey:@"rx"];
+        CABasicAnimation *mv = [CABasicAnimation animationWithKeyPath:@"position.x"]; mv.duration = 1.6; mv.repeatCount = HUGE_VALF; mv.removedOnCompletion = NO; mv.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [sh setValue:mv forKey:@"m26mv"];
+        if (popIn) {
             CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; pop.values = @[@0, @1.5, @0.85, @1.1, @1]; pop.duration = 0.7;
-            CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.y"]; spin.fromValue = @(-M_PI * 2); spin.toValue = @0; spin.duration = 0.7; spin.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.3 :1];
+            CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.y"]; spin.fromValue = @(-M_PI * 2); spin.toValue = @0; spin.duration = 0.7;
             [mine addAnimation:pop forKey:@"pop"]; [mine addAnimation:spin forKey:@"spin"];
         }
     }
     [CATransaction begin]; [CATransaction setDisableActions:YES];
-    mine.bounds = CGRectMake(0, 0, d, d); mine.position = CGPointMake(CGRectGetMidX(gr), CGRectGetMidY(gr));
+    CGRect f = CGRectMake((g.bounds.size.width - d) / 2, (g.bounds.size.height - d) / 2, d, d);
+    if (!CGRectEqualToRect(mine.frame, f)) {
+        mine.frame = f;
+        CALayer *hold = nil; for (CALayer *x in mine.sublayers) if ([x.name isEqualToString:@"hold"]) hold = x;
+        hold.frame = mine.bounds; hold.mask.frame = hold.bounds;
+        CAGradientLayer *sh = (CAGradientLayer *)hold.sublayers.firstObject; sh.frame = CGRectMake(-d, 0, d * 3, d);
+        CABasicAnimation *mv = [sh valueForKey:@"m26mv"]; mv.fromValue = @(-d * 0.5); mv.toValue = @(d * 1.5); [sh addAnimation:mv forKey:@"shine"];
+    }
     [CATransaction commit];
+}
+static void Ack3D(UIView *b, id item) {
+    NSMutableArray *st = [NSMutableArray arrayWithArray:b.subviews]; int g = 0;
+    while (st.count && g++ < 40) { UIView *v = st.lastObject; [st removeLastObject];
+        if ([NSStringFromClass([v class]) containsString:@"AcknowledgmentGlyphView"] || [NSStringFromClass([v class]) containsString:@"AcknowledgementGlyphView"]) { Glyph3D(v, [NSDate date].timeIntervalSince1970 > gAckReadyAt && !objc_getAssociatedObject(v, "m26seen3d")); objc_setAssociatedObject(v, "m26seen3d", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); continue; }
+        [st addObjectsFromArray:v.subviews]; }
+}
+// the tapback picker (and anywhere else glyphs show up)
+static void Glyphs3DIn(UIWindow *w) {
+    if (!Opt(@"react")) return;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:w]; int g = 0;
+    while (st.count && g++ < 5000) { UIView *v = st.lastObject; [st removeLastObject];
+        if (v.hidden) continue;
+        NSString *n = NSStringFromClass([v class]);
+        if ([n containsString:@"AcknowledgmentGlyphView"] || [n containsString:@"AcknowledgementGlyphView"]) { Glyph3D(v, NO); continue; }
+        [st addObjectsFromArray:v.subviews]; }
 }
 static void (*origAckLayout)(id, SEL);
 static void AckLayout(UIView *self, SEL _cmd) { origAckLayout(self, _cmd); id it = objc_getAssociatedObject(self, "m26ackitem"); @try { Ack3D(self, it); } @catch (__unused id e) {} }
@@ -4829,7 +4938,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
