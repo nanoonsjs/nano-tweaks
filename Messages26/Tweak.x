@@ -1,4 +1,5 @@
-// Messages26 0.10.12 - made by nano
+// Messages26 0.10.13 - made by nano
+// 0.10.13: name capsule drawn over the photo
 // 0.10.12: name + glass measured without the scaling (no double move, no jitter)
 // 0.10.11: name glass moves with the name; name centered
 // 0.10.10: photo + name scaled without fighting Messages' layout; name hangs right under the photo
@@ -1220,6 +1221,14 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     if (!CATransform3DEqualToTransform(av.layer.sublayerTransform, ta)) av.layer.sublayerTransform = ta;
     if (!CATransform3DEqualToTransform(name.layer.sublayerTransform, tn)) name.layer.sublayerTransform = tn;
     gNameTy = tyN;
+    // the name capsule sits on top of the photo
+    { UIView *common = av.superview;
+      while (common && ![name isDescendantOfView:common]) common = common.superview;
+      UIView *nb2 = name, *ab = av;
+      while (nb2.superview && nb2.superview != common) nb2 = nb2.superview;
+      while (ab.superview && ab.superview != common) ab = ab.superview;
+      if (common && nb2 != ab && nb2.layer.zPosition <= ab.layer.zPosition) nb2.layer.zPosition = ab.layer.zPosition + 1;
+      if (name.layer.zPosition < 10) name.layer.zPosition = 10; }
     Crisp(name, s);
     for (UIView *p = av; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
     for (UIView *p = name; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
@@ -1780,7 +1789,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.12 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.13 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
