@@ -3108,7 +3108,7 @@ static void EmojiRain(NSString *emoji, UIWindow *w) {
 
 // ---- the open chat's transcript (chat items) ----
 static UICollectionView *TranscriptCV(UIWindow *w) { return (UICollectionView *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UICollectionView class]] && [NSStringFromClass([v class]) containsString:@"Transcript"]; }, 3000); }
-static NSArray *ChatItems(UICollectionView *cv) { NSArray *a = nil; @try { a = [cv.delegate valueForKey:@"chatItems"]; } @catch (__unused id e) {} return [a isKindOfClass:[NSArray class]] ? a : nil; }
+static NSArray *ChatItems(UICollectionView *cv) { NSArray *a = nil; @try { a = [(id)cv.delegate valueForKey:@"chatItems"]; } @catch (__unused id e) {} return [a isKindOfClass:[NSArray class]] ? a : nil; }
 static NSString *ItemText(id it) { id t = nil; @try { t = [it valueForKey:@"text"]; } @catch (__unused id e) {} return [t isKindOfClass:[NSAttributedString class]] ? [t string] : [t isKindOfClass:[NSString class]] ? t : nil; }
 static BOOL ItemFromMe(id it) { @try { return [[it valueForKey:@"isFromMe"] boolValue]; } @catch (__unused id e) { return NO; } }
 
@@ -3413,7 +3413,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     SetOpt(FeatRows()[sw.tag - 1][0], sw.on);
     [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:sw.tag] withRowAnimation:UITableViewRowAnimationFade];
 }
-- (void)secs:(UISegmentedControl *)sg { [[NSUserDefaults standardUserDefaults] setInteger:@[@30, @60, @90, @110][sg.selectedSegmentIndex].integerValue forKey:@"m26.unsendSecs"]; }
+- (void)secs:(UISegmentedControl *)sg { [[NSUserDefaults standardUserDefaults] setInteger:[(NSNumber *)@[@30, @60, @90, @110][sg.selectedSegmentIndex] integerValue] forKey:@"m26.unsendSecs"]; }
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
     if (ip.section == 0) { [self.navigationController pushViewController:[[M26FramesVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES]; return; }
