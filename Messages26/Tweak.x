@@ -1,4 +1,5 @@
-// Messages26 0.11.2 - made by nano
+// Messages26 0.11.3 - made by nano
+// 0.11.3: tabs switch the whole page; no Shared-with-You note, no iCloud footer; header see-through
 // 0.11.2: tabs no longer crash; tabs clear of the cards; glass cards on a black page
 // 0.11.1: tabs really split the page (Info / Photos / Links / Documents / Collaboration); Edit presses info
 // 0.11.0: iOS 26 contact page: glass back + Edit, three glass icon buttons, Info / Backgrounds / Photos / Links tabs
@@ -1733,6 +1734,8 @@ static void InstallSwipe(UIWindow *w) {
 static NSString *gDetDebug = @"details: -";
 static __weak UIView *gInfoTile;
 static __weak UIScrollView *gDetTable;
+static __weak UICollectionView *gDetChild;
+static NSInteger gChildRowSection = -1, gHeadRowSection = -1;
 static NSString *gDetTab = @"Info";
 static NSInteger gHeaderSection = -1;
 static UIViewController *DetailsVC(UIViewController *vc, int depth) {
@@ -1833,10 +1836,45 @@ static id LayB(id self, SEL _cmd, id ctl, id env) { if (HideCtl(self, ctl)) retu
 static id SnapA(id self, SEL _cmd) { return FilterSnap(self, origSnapA(self, _cmd)); }
 static id SnapB(id self, SEL _cmd) { return FilterSnap(self, origSnapB(self, _cmd)); }
 static void ReloadDetailSections(void) {
-    UIScrollView *cv = gDetTable;
+    UITableView *tb = (UITableView *)gDetTable;
+    if ([tb isKindOfClass:[UITableView class]]) [tb reloadData];
+    UIScrollView *cv = gDetChild;
     for (UIResponder *r = cv; r; r = r.nextResponder) if ([r respondsToSelector:@selector(reloadData)] && [r isKindOfClass:[UIViewController class]]) { [(id)r performSelector:@selector(reloadData)]; return; }
     id d = [(id)cv delegate];
     if ([d isKindOfClass:[UIViewController class]] && [d respondsToSelector:@selector(reloadData)]) [d performSelector:@selector(reloadData)];
+}
+
+// Outer page (table): Info rows only on the Info tab; the media part only on the others.
+static BOOL HideRowSection(NSInteger sct) {
+    if (!gTopOn || sct == gHeadRowSection) return NO;
+    BOOL info = [gDetTab isEqualToString:@"Info"];
+    if (sct == gChildRowSection) return info;
+    return !info && gChildRowSection >= 0;
+}
+static BOOL IsSharedFooter(UIView *v) { return v && Find(v, ^BOOL(UIView *y) { return [y isKindOfClass:[UILabel class]] && [((UILabel *)y).text hasPrefix:@"Content shared"]; }, 30) != nil; }
+static NSInteger (*origRows)(id, SEL, id, NSInteger);
+static NSInteger DetRows(id self, SEL _cmd, UITableView *tv, NSInteger sct) { NSInteger n = origRows(self, _cmd, tv, sct); return HideRowSection(sct) ? 0 : n; }
+static id (*origFootV)(id, SEL, id, NSInteger);
+static id DetFootV(id self, SEL _cmd, UITableView *tv, NSInteger sct) { if (HideRowSection(sct)) return nil; id v = origFootV(self, _cmd, tv, sct); return IsSharedFooter(v) ? nil : v; }
+static CGFloat (*origFootH)(id, SEL, id, NSInteger);
+static CGFloat DetFootH(id self, SEL _cmd, UITableView *tv, NSInteger sct) {
+    if (HideRowSection(sct)) return 0.01;
+    if (origFootV && IsSharedFooter(origFootV(self, @selector(tableView:viewForFooterInSection:), tv, sct))) return 0.01;
+    return origFootH(self, _cmd, tv, sct);
+}
+static id (*origHeadV)(id, SEL, id, NSInteger);
+static id DetHeadV(id self, SEL _cmd, UITableView *tv, NSInteger sct) { return HideRowSection(sct) ? nil : origHeadV(self, _cmd, tv, sct); }
+static CGFloat (*origHeadH)(id, SEL, id, NSInteger);
+static CGFloat DetHeadH(id self, SEL _cmd, UITableView *tv, NSInteger sct) { return HideRowSection(sct) ? 0.01 : origHeadH(self, _cmd, tv, sct); }
+static void HookDetailsTable(void) {
+    Class D = NSClassFromString(@"CKDetailsController");
+    if (!D) return;
+    #define DH(sel, fn, orig) if (class_getInstanceMethod(D, sel)) MSHookMessageEx(D, sel, (IMP)fn, (IMP *)&orig)
+    DH(@selector(tableView:numberOfRowsInSection:), DetRows, origRows);
+    DH(@selector(tableView:viewForFooterInSection:), DetFootV, origFootV);
+    DH(@selector(tableView:heightForFooterInSection:), DetFootH, origFootH);
+    DH(@selector(tableView:viewForHeaderInSection:), DetHeadV, origHeadV);
+    DH(@selector(tableView:heightForHeaderInSection:), DetHeadH, origHeadH);
 }
 @interface M26Details : NSObject
 + (instancetype)shared;
@@ -1848,8 +1886,8 @@ static void ReloadDetailSections(void) {
     [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
     gDetTab = [b titleForState:UIControlStateNormal];
     @try { ReloadDetailSections(); } @catch (__unused id e) {}
-    UICollectionView *cv = (UICollectionView *)gDetTable;
-    if ([cv isKindOfClass:[UICollectionView class]]) [cv.collectionViewLayout invalidateLayout];
+    UICollectionView *cv = gDetChild;
+    [cv.collectionViewLayout invalidateLayout];
     UIScrollView *sv = gDetTable;
     [sv setContentOffset:CGPointMake(0, -sv.adjustedContentInset.top) animated:YES];
 }
@@ -1905,7 +1943,9 @@ static void CardGlass(UIView *root) {
         if (z.width >= W - 100 && z.width <= W - 8 && z.height >= 30 && z.height < 900 && (marked || CardColor(v.backgroundColor))) {
             if (!marked) objc_setAssociatedObject(v, &kCardKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             if (v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) > 0) v.backgroundColor = UIColor.clearColor;
-            if (v.window) [rects addObject:[NSValue valueWithCGRect:[v convertRect:v.bounds toView:sc]]];
+            UIView *it = gInfoTile;
+            BOOL head = it && [it isDescendantOfView:v];
+            if (v.window && !head) [rects addObject:[NSValue valueWithCGRect:[v convertRect:v.bounds toView:sc]]];
             [st addObjectsFromArray:v.subviews];
             continue;
         }
@@ -1936,12 +1976,13 @@ static void CardGlass(UIView *root) {
 static UIBarButtonItem *GlassTextItem(NSString *t, id target, SEL a) { return [[UIBarButtonItem alloc] initWithTitle:t style:UIBarButtonItemStylePlain target:target action:a]; }
 static void StyleDetails(UIWindow *w) {
     UIViewController *vc = gTopOn ? DetailsVC(w.rootViewController, 0) : nil;
-    if (!vc) { gDetDebug = @"details: -"; gDetTab = @"Info"; return; }
+    if (!vc) { gDetDebug = @"details: -"; gDetTab = @"Info"; gHeadRowSection = gChildRowSection = -1; return; }
     UIView *root = vc.view;
     CGFloat W = root.bounds.size.width;
     // the action tiles: call / video / mail / info (found by their labels)
     NSMutableDictionary *tiles = [NSMutableDictionary dictionary];
     NSArray *names = @[@"call", @"video", @"mail", @"info", @"message"];
+    BOOL foundTable = NO;
     NSMutableArray *st = [NSMutableArray arrayWithObject:root]; int g = 0;
     while (st.count && g++ < 3000) { UIView *v = st.lastObject; [st removeLastObject];
         if ([v isKindOfClass:[UILabel class]]) {
@@ -1956,7 +1997,8 @@ static void StyleDetails(UIWindow *w) {
                 if (tile) tiles[t] = @{@"tile": tile, @"label": v};
             }
         }
-        if ([v isKindOfClass:[UIScrollView class]] && v.bounds.size.height > root.bounds.size.height * 0.5) gDetTable = (UIScrollView *)v;
+        if ([v isKindOfClass:[UITableView class]] && !foundTable) { gDetTable = (UIScrollView *)v; foundTable = YES; }
+        if ([v isKindOfClass:[UICollectionView class]] && [NSStringFromClass([v class]) containsString:@"Search"]) gDetChild = (UICollectionView *)v;
         [st addObjectsFromArray:v.subviews];
     }
     // top bar: Done -> glass back chevron (left), info -> Edit (right)
@@ -1974,7 +2016,22 @@ static void StyleDetails(UIWindow *w) {
     gInfoTile = tiles[@"info"][@"tile"];
     { UIView *any = ((NSDictionary *)tiles.allValues.firstObject)[@"tile"];
       UIView *cell = any; while (cell && ![cell isKindOfClass:[UICollectionViewCell class]] && ![cell isKindOfClass:[UICollectionReusableView class]]) cell = cell.superview;
-      if ([cell isKindOfClass:[UICollectionViewCell class]] && [gDetTable isKindOfClass:[UICollectionView class]]) { NSIndexPath *ip = [(UICollectionView *)gDetTable indexPathForCell:(UICollectionViewCell *)cell]; if (ip) gHeaderSection = ip.section; } }
+      (void)cell; }
+    // which table sections hold the header (buttons) and the media part
+    { UITableView *tb = (UITableView *)gDetTable;
+      if ([tb isKindOfClass:[UITableView class]]) {
+          UIView *any = ((NSDictionary *)tiles.allValues.firstObject)[@"tile"];
+          UIView *c = any; while (c && ![c isKindOfClass:[UITableViewCell class]]) c = c.superview;
+          NSIndexPath *ip = c ? [tb indexPathForCell:(UITableViewCell *)c] : nil; if (ip) gHeadRowSection = ip.section;
+          c = gDetChild; while (c && ![c isKindOfClass:[UITableViewCell class]]) c = c.superview;
+          ip = c ? [tb indexPathForCell:(UITableViewCell *)c] : nil; if (ip) gChildRowSection = ip.section;
+      } }
+    // "707 images in iCloud / Download": gone
+    { UICollectionView *cv = gDetChild;
+      if (cv) for (UIView *x in cv.subviews) {
+          BOOL icl = Find(x, ^BOOL(UIView *y) { return [y isKindOfClass:[UILabel class]] && [((UILabel *)y).text containsString:@"in iCloud"]; }, 30) != nil;
+          if (icl && !x.hidden) x.hidden = YES;
+      } }
     @try { CardGlass(root); } @catch (__unused id e) {}
     NSArray *order = @[@"call", @"video", @"mail"];
     NSMutableArray *have = [NSMutableArray array];
@@ -2140,9 +2197,9 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.11.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.11.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
-    l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@\n sections: %@\n edit: %@", gDetDebug, gDetTab, gSnapDebug, gEditDebug];
+    l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
         NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
@@ -2197,6 +2254,7 @@ static void Tick(void) {
         }
         MSHookMessageEx([UITextView class], @selector(setTextContainerInset:), (IMP)TVInset, (IMP *)&origTVInset);
         @try { HookThemes(); } @catch (__unused id ex) {}
+        @try { HookDetailsTable(); } @catch (__unused id ex) {}
         { Class SA = NSClassFromString(@"CKSearchViewController"), SB = NSClassFromString(@"CKDetailsSearchViewController");
           SEL ss = NSSelectorFromString(@"_newSnapshotForCurrentControllerState");
           if (SA && class_getInstanceMethod(SA, ss)) MSHookMessageEx(SA, ss, (IMP)SnapA, (IMP *)&origSnapA);
