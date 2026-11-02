@@ -1,4 +1,5 @@
 // Messages26 0.18.8 - made by nano
+// 0.18.12: contact photo moves up (its full-width avatar box); Links / Documents / Collaboration tabs only when the chat has some
 // 0.18.11: contact photo search skips the lower page so it reaches the header
 // 0.18.10: contact photo matched by its avatar view
 // 0.18.9: contact photo found anywhere on the page and moved up with the name
@@ -1867,13 +1868,16 @@ static NSString *SectionKind(id ctl) {
     return @"Info";
 }
 static NSString *gSnapDebug = @"";
+static NSMutableSet *gHasKind;   // tabs that have something in this chat
 static id (*origSnapA)(id, SEL);
 static id (*origSnapB)(id, SEL);
+static void ReloadDetailSections(void);
 static id FilterSnap(id self, id snap) {
     if (!gTopOn || ![NSStringFromClass([self class]) containsString:@"Details"] || ![snap respondsToSelector:@selector(sectionIdentifiers)]) return snap;
     NSArray *ctls = nil; @try { ctls = [self valueForKey:@"searchControllers"]; } @catch (__unused id e) {}
     NSArray *ids = [snap sectionIdentifiers];
     NSMutableArray *drop = [NSMutableArray array], *log = [NSMutableArray array];
+    NSMutableSet *has = [NSMutableSet set];
     for (NSUInteger i = 0; i < ids.count; i++) {
         id sid = ids[i];
         id ctl = nil;
@@ -1885,10 +1889,16 @@ static id FilterSnap(id self, id snap) {
         NSString *kind = ctl ? SectionKind(ctl) : @"Info";
         NSUInteger si = i; @try { if (ctl) si = [[ctl valueForKey:@"sectionIndex"] unsignedIntegerValue]; } @catch (__unused id e) {}
         BOOL keep = [kind isEqualToString:gDetTab] || (NSInteger)si == gHeaderSection;
+        if ([snap numberOfItemsInSection:sid] > 0) [has addObject:kind];
         [log addObject:[NSString stringWithFormat:@"%@:%@%@", ctl ? [NSStringFromClass([ctl class]) stringByReplacingOccurrencesOfString:@"SearchController" withString:@""] : [sid description], kind, keep ? @"" : @"-"]];
         if (!keep) [drop addObject:sid];
     }
     gSnapDebug = [log componentsJoinedByString:@" "];
+    BOOL changed = ![has isEqualToSet:gHasKind ?: [NSSet set]] || !gHasKind;
+    gHasKind = has;
+    // the tab you're on is now empty: back to Info
+    if (changed && ([gDetTab isEqualToString:@"Links"] || [gDetTab isEqualToString:@"Documents"] || [gDetTab isEqualToString:@"Collaboration"]) && ![has containsObject:gDetTab])
+        dispatch_async(dispatch_get_main_queue(), ^{ gDetTab = @"Info"; @try { ReloadDetailSections(); } @catch (__unused id e) {} });
     // empty those sections (removing them shifts Messages' section numbers -> crash)
     for (id sid in drop) { NSArray *items = [snap itemIdentifiersInSectionWithIdentifier:sid]; if (items.count) [snap deleteItemsWithIdentifiers:items]; }
     return snap;
@@ -2071,7 +2081,7 @@ static void StyleBubblePill(UIViewController *vc);
 static void ChatSearchTitle(UIViewController *vc);
 static void StyleDetails(UIWindow *w) {
     UIViewController *vc = gTopOn ? DetailsVC(w.rootViewController, 0) : nil;
-    if (!vc) { gDetDebug = @"details: -"; gDetTab = @"Info"; gHeadRowSection = gChildRowSection = -1; return; }
+    if (!vc) { gDetDebug = @"details: -"; gDetTab = @"Info"; gHasKind = nil; gHeadRowSection = gChildRowSection = -1; return; }
     UIView *root = vc.view;
     CGFloat W = root.bounds.size.width;
     // the action tiles: call / video / mail / info (found by their labels)
@@ -2202,7 +2212,12 @@ static void StyleDetails(UIWindow *w) {
     }
     CGFloat th = 32, x = 0;
     NSMutableArray *bws = [NSMutableArray array];
-    for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]]) { CGFloat bw = [((UIButton *)b).titleLabel sizeThatFits:CGSizeMake(300, 40)].width + 28; [bws addObject:@(bw)]; }
+    for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]]) {
+        NSString *bt = [(UIButton *)b titleForState:UIControlStateNormal];
+        BOOL opt = [bt isEqualToString:@"Links"] || [bt isEqualToString:@"Documents"] || [bt isEqualToString:@"Collaboration"];
+        BOOL hide = opt && gHasKind && ![gHasKind containsObject:bt];
+        if (b.hidden != hide) b.hidden = hide; }
+    for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]] && !b.hidden) { CGFloat bw = [((UIButton *)b).titleLabel sizeThatFits:CGSizeMake(300, 40)].width + 28; [bws addObject:@(bw)]; }
     CGFloat total = 0; for (NSNumber *n in bws) total += n.doubleValue;
     total += 4 * (bws.count - 1);
     CGFloat left = [root convertPoint:CGPointMake(16, 0) toView:row].x;
@@ -2210,7 +2225,7 @@ static void StyleDetails(UIWindow *w) {
     if (!CGRectEqualToRect(tabs.frame, tf)) tabs.frame = tf;
     ((UIScrollView *)tabs).contentSize = CGSizeMake(total, th);
     int bi = 0;
-    for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]]) {
+    for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]] && !b.hidden) {
         CGFloat bw = [bws[bi++] doubleValue];
         CGRect bf = CGRectMake(x, 0, bw, th); x += bw + 4;
         if (!CGRectEqualToRect(b.frame, bf)) b.frame = bf;
@@ -2250,7 +2265,7 @@ static void StyleDetails(UIWindow *w) {
             if (v != root && ![v isKindOfClass:[UILabel class]] && CGRectGetMaxY(rr) <= topY + 2 && sz.width >= 30 && sz.width < W - 20 && fabs(CGRectGetMidX(rr) - midX) < 30 && seen.count < 6)
                 [seen addObject:[NSString stringWithFormat:@"%@ %.0fx%.0f@%.0f", [NSStringFromClass([v class]) substringToIndex:MIN(18, NSStringFromClass([v class]).length)], sz.width, sz.height, CGRectGetMinY(rr)]];
             BOOL ok = v != root && ![v isKindOfClass:[UILabel class]] && ![row isDescendantOfView:v] && ![v isDescendantOfView:row]
-                && CGRectGetMaxY(r) <= T + 2 && sz.width >= 40 && sz.width <= 300 && (fabs(sz.width - sz.height) < sz.width * 0.12 || [NSStringFromClass([v class]) containsString:@"Avatar"])
+                && CGRectGetMaxY(r) <= T + 2 && sz.width >= 40 && (([NSStringFromClass([v class]) containsString:@"Avatar"] && sz.height >= 40) || (sz.width <= 300 && fabs(sz.width - sz.height) < sz.width * 0.12))
                 && fabs(CGRectGetMidX(rr) - midX) < 30;
             BOOL isAv = ok && [NSStringFromClass([v class]) containsString:@"Avatar"];
             if (isAv && (!pic || ![NSStringFromClass([pic class]) containsString:@"Avatar"])) { bw = 1e6; pic = v; }
@@ -5045,7 +5060,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.11 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.12 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
