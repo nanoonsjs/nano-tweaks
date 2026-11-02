@@ -1,4 +1,5 @@
-// Messages26 0.11.1 - made by nano
+// Messages26 0.11.2 - made by nano
+// 0.11.2: tabs no longer crash; tabs clear of the cards; glass cards on a black page
 // 0.11.1: tabs really split the page (Info / Photos / Links / Documents / Collaboration); Edit presses info
 // 0.11.0: iOS 26 contact page: glass back + Edit, three glass icon buttons, Info / Backgrounds / Photos / Links tabs
 // 0.10.13: name capsule drawn over the photo
@@ -1733,6 +1734,7 @@ static NSString *gDetDebug = @"details: -";
 static __weak UIView *gInfoTile;
 static __weak UIScrollView *gDetTable;
 static NSString *gDetTab = @"Info";
+static NSInteger gHeaderSection = -1;
 static UIViewController *DetailsVC(UIViewController *vc, int depth) {
     if (!vc || depth > 14) return nil;
     if ([NSStringFromClass([vc class]) containsString:@"DetailsController"] && vc.viewIfLoaded.window) return vc;
@@ -1801,14 +1803,33 @@ static id FilterSnap(id self, id snap) {
         }
         if (!ctl) for (id c in ctls) { @try { if ([[c valueForKey:@"sectionIndex"] unsignedIntegerValue] == i) { ctl = c; break; } } @catch (__unused id e) {} }
         NSString *kind = ctl ? SectionKind(ctl) : @"Info";
-        BOOL keep = [kind isEqualToString:gDetTab];
+        NSUInteger si = i; @try { if (ctl) si = [[ctl valueForKey:@"sectionIndex"] unsignedIntegerValue]; } @catch (__unused id e) {}
+        BOOL keep = [kind isEqualToString:gDetTab] || (NSInteger)si == gHeaderSection;
         [log addObject:[NSString stringWithFormat:@"%@:%@%@", ctl ? [NSStringFromClass([ctl class]) stringByReplacingOccurrencesOfString:@"SearchController" withString:@""] : [sid description], kind, keep ? @"" : @"-"]];
         if (!keep) [drop addObject:sid];
     }
     gSnapDebug = [log componentsJoinedByString:@" "];
-    if (drop.count) [snap deleteSectionsWithIdentifiers:drop];
+    // empty those sections (removing them shifts Messages' section numbers -> crash)
+    for (id sid in drop) { NSArray *items = [snap itemIdentifiersInSectionWithIdentifier:sid]; if (items.count) [snap deleteItemsWithIdentifiers:items]; }
     return snap;
 }
+// hidden sections get a blank layout (no header, no card)
+static id (*origLayA)(id, SEL, id, id);
+static id (*origLayB)(id, SEL, id, id);
+static BOOL HideCtl(id self, id ctl) {
+    if (!gTopOn || ![NSStringFromClass([self class]) containsString:@"Details"] || !ctl) return NO;
+    NSInteger si = -1; @try { si = [[ctl valueForKey:@"sectionIndex"] integerValue]; } @catch (__unused id e) {}
+    if (si == gHeaderSection) return NO;
+    return ![SectionKind(ctl) isEqualToString:gDetTab];
+}
+static id BlankSection(void) {
+    NSCollectionLayoutSize *sz = [NSCollectionLayoutSize sizeWithWidthDimension:[NSCollectionLayoutDimension fractionalWidthDimension:1] heightDimension:[NSCollectionLayoutDimension absoluteDimension:1]];
+    NSCollectionLayoutItem *it = [NSCollectionLayoutItem itemWithLayoutSize:sz];
+    NSCollectionLayoutGroup *g = [NSCollectionLayoutGroup horizontalGroupWithLayoutSize:sz subitems:@[it]];
+    return [NSCollectionLayoutSection sectionWithGroup:g];
+}
+static id LayA(id self, SEL _cmd, id ctl, id env) { if (HideCtl(self, ctl)) return BlankSection(); return origLayA(self, _cmd, ctl, env); }
+static id LayB(id self, SEL _cmd, id ctl, id env) { if (HideCtl(self, ctl)) return BlankSection(); return origLayB(self, _cmd, ctl, env); }
 static id SnapA(id self, SEL _cmd) { return FilterSnap(self, origSnapA(self, _cmd)); }
 static id SnapB(id self, SEL _cmd) { return FilterSnap(self, origSnapB(self, _cmd)); }
 static void ReloadDetailSections(void) {
@@ -1826,11 +1847,92 @@ static void ReloadDetailSections(void) {
 - (void)tab:(UIButton *)b {
     [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
     gDetTab = [b titleForState:UIControlStateNormal];
-    ReloadDetailSections();
+    @try { ReloadDetailSections(); } @catch (__unused id e) {}
+    UICollectionView *cv = (UICollectionView *)gDetTable;
+    if ([cv isKindOfClass:[UICollectionView class]]) [cv.collectionViewLayout invalidateLayout];
     UIScrollView *sv = gDetTable;
     [sv setContentOffset:CGPointMake(0, -sv.adjustedContentInset.top) animated:YES];
 }
 @end
+
+#define DPLATE_TAG 0x4D323656
+static char kCardKey;
+static BOOL CardColor(UIColor *c) {
+    if (!c) return NO;
+    CGFloat r, g, b, a;
+    if (![c getRed:&r green:&g blue:&b alpha:&a]) return NO;
+    if (a < 0.5 || fabs(r - g) > 0.04 || fabs(g - b) > 0.06) return NO;
+    return (r > 0.08 && r < 0.32) || r > 0.94;
+}
+// Every card (grouped rows, photo / link boxes) becomes one dark glass plate with a
+// bright rim, on a black page with a soft blue glow.
+static void CardGlass(UIView *root) {
+    UIScrollView *sc = gDetTable;
+    if (!sc || ![sc isDescendantOfView:root]) return;
+    CGFloat W = root.bounds.size.width;
+    BOOL dark = IsDark(root);
+    // page
+    UIColor *page = dark ? UIColor.blackColor : [UIColor colorWithWhite:0.95 alpha:1];
+    if (![root.backgroundColor isEqual:page]) root.backgroundColor = page;
+    for (UIView *p = sc; p && p != root.superview; p = p.superview) if (p != root && p.backgroundColor && CGColorGetAlpha(p.backgroundColor.CGColor) > 0) p.backgroundColor = UIColor.clearColor;
+    UIView *glow = [root viewWithTag:DPLATE_TAG + 50];
+    if (!glow && dark) {
+        glow = [UIView new]; glow.tag = DPLATE_TAG + 50; glow.userInteractionEnabled = NO;
+        for (int i = 0; i < 2; i++) {
+            CAGradientLayer *gl = [CAGradientLayer layer]; gl.type = kCAGradientLayerRadial;
+            gl.colors = @[(id)[UIColor colorWithRed:0.12 green:0.2 blue:0.75 alpha:i ? 0.22 : 0.3].CGColor, (id)[UIColor colorWithRed:0.1 green:0.15 blue:0.6 alpha:0].CGColor];
+            gl.startPoint = CGPointMake(0.5, 0.5); gl.endPoint = CGPointMake(1, 1);
+            gl.name = i ? @"b" : @"a";
+            [glow.layer addSublayer:gl];
+        }
+        [root insertSubview:glow atIndex:0];
+    }
+    if (glow) {
+        glow.hidden = !dark;
+        if (!CGRectEqualToRect(glow.frame, root.bounds)) {
+            glow.frame = root.bounds;
+            for (CAGradientLayer *gl in glow.layer.sublayers) gl.frame = [gl.name isEqualToString:@"a"] ? CGRectMake(W * 0.35, root.bounds.size.height * 0.28, W * 0.9, W * 0.9) : CGRectMake(-W * 0.3, root.bounds.size.height * 0.62, W * 0.9, W * 0.9);
+        }
+        if (root.subviews.firstObject != glow) [root sendSubviewToBack:glow];
+    }
+    // cards
+    NSMutableArray *rects = [NSMutableArray array];
+    NSMutableArray *st = [NSMutableArray arrayWithArray:sc.subviews]; int g = 0;
+    while (st.count && g++ < 4000) { UIView *v = st.lastObject; [st removeLastObject];
+        if (v.tag == DPLATE_TAG || v.hidden || v.alpha < 0.05) continue;
+        CGSize z = v.bounds.size;
+        BOOL marked = objc_getAssociatedObject(v, &kCardKey) != nil;
+        if (z.width >= W - 100 && z.width <= W - 8 && z.height >= 30 && z.height < 900 && (marked || CardColor(v.backgroundColor))) {
+            if (!marked) objc_setAssociatedObject(v, &kCardKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) > 0) v.backgroundColor = UIColor.clearColor;
+            if (v.window) [rects addObject:[NSValue valueWithCGRect:[v convertRect:v.bounds toView:sc]]];
+            [st addObjectsFromArray:v.subviews];
+            continue;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+    [rects sortUsingComparator:^NSComparisonResult(NSValue *a, NSValue *b) { return CGRectGetMinY(a.CGRectValue) < CGRectGetMinY(b.CGRectValue) ? NSOrderedAscending : NSOrderedDescending; }];
+    NSMutableArray *merged = [NSMutableArray array];
+    for (NSValue *v in rects) {
+        CGRect r = v.CGRectValue;
+        CGRect last = merged.count ? [merged.lastObject CGRectValue] : CGRectNull;
+        if (merged.count && CGRectGetMinY(r) - CGRectGetMaxY(last) < 2 && fabs(CGRectGetMinX(r) - CGRectGetMinX(last)) < 3) merged[merged.count - 1] = [NSValue valueWithCGRect:CGRectUnion(last, r)];
+        else if (merged.count && CGRectContainsRect(CGRectInset(last, -2, -2), r)) {}
+        else [merged addObject:[NSValue valueWithCGRect:r]];
+    }
+    NSMutableArray *plates = [NSMutableArray array];
+    for (UIView *x in sc.subviews) if (x.tag == DPLATE_TAG) [plates addObject:x];
+    for (NSUInteger i = 0; i < merged.count; i++) {
+        UIView *pl = i < plates.count ? plates[i] : nil;
+        if (!pl) { pl = [UIView new]; pl.tag = DPLATE_TAG; pl.userInteractionEnabled = NO; pl.layer.cornerCurve = kCACornerCurveContinuous; [sc insertSubview:pl atIndex:0]; }
+        CGRect r = [merged[i] CGRectValue];
+        pl.hidden = NO;
+        pl.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.125 alpha:0.94] : [UIColor colorWithWhite:1 alpha:0.94];
+        if (!CGRectEqualToRect(pl.frame, r)) { pl.frame = r; pl.layer.cornerRadius = MIN(26, r.size.height / 2); RimFit(pl, dark); }
+        if (sc.subviews.firstObject != pl && [sc.subviews indexOfObject:pl] > i) [sc insertSubview:pl atIndex:i];
+    }
+    for (NSUInteger i = merged.count; i < plates.count; i++) ((UIView *)plates[i]).hidden = YES;
+}
 static UIBarButtonItem *GlassTextItem(NSString *t, id target, SEL a) { return [[UIBarButtonItem alloc] initWithTitle:t style:UIBarButtonItemStylePlain target:target action:a]; }
 static void StyleDetails(UIWindow *w) {
     UIViewController *vc = gTopOn ? DetailsVC(w.rootViewController, 0) : nil;
@@ -1870,6 +1972,10 @@ static void StyleDetails(UIWindow *w) {
         }
     } else if (tiles[@"info"] && ![ni.rightBarButtonItem.title isEqualToString:@"Edit"]) ni.rightBarButtonItem = GlassTextItem(@"Edit", [M26Details shared], @selector(edit:));
     gInfoTile = tiles[@"info"][@"tile"];
+    { UIView *any = ((NSDictionary *)tiles.allValues.firstObject)[@"tile"];
+      UIView *cell = any; while (cell && ![cell isKindOfClass:[UICollectionViewCell class]] && ![cell isKindOfClass:[UICollectionReusableView class]]) cell = cell.superview;
+      if ([cell isKindOfClass:[UICollectionViewCell class]] && [gDetTable isKindOfClass:[UICollectionView class]]) { NSIndexPath *ip = [(UICollectionView *)gDetTable indexPathForCell:(UICollectionViewCell *)cell]; if (ip) gHeaderSection = ip.section; } }
+    @try { CardGlass(root); } @catch (__unused id e) {}
     NSArray *order = @[@"call", @"video", @"mail"];
     NSMutableArray *have = [NSMutableArray array];
     for (NSString *k in order) if (tiles[k]) [have addObject:k];
@@ -1879,9 +1985,9 @@ static void StyleDetails(UIWindow *w) {
     // tile row band (untransformed): top T, bottom B, in row coords
     CGFloat T = CGFLOAT_MAX, B = 0;
     for (NSString *k in tiles) { UIView *t = tiles[k][@"tile"]; if (t.superview != row) continue; T = MIN(T, t.center.y - t.bounds.size.height / 2); B = MAX(B, t.center.y + t.bounds.size.height / 2); }
-    CGFloat d = 50, gap = 74;
+    CGFloat d = 48, gap = 74;
     CGPoint rc = [root convertPoint:CGPointMake(W / 2, 0) toView:row];
-    CGFloat cx0 = rc.x - gap * (have.count - 1) / 2.0, cy = T + 4;
+    CGFloat cx0 = rc.x - gap * (have.count - 1) / 2.0, cy = T - 1;
     BOOL dark = IsDark(root);
     for (NSString *k in tiles) {
         UIView *t = tiles[k][@"tile"]; UILabel *lb = tiles[k][@"label"];
@@ -1941,13 +2047,13 @@ static void StyleDetails(UIWindow *w) {
         }
         [row addSubview:tabs];
     }
-    CGFloat th = 34, x = 0;
+    CGFloat th = 32, x = 0;
     NSMutableArray *bws = [NSMutableArray array];
     for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]]) { CGFloat bw = [((UIButton *)b).titleLabel sizeThatFits:CGSizeMake(300, 40)].width + 28; [bws addObject:@(bw)]; }
     CGFloat total = 0; for (NSNumber *n in bws) total += n.doubleValue;
     total += 4 * (bws.count - 1);
     CGFloat left = [root convertPoint:CGPointMake(16, 0) toView:row].x;
-    CGRect tf = CGRectMake(left, B - 10, W - 32, th);
+    CGRect tf = CGRectMake(left, T + 31, W - 32, th);
     if (!CGRectEqualToRect(tabs.frame, tf)) tabs.frame = tf;
     ((UIScrollView *)tabs).contentSize = CGSizeMake(total, th);
     int bi = 0;
@@ -2034,7 +2140,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.11.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.11.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@\n sections: %@\n edit: %@", gDetDebug, gDetTab, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
@@ -2095,7 +2201,11 @@ static void Tick(void) {
           SEL ss = NSSelectorFromString(@"_newSnapshotForCurrentControllerState");
           if (SA && class_getInstanceMethod(SA, ss)) MSHookMessageEx(SA, ss, (IMP)SnapA, (IMP *)&origSnapA);
           if (SB) { unsigned int mc = 0; Method *ms = class_copyMethodList(SB, &mc); BOOL own = NO; for (unsigned int k = 0; k < mc; k++) if (method_getName(ms[k]) == ss) own = YES; free(ms);
-                    if (own) MSHookMessageEx(SB, ss, (IMP)SnapB, (IMP *)&origSnapB); } }
+                    if (own) MSHookMessageEx(SB, ss, (IMP)SnapB, (IMP *)&origSnapB); }
+          SEL ls = NSSelectorFromString(@"layoutSectionForController:withEnvironment:");
+          if (SA && class_getInstanceMethod(SA, ls)) MSHookMessageEx(SA, ls, (IMP)LayA, (IMP *)&origLayA);
+          if (SB) { unsigned int mc = 0; Method *ms = class_copyMethodList(SB, &mc); BOOL own = NO; for (unsigned int k = 0; k < mc; k++) if (method_getName(ms[k]) == ls) own = YES; free(ms);
+                    if (own) MSHookMessageEx(SB, ls, (IMP)LayB, (IMP *)&origLayB); } }
         Class CB = NSClassFromString(@"CKColoredBalloonView");
         if (CB) {
             MSHookMessageEx(CB, @selector(layoutSubviews), (IMP)BalloonLayout, (IMP *)&origBalloonLayout);
