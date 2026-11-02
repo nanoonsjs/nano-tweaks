@@ -1,4 +1,5 @@
 // Messages26 0.18.8 - made by nano
+// 0.18.13: tabs centered when there are only a few; moved photo no longer cut off at the top
 // 0.18.12: contact photo moves up (its full-width avatar box); Links / Documents / Collaboration tabs only when the chat has some
 // 0.18.11: contact photo search skips the lower page so it reaches the header
 // 0.18.10: contact photo matched by its avatar view
@@ -2220,10 +2221,12 @@ static void StyleDetails(UIWindow *w) {
     for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]] && !b.hidden) { CGFloat bw = [((UIButton *)b).titleLabel sizeThatFits:CGSizeMake(300, 40)].width + 28; [bws addObject:@(bw)]; }
     CGFloat total = 0; for (NSNumber *n in bws) total += n.doubleValue;
     total += 4 * (bws.count - 1);
+    // few tabs: center them
     CGFloat left = [root convertPoint:CGPointMake(16, 0) toView:row].x;
     CGRect tf = CGRectMake(left, T + 31, W - 32, th);
     if (!CGRectEqualToRect(tabs.frame, tf)) tabs.frame = tf;
     ((UIScrollView *)tabs).contentSize = CGSizeMake(total, th);
+    if (total < tf.size.width) { x = floor((tf.size.width - total) / 2); if (((UIScrollView *)tabs).contentOffset.x != 0) ((UIScrollView *)tabs).contentOffset = CGPointZero; }
     int bi = 0;
     for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]] && !b.hidden) {
         CGFloat bw = [bws[bi++] doubleValue];
@@ -2274,7 +2277,9 @@ static void StyleDetails(UIWindow *w) {
         gPicDebug = pic ? [NSString stringWithFormat:@"pic=%@ %.0fx%.0f", NSStringFromClass([pic class]), pic.bounds.size.width, pic.bounds.size.height] : [NSString stringWithFormat:@"pic=none top=%.0f n=%d [%@]", topY, g3, [seen componentsJoinedByString:@"; "]];
         if (pic) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, -18);
             for (UIView *a = pic.superview; a; a = a.superview) if (CGAffineTransformEqualToTransform(a.transform, t)) { pic = nil; break; }
-            if (pic && !CGAffineTransformEqualToTransform(pic.transform, t)) pic.transform = t; } }
+            if (pic && !CGAffineTransformEqualToTransform(pic.transform, t)) pic.transform = t;
+            // don't cut off the top of the moved photo
+            if (pic) for (UIView *p = pic.superview; p && p != root; p = p.superview) { if ([p isKindOfClass:[UIScrollView class]]) break; if (p.clipsToBounds) p.clipsToBounds = NO; } } }
     }
     @try { StyleBgTab(vc); } @catch (__unused id e) {}
     @try { StyleBubblePill(vc); } @catch (__unused id e) {}
@@ -5060,7 +5065,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.12 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.13 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
