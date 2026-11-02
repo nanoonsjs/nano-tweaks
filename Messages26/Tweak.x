@@ -3783,6 +3783,8 @@ static void WillDisplay(id self, SEL _cmd, UICollectionView *cv, UICollectionVie
         RunAnim(b.layer, AnimStyle(mine), mine, cv.bounds.size.width);
     } @catch (__unused id e) {}
 }
+static void SpellFix(UIWindow *w);
+static void MoodPill(UIWindow *w);
 static void StyleFeatures(UIWindow *w) {
     @try { CheckScheduled(); } @catch (__unused id e) {}
     @try { ChatLock(w); } @catch (__unused id e) {}
