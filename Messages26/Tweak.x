@@ -1,4 +1,5 @@
-// Messages26 0.9.2 - made by nano
+// Messages26 0.10.0 - made by nano
+// 0.10.0: glass rim on received bubbles, deeper blue iMessages, swipe right to reply
 // 0.9.2: search pill mic starts dictation; no FaceTime tap animation
 // 0.9.1: search moves above the keyboard with an X; all glass matches the search pill; top compose gone
 // 0.9.0: iOS 26 search pill + compose circle at the bottom of the conversation list
@@ -57,7 +58,7 @@
 #define PILL_TAG  0x4D323649
 
 #define DOM CFSTR("com.nano.messages26")
-static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gPrefDebug = NO;
+static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
 static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
     id v = file[key];
     if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM); if (cf) v = (__bridge_transfer id)cf; }
@@ -78,6 +79,8 @@ static void LoadPrefs(void) {
     gMenuOn = gOn && PrefBool(file, @"menu", YES);
     gTopOn = gOn && PrefBool(file, @"topbar", YES);
     gSearchOn = gOn && PrefBool(file, @"searchpill", YES);
+    gBubblesOn = gOn && PrefBool(file, @"bubbles", YES);
+    gSwipeOn = gOn && PrefBool(file, @"swipereply", YES);
     gPrefDebug = PrefBool(file, @"debug", NO);
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
@@ -1307,6 +1310,193 @@ static void StyleSearchPill(UIWindow *w) {
     }
 }
 
+#pragma mark - glass bubbles + swipe to reply
+
+static NSString *gBubbleDebug = @"bubbles: -";
+static UIColor *DeepBlue(void) { return [UIColor colorWithRed:0.04 green:0.10 blue:0.70 alpha:1]; }
+// darker blue for my iMessages: the theme's blue (and reply blue) colors
+static NSMapTable *gThemeOrig;   // "Class.sel" -> IMP
+static id ThemeBlue(id self, SEL _cmd) {
+    if (gBubblesOn) return @[DeepBlue(), DeepBlue()];
+    for (Class c = object_getClass(self); c; c = class_getSuperclass(c)) {
+        NSValue *v = [gThemeOrig objectForKey:[NSString stringWithFormat:@"%s.%s", class_getName(c), sel_getName(_cmd)]];
+        if (v) return ((id (*)(id, SEL))[v pointerValue])(self, _cmd);
+    }
+    return nil;
+}
+static void HookThemes(void) {
+    gThemeOrig = [NSMapTable strongToStrongObjectsMapTable];
+    int n = objc_getClassList(NULL, 0);
+    Class *all = (Class *)malloc(sizeof(Class) * n); n = objc_getClassList(all, n);
+    int hooked = 0;
+    for (int i = 0; i < n; i++) {
+        const char *nm = class_getName(all[i]);
+        if (strncmp(nm, "CKUITheme", 9) != 0) continue;
+        for (NSString *sn in @[@"blue_balloonColors", @"reply_blue_balloonColors"]) {
+            SEL sel = NSSelectorFromString(sn);
+            unsigned int mc = 0; Method *ms = class_copyMethodList(all[i], &mc); BOOL own = NO;
+            for (unsigned int k = 0; k < mc; k++) if (method_getName(ms[k]) == sel) own = YES;
+            free(ms);
+            if (!own) continue;
+            IMP o = NULL;
+            MSHookMessageEx(all[i], sel, (IMP)ThemeBlue, &o);
+            if (o) { [gThemeOrig setObject:[NSValue valueWithPointer:(const void *)o] forKey:[NSString stringWithFormat:@"%s.%@", nm, sn]]; hooked++; }
+        }
+    }
+    free(all);
+    gBubbleDebug = [NSString stringWithFormat:@"bubbles: theme hooks=%d", hooked];
+}
+// received bubbles: a thin glass rim, bright along the top (exact bubble + tail shape)
+static char kRimKey;
+static void BubbleRim(UIView *b) {
+    UIView *rim = objc_getAssociatedObject(b, &kRimKey);
+    BOOL gray = NO;
+    @try { id c = [b valueForKey:@"color"]; gray = c ? [c intValue] == -1 : NO; } @catch (__unused id e) {}
+    if (!gray) { @try { gray = [[b valueForKey:@"orientation"] intValue] == 0; } @catch (__unused id e) {} }
+    UIView *host = b.superview;
+    if (!gBubblesOn || !gray || !host || b.bounds.size.width < 10) { [rim removeFromSuperview]; return; }
+    // the bubble's own shape (stretchable image)
+    CALayer *src = nil;
+    UIView *mk = nil; @try { mk = [b valueForKey:@"mask"]; } @catch (__unused id e) {}
+    for (CALayer *l in @[b.maskView.layer ?: NSNull.null, mk.layer ?: NSNull.null, b.layer]) if ((id)l != NSNull.null && l.contents) { src = l; break; }
+    if (!src) { [rim removeFromSuperview]; return; }
+    BOOL dark = IsDark(b);
+    if (!rim) {
+        rim = [UIView new]; rim.userInteractionEnabled = NO;
+        CAGradientLayer *gl = [CAGradientLayer layer]; gl.name = @"g";
+        gl.startPoint = CGPointMake(0.5, 0); gl.endPoint = CGPointMake(0.5, 1);
+        [rim.layer addSublayer:gl];
+        rim.maskView = [UIView new];
+        objc_setAssociatedObject(b, &kRimKey, rim, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (rim.superview != host) [host insertSubview:rim belowSubview:b];
+    else if ([host.subviews indexOfObject:rim] > [host.subviews indexOfObject:b]) [host insertSubview:rim belowSubview:b];
+    CGRect f = CGRectInset(b.frame, -1.1, -1.1);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if (!CGRectEqualToRect(rim.frame, f)) rim.frame = f;
+    CALayer *m = rim.maskView.layer;
+    rim.maskView.frame = rim.bounds;
+    m.contents = src.contents; m.contentsCenter = src.contentsCenter; m.contentsScale = src.contentsScale; m.contentsGravity = src.contentsGravity; m.contentsRect = src.contentsRect;
+    CAGradientLayer *gl = (CAGradientLayer *)rim.layer.sublayers.firstObject;
+    gl.frame = rim.bounds;
+    gl.colors = @[(id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.42 : 0.16].CGColor, (id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.16 : 0.08].CGColor, (id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.24 : 0.10].CGColor];
+    gl.locations = @[@0, @0.5, @1];
+    [CATransaction commit];
+    rim.hidden = b.hidden; rim.alpha = b.alpha; rim.transform = b.transform;
+}
+static void (*origBalloonLayout)(id, SEL);
+static void BalloonLayout(UIView *self, SEL _cmd) { origBalloonLayout(self, _cmd); @try { BubbleRim(self); } @catch (__unused id e) {} }
+static void (*origBalloonFrame)(id, SEL, CGRect);
+static void BalloonFrame(UIView *self, SEL _cmd, CGRect f) { origBalloonFrame(self, _cmd, f); if (objc_getAssociatedObject(self, &kRimKey)) @try { BubbleRim(self); } @catch (__unused id e) {} }
+static void (*origBalloonCenter)(id, SEL, CGPoint);
+static void BalloonCenter(UIView *self, SEL _cmd, CGPoint c) { origBalloonCenter(self, _cmd, c); if (objc_getAssociatedObject(self, &kRimKey)) @try { BubbleRim(self); } @catch (__unused id e) {} }
+static void (*origBalloonAlpha)(id, SEL, CGFloat);
+static void BalloonAlpha(UIView *self, SEL _cmd, CGFloat a) { origBalloonAlpha(self, _cmd, a); UIView *r = objc_getAssociatedObject(self, &kRimKey); if (r) r.alpha = a; }
+static void (*origBalloonHidden)(id, SEL, BOOL);
+static void BalloonHidden(UIView *self, SEL _cmd, BOOL h) { origBalloonHidden(self, _cmd, h); UIView *r = objc_getAssociatedObject(self, &kRimKey); if (r) r.hidden = h; }
+static void (*origBalloonMove)(id, SEL);
+static void BalloonMove(UIView *self, SEL _cmd) { origBalloonMove(self, _cmd); if (!self.superview) [objc_getAssociatedObject(self, &kRimKey) removeFromSuperview]; }
+
+// Swipe right on any message to reply: the message slides with your finger, a reply
+// arrow grows in behind it, and past the line it pops (haptic) and opens the reply.
+@interface M26Swipe : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@property (nonatomic, weak) UICollectionViewCell *cell;
+@property (nonatomic, weak) UIView *balloon;
+@property (nonatomic, strong) UIImageView *arrow;
+@property (nonatomic) BOOL armed;
+@end
+static UIView *BalloonIn(UIView *root) {
+    Class B = NSClassFromString(@"CKBalloonView");
+    return Find(root, ^BOOL(UIView *v) { return B && [v isKindOfClass:B] && !v.hidden && v.bounds.size.width > 20; }, 200);
+}
+@implementation M26Swipe
++ (instancetype)shared { static M26Swipe *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Swipe new]; }); return t; }
+- (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
+    if (!gSwipeOn) return NO;
+    CGPoint v = [g velocityInView:g.view];
+    if (v.x <= 0 || fabs(v.x) < fabs(v.y) * 1.6) return NO;
+    UICollectionView *cv = (UICollectionView *)g.view;
+    NSIndexPath *ip = [cv indexPathForItemAtPoint:[g locationInView:cv]];
+    UICollectionViewCell *c = ip ? [cv cellForItemAtIndexPath:ip] : nil;
+    UIView *b = c ? BalloonIn(c) : nil;
+    if (!b) return NO;
+    self.cell = c; self.balloon = b;
+    return YES;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return NO; }
+- (void)pan:(UIPanGestureRecognizer *)g {
+    UICollectionViewCell *c = self.cell; UIView *b = self.balloon;
+    if (!c || !b) return;
+    CGFloat t = MAX(0, [g translationInView:g.view].x);
+    CGFloat x = t < 70 ? t : 70 + (t - 70) * 0.35;   // rubber band past the line
+    x = MIN(x, 120);
+    if (g.state == UIGestureRecognizerStateBegan) {
+        self.armed = NO;
+        if (!self.arrow) {
+            self.arrow = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"arrowshape.turn.up.left.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]]];
+            self.arrow.contentMode = UIViewContentModeCenter; self.arrow.layer.cornerRadius = 17; self.arrow.layer.cornerCurve = kCACornerCurveContinuous;
+        }
+        BOOL dark = IsDark(c);
+        self.arrow.tintColor = Ink(c);
+        self.arrow.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.93 alpha:0.97];
+        self.arrow.frame = CGRectMake(0, 0, 34, 34);
+        [c.superview insertSubview:self.arrow belowSubview:c];
+    }
+    if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
+        c.transform = CGAffineTransformMakeTranslation(x, 0);
+        CGRect bf = [b convertRect:b.bounds toView:c.superview];
+        CGFloat p = MIN(1, x / 70);
+        self.arrow.center = CGPointMake(CGRectGetMinX(bf) - x + MAX(22, x / 2), CGRectGetMidY(bf));
+        self.arrow.alpha = p;
+        CGFloat sc = 0.3 + 0.7 * p;
+        if (!self.armed) self.arrow.transform = CGAffineTransformMakeScale(sc, sc);
+        BOOL armed = t >= 70;
+        if (armed != self.armed) {
+            self.armed = armed;
+            if (armed) [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+            [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.45 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ self.arrow.transform = armed ? CGAffineTransformMakeScale(1.18, 1.18) : CGAffineTransformMakeScale(sc, sc); } completion:nil];
+        }
+        return;
+    }
+    BOOL go = g.state == UIGestureRecognizerStateEnded && self.armed;
+    UIImageView *ar = self.arrow;
+    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        c.transform = CGAffineTransformIdentity;
+        ar.alpha = 0; ar.transform = go ? CGAffineTransformMakeScale(1.5, 1.5) : CGAffineTransformMakeScale(0.3, 0.3);
+    } completion:^(__unused BOOL d) { [ar removeFromSuperview]; }];
+    if (go) [self replyTo:b inCollection:(UICollectionView *)g.view cell:c];
+}
+- (void)replyTo:(UIView *)b inCollection:(UICollectionView *)cv cell:(UICollectionViewCell *)c {
+    // the transcript's own "reply" (the same as long-press -> Reply)
+    NSMutableArray *cands = [NSMutableArray array];
+    if (cv.delegate) [cands addObject:cv.delegate];
+    for (UIResponder *r = cv; r; r = r.nextResponder) [cands addObject:r];
+    SEL s1 = NSSelectorFromString(@"balloonViewShowInlineReply:");
+    for (id o in cands) if ([o respondsToSelector:s1]) { ((void (*)(id, SEL, id))objc_msgSend)(o, s1, b); gBubbleDebug = [gBubbleDebug stringByAppendingString:@" reply=balloon"]; return; }
+    SEL s2 = NSSelectorFromString(@"showInlineReplyControllerForChatItem:presentKeyboard:");
+    NSIndexPath *ip = [cv indexPathForCell:c];
+    for (id o in cands) if ([o respondsToSelector:s2]) {
+        id item = nil;
+        for (id d in cands) { @try { NSArray *items = [d valueForKey:@"chatItems"]; if ([items isKindOfClass:[NSArray class]] && ip.item < (NSInteger)items.count) { item = items[ip.item]; break; } } @catch (__unused id e) {} }
+        if (item) { ((void (*)(id, SEL, id, BOOL))objc_msgSend)(o, s2, item, YES); gBubbleDebug = [gBubbleDebug stringByAppendingString:@" reply=item"]; return; }
+    }
+    gBubbleDebug = [gBubbleDebug stringByAppendingString:@" reply=none"];
+}
+@end
+static void InstallSwipe(UIWindow *w) {
+    if (!gSwipeOn) return;
+    UIView *e = gEntry;
+    if (!e.window) return;
+    UICollectionView *cv = (UICollectionView *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UICollectionView class]] && [NSStringFromClass([v class]) containsString:@"Transcript"]; }, 3000);
+    if (!cv || objc_getAssociatedObject(cv, "m26swipe")) return;
+    objc_setAssociatedObject(cv, "m26swipe", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIPanGestureRecognizer *p = [[UIPanGestureRecognizer alloc] initWithTarget:[M26Swipe shared] action:@selector(pan:)];
+    p.delegate = [M26Swipe shared];
+    [cv addGestureRecognizer:p];
+    [cv.panGestureRecognizer requireGestureRecognizerToFail:p];
+}
+
 #pragma mark - debug + tick
 
 @interface M26Debug : NSObject <UIGestureRecognizerDelegate>
@@ -1334,6 +1524,7 @@ static void Tick(void) {
     }
     @try { StyleNav(w); } @catch (__unused id e) {}
     @try { StyleSearchPill(w); } @catch (__unused id e) {}
+    @try { InstallSwipe(w); } @catch (__unused id e) {}
     if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
     UIView *e = gEntry;
@@ -1360,7 +1551,8 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.9.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [l.text stringByAppendingFormat:@"\n %@", gBubbleDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
@@ -1398,6 +1590,16 @@ static void Tick(void) {
         if (E) {
             MSHookMessageEx(E, @selector(layoutSubviews), (IMP)EntryLayout, (IMP *)&origEntryLayout);
             MSHookMessageEx(E, @selector(hitTest:withEvent:), (IMP)EntryHit, (IMP *)&origEntryHit);
+        }
+        @try { HookThemes(); } @catch (__unused id ex) {}
+        Class CB = NSClassFromString(@"CKColoredBalloonView");
+        if (CB) {
+            MSHookMessageEx(CB, @selector(layoutSubviews), (IMP)BalloonLayout, (IMP *)&origBalloonLayout);
+            MSHookMessageEx(CB, @selector(setFrame:), (IMP)BalloonFrame, (IMP *)&origBalloonFrame);
+            MSHookMessageEx(CB, @selector(setCenter:), (IMP)BalloonCenter, (IMP *)&origBalloonCenter);
+            MSHookMessageEx(CB, @selector(setAlpha:), (IMP)BalloonAlpha, (IMP *)&origBalloonAlpha);
+            MSHookMessageEx(CB, @selector(setHidden:), (IMP)BalloonHidden, (IMP *)&origBalloonHidden);
+            MSHookMessageEx(CB, @selector(didMoveToSuperview), (IMP)BalloonMove, (IMP *)&origBalloonMove);
         }
         [NSTimer scheduledTimerWithTimeInterval:0.3 repeats:YES block:^(__unused NSTimer *t) { @try { Tick(); } @catch (__unused id ex) {} }];
     });
