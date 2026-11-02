@@ -1,4 +1,5 @@
-// Messages26 0.16.1 - made by nano
+// Messages26 0.16.2 - made by nano
+// 0.16.2: Face ID for locked chats runs in SpringBoard (no more crash)
 // 0.16.1: iOS 26 lock screen for chats (Face ID, Cancel goes back); compact Send Later sheet, keyboard hides first
 // 0.16.0: Chat Lock, Scheduled Send, Keyword Effects, Live Read Time, Auto Unsend (all off by default, in Messages26 settings)
 // 0.15.2: frames only on the list (not inside chats)
@@ -3268,6 +3269,7 @@ static void HookSendControl(UIView *v) {
 // ---- chat lock ----
 #define LOCK_TAG 0x4D32365C
 static BOOL gLockAsking = NO;
+static void (^gAuthReply)(BOOL);
 static void LockPreview(UIView *avatar, NSString *key) {
     UIView *cell = avatar; while (cell && ![cell isKindOfClass:[UICollectionViewCell class]]) cell = cell.superview;
     if (!cell) return;
@@ -3317,27 +3319,21 @@ static void LockLeave(UIWindow *w) {
     if (gLockAsking) return;
     gLockAsking = YES;
     UIView *ov = self.overlay;
-    LAContext *ctx = [LAContext new];
-    ctx.localizedCancelTitle = @"Cancel";
-    ctx.localizedFallbackTitle = @"Use Passcode";
-    NSError *err = nil;
-    LAPolicy pol = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&err] ? LAPolicyDeviceOwnerAuthenticationWithBiometrics : LAPolicyDeviceOwnerAuthentication;
     UIView *disc = [ov viewWithTag:6];
     [UIView animateWithDuration:0.6 delay:0 options:UIViewAnimationOptionAutoreverse | UIViewAnimationOptionRepeat | UIViewAnimationOptionAllowUserInteraction animations:^{ disc.transform = CGAffineTransformMakeScale(1.06, 1.06); } completion:nil];
-    [ctx evaluatePolicy:pol localizedReason:@"Unlock this chat" reply:^(BOOL ok, NSError *e) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [disc.layer removeAllAnimations]; disc.transform = CGAffineTransformIdentity;
-            if (ok) { [self unlocked]; return; }
-            gLockAsking = NO;
-            if (e.code == LAErrorUserFallback) {
-                LAContext *c2 = [LAContext new];
-                gLockAsking = YES;
-                [c2 evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:@"Unlock this chat" reply:^(BOOL ok2, __unused NSError *e2) { dispatch_async(dispatch_get_main_queue(), ^{ gLockAsking = NO; if (ok2) [self unlocked]; else [self cancel]; }); }];
-                return;
-            }
-            [self cancel];
-        });
-    }];
+    __block BOOL answered = NO;
+    gAuthReply = ^(BOOL ok) {
+        answered = YES;
+        [disc.layer removeAllAnimations]; disc.transform = CGAffineTransformIdentity;
+        if (ok) [self unlocked]; else { gLockAsking = NO; [self cancel]; }
+    };
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.nano.messages26/auth.req"), NULL, NULL, YES);
+    // no answer at all: let the Unlock button be tapped again
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (answered) return;
+        gAuthReply = nil; gLockAsking = NO;
+        [disc.layer removeAllAnimations]; disc.transform = CGAffineTransformIdentity;
+    });
 }
 - (void)cancel {
     UIView *ov = self.overlay; UIWindow *w = ov.window;
@@ -3869,7 +3865,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.16.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.16.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -3909,23 +3905,41 @@ static void Tick(void) {
 }
 %end
 
-// Messages has no Face ID usage text; give it one so Face ID (not just the passcode) can be used
-static NSDictionary *(*origInfoDict)(id, SEL);
-static NSDictionary *InfoDict(NSBundle *self, SEL _cmd) {
-    NSDictionary *d = origInfoDict(self, _cmd);
-    if (self == [NSBundle mainBundle] && d && !d[@"NSFaceIDUsageDescription"]) { NSMutableDictionary *m = [d mutableCopy]; m[@"NSFaceIDUsageDescription"] = @"Unlock locked chats with Face ID."; return m; }
-    return d;
+// Face ID runs in SpringBoard (Messages isn't allowed to use Face ID itself and gets killed);
+// Messages asks over a Darwin notification and gets ok / fail back.
+static void SBAuthRequest(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        static BOOL busy = NO;
+        if (busy) return;
+        busy = YES;
+        LAContext *ctx = [LAContext new];
+        ctx.localizedFallbackTitle = @"Use Passcode";
+        void (^done)(BOOL) = ^(BOOL ok) {
+            busy = NO;
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), ok ? CFSTR("com.nano.messages26/auth.ok") : CFSTR("com.nano.messages26/auth.fail"), NULL, NULL, YES);
+        };
+        NSError *err = nil;
+        LAPolicy pol = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&err] ? LAPolicyDeviceOwnerAuthenticationWithBiometrics : LAPolicyDeviceOwnerAuthentication;
+        [ctx evaluatePolicy:pol localizedReason:@"Unlock this chat" reply:^(BOOL ok, NSError *e) {
+            if (!ok && e.code == LAErrorUserFallback) {
+                [[LAContext new] evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:@"Unlock this chat" reply:^(BOOL ok2, __unused NSError *e2) { dispatch_async(dispatch_get_main_queue(), ^{ done(ok2); }); }];
+                return;
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{ done(ok); });
+        }];
+    });
 }
-static id (*origInfoKey)(id, SEL, NSString *);
-static id InfoKey(NSBundle *self, SEL _cmd, NSString *k) {
-    if ([k isEqualToString:@"NSFaceIDUsageDescription"] && self == [NSBundle mainBundle]) return origInfoKey(self, _cmd, k) ?: @"Unlock locked chats with Face ID.";
-    return origInfoKey(self, _cmd, k);
-}
+static void MsgAuthOK(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(BOOL) = gAuthReply; gAuthReply = nil; if (r) r(YES); }); }
+static void MsgAuthFail(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(BOOL) = gAuthReply; gAuthReply = nil; if (r) r(NO); }); }
 %ctor {
+    if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, SBAuthRequest, CFSTR("com.nano.messages26/auth.req"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+        return;
+    }
     if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.MobileSMS"]) return;
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, MsgAuthOK, CFSTR("com.nano.messages26/auth.ok"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, MsgAuthFail, CFSTR("com.nano.messages26/auth.fail"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     LoadPrefs();
-    MSHookMessageEx([NSBundle class], @selector(infoDictionary), (IMP)InfoDict, (IMP *)&origInfoDict);
-    MSHookMessageEx([NSBundle class], @selector(objectForInfoDictionaryKey:), (IMP)InfoKey, (IMP *)&origInfoKey);
     [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillChangeFrameNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
         CGRect f = [n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
         CGFloat H = UIScreen.mainScreen.bounds.size.height;
