@@ -1,6 +1,6 @@
 Package: com.nano.messages26
 Name: Messages26
-Version: 0.6.1
+Version: 0.6.2
 Architecture: iphoneos-arm
 Description: iOS 26 style Messages: liquid glass message field and + button, glass back / name / FaceTime buttons, and a liquid glass app menu instead of the app strip. Made by nano.
 Maintainer: nano

@@ -1,4 +1,5 @@
-// Messages26 0.6.1 - made by nano
+// Messages26 0.6.2 - made by nano
+// 0.6.2: "iMessage" lines up inside the pill (measured where the text is drawn)
 // 0.6.1: text starts just inside the pill, the mic sits inside its right end
 // 0.6.0: + menu and hold-for-Photos work again (the app row is switched on when it's off),
 //        the menu remembers its apps; text starts at the pill's left; no leftover name glass;
@@ -61,7 +62,8 @@ static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName 
 static NSString *gDebug = @"-", *gNavDebug = @"-";
 static BOOL gShowDebug = NO;
 static __weak UIView *gEntry, *gStrip, *gPhotoBtn, *gAppsBtn;
-static NSArray *gAppsCache;   // the last app list seen (names + icons)
+static NSArray *gAppsCache;
+static NSString *gTextDebug = @"-";   // the last app list seen (names + icons)
 static __weak UICollectionView *gStripCV;
 
 static BOOL IsDark(UIView *v) { return v.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight; }
@@ -502,13 +504,25 @@ static void StyleEntry(UIView *entry) {
     }
     UIView *textV = Find(field, ^BOOL(UIView *v) { return [v isKindOfClass:[UITextView class]]; }, 100) ?: field;
     {
-        // the typed text starts 14pt inside the pill
-        CGFloat want = 12 + 46 + 10 + 14;
-        CGRect cur = [textV convertRect:textV.bounds toView:entry];
-        CGFloat dx = CGRectGetMinX(cur) - want;
+        // where the text is actually drawn: the placeholder ("iMessage") or the
+        // text view's first character, not the view's edge
+        CGFloat want = 12 + 46 + 10 + 16;
+        CGFloat textX = CGRectGetMinX([textV convertRect:textV.bounds toView:entry]);
+        if ([textV isKindOfClass:[UITextView class]]) { UITextView *tv = (UITextView *)textV; textX += tv.textContainerInset.left + tv.textContainer.lineFragmentPadding; }
+        NSMutableArray *ls = [NSMutableArray arrayWithObject:field]; int gl = 0;
+        while (ls.count && gl++ < 80) { UIView *x = ls.lastObject; [ls removeLastObject];
+            if ([x isKindOfClass:[UILabel class]] && ((UILabel *)x).text.length && !x.hidden && x.alpha > 0.05) {
+                CGRect lf = [x convertRect:x.bounds toView:entry];
+                CGRect tr = [(UILabel *)x textRectForBounds:x.bounds limitedToNumberOfLines:1];
+                textX = MIN(textX, CGRectGetMinX(lf) + tr.origin.x);
+            }
+            [ls addObjectsFromArray:x.subviews]; }
+        CGFloat dx = want - textX;   // + = move right
+        gTextDebug = [NSString stringWithFormat:@"textX=%.0f want=%.0f", textX, want];
         if (fabs(dx) > 1 && field.superview) {
-            CGRect b = field.bounds; b.size.width += dx; field.bounds = b;
-            CGPoint c = field.center; c.x -= dx / 2; field.center = c;
+            CGRect f = field.frame;
+            f.origin.x += dx; f.size.width -= dx;   // right edge (mic) stays
+            field.frame = f;
             [field layoutIfNeeded];
         }
     }
@@ -564,8 +578,8 @@ static void StyleEntry(UIView *entry) {
     [plus bringSubviewToFront:plus.imageView];
     if (entry.subviews.lastObject != plus) [entry bringSubviewToFront:plus];
     if (entry.clipsToBounds) entry.clipsToBounds = NO;
-    gDebug = [NSString stringWithFormat:@"entry=%@ %.0f field=%@ %.0fx%.0f@%.0f shift=%.0f\n box=%@ left=%lu photo=%@\n strip=%@ %.0f cv=%d apps=%lu",
-              NSStringFromClass([entry class]), entry.bounds.size.height, NSStringFromClass([field class]), ff.size.width, ff.size.height, ff.origin.y, shift,
+    gDebug = [NSString stringWithFormat:@"%@\n entry=%@ %.0f field=%@ %.0fx%.0f@%.0f shift=%.0f\n box=%@ left=%lu photo=%@\n strip=%@ %.0f cv=%d apps=%lu",
+              gTextDebug, NSStringFromClass([entry class]), entry.bounds.size.height, NSStringFromClass([field class]), ff.size.width, ff.size.height, ff.origin.y, shift,
               NSStringFromClass([container class]), (unsigned long)left.count, NSStringFromClass([gPhotoBtn class]),
               strip ? NSStringFromClass([strip class]) : @"none", strip.bounds.size.height, gStripCV != nil, (unsigned long)(gStripCV.numberOfSections ? [gStripCV numberOfItemsInSection:0] : 0)];
 }
@@ -811,7 +825,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.6.1 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.6.2 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
