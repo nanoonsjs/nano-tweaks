@@ -1,4 +1,5 @@
-// Messages26 0.18.5 - made by nano
+// Messages26 0.18.6 - made by nano
+// 0.18.6: reactions slide along with a message when you swipe to reply
 // 0.18.5: no reply swipe on tapbacks; custom frames: 1-3 emojis, no-ring option, 9 emoji animations
 // 0.18.4: 3D reactions only (no animations), icons centered
 // 0.18.3: real 3D tapback icons (iOS 18 style) on bubbles and in the tapback picker
@@ -1661,6 +1662,7 @@ static void BalloonMove(UIView *self, SEL _cmd) { origBalloonMove(self, _cmd); i
 @interface M26Swipe : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 @property (nonatomic, weak) UICollectionViewCell *cell;
+@property (nonatomic, strong) NSArray *followers;   // reaction pills on that message
 @property (nonatomic, weak) UIView *balloon;
 @property (nonatomic, strong) UIImageView *arrow;
 @property (nonatomic) BOOL armed;
@@ -1684,6 +1686,28 @@ static UIView *BalloonIn(UIView *root) {
     if (Find(c, ^BOOL(UIView *v) { return [NSStringFromClass([v class]) containsString:@"Acknowledg"]; }, 120)) return NO;
     if ([NSStringFromClass([c class]) containsString:@"Acknowledg"]) return NO;
     self.cell = c; self.balloon = b;
+    // the message's reactions (their own cells) slide along with it
+    NSMutableArray *fol = [NSMutableArray array];
+    @try {
+        NSArray *items = nil; @try { items = [(id)cv.delegate valueForKey:@"chatItems"]; } @catch (__unused id e) {}
+        NSInteger (^idxOf)(NSIndexPath *) = ^NSInteger(NSIndexPath *p) { return cv.numberOfSections == 1 ? p.item : p.section; };
+        NSInteger mi = idxOf(ip);
+        id msg = (mi >= 0 && mi < (NSInteger)items.count) ? items[mi] : nil;
+        NSString *mg = nil; @try { mg = [msg valueForKey:@"guid"]; } @catch (__unused id e) {}
+        for (UICollectionViewCell *oc in cv.visibleCells) {
+            if (oc == c) continue;
+            NSIndexPath *op = [cv indexPathForCell:oc]; if (!op) continue;
+            NSInteger oi = idxOf(op); if (oi < 0 || oi >= (NSInteger)items.count) continue;
+            id it = items[oi];
+            if (![NSStringFromClass([it class]) containsString:@"Acknowledg"]) continue;
+            NSString *ag = nil; @try { ag = [it valueForKey:@"associatedChatItemGUID"]; } @catch (__unused id e) {}
+            BOOL mine = (mg && [ag isEqualToString:mg]) || (mg && ag && [mg hasSuffix:ag]) || (mg && ag && [ag hasSuffix:mg]);
+            // fallback: the reaction pill right on top of this bubble
+            if (!ag && CGRectIntersectsRect(CGRectInset(oc.frame, 0, -6), c.frame)) mine = YES;
+            if (mine) [fol addObject:oc];
+        }
+    } @catch (__unused id e) {}
+    self.followers = fol;
     return YES;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return NO; }
@@ -1708,6 +1732,7 @@ static UIView *BalloonIn(UIView *root) {
     }
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
         c.transform = CGAffineTransformMakeTranslation(x, 0);
+        for (UIView *f in self.followers) f.transform = c.transform;
         CGRect bf = [b convertRect:b.bounds toView:c.superview];
         CGFloat p = MIN(1, x / 70);
         self.arrow.center = CGPointMake(CGRectGetMinX(bf) - x + MAX(22, x / 2), CGRectGetMidY(bf));
@@ -1726,6 +1751,7 @@ static UIView *BalloonIn(UIView *root) {
     UIImageView *ar = self.arrow;
     [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
         c.transform = CGAffineTransformIdentity;
+        for (UIView *f in self.followers) f.transform = CGAffineTransformIdentity;
         ar.alpha = 0; ar.transform = go ? CGAffineTransformMakeScale(1.5, 1.5) : CGAffineTransformMakeScale(0.3, 0.3);
     } completion:^(__unused BOOL d) { [ar removeFromSuperview]; }];
     if (go) {
@@ -4969,7 +4995,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.5 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.6 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
