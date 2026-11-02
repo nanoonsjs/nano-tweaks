@@ -2796,7 +2796,7 @@ static CAEmitterLayer *Emitter(NSString *emoji, CGPoint pos, CGSize size, CGFloa
 static UIColor *HexColor(NSString *h);
 static NSString *ColorHex(UIColor *c);
 static UIView *MakeFrameX(NSString *name, CGFloat d, NSDictionary *custom, UIColor *match);
-static UIView *MakeFrame(NSString *name, CGFloat d) { return MakeFrameX(name, d, nil, nil); }
+__attribute__((unused)) static UIView *MakeFrame(NSString *name, CGFloat d) { return MakeFrameX(name, d, nil, nil); }
 static UIView *MakeFrameX(NSString *name, CGFloat d, NSDictionary *custom, UIColor *match) {
     CGFloat pad = MAX(10, d * 0.22), S = d + pad * 2, R = d / 2 + MAX(2, d * 0.04), lw = MAX(2.5, d * 0.06);
     CGPoint c = CGPointMake(S / 2, S / 2);
