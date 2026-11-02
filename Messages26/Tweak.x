@@ -1,4 +1,5 @@
-// Messages26 0.8.3 - made by nano
+// Messages26 0.8.4 - made by nano
+// 0.8.4: pill always pulled back after reopening a chat; mic tap goes to the visible button
 // 0.8.3: field row placed from where it's drawn now (corrects itself); mic / send found by position and kept in the pill
 // 0.8.2: the bar never gets stuck "waiting" (pill, + and glass are back); no empty glass circles
 // 0.8.1: text no longer jumps up and down; send works
@@ -562,7 +563,7 @@ static void StyleEntry(UIView *entry) {
         BOOL kbUp = CGRectGetMaxY(ef) < ew.bounds.size.height - 120;   // the bar rides on the keyboard
         CGFloat wantBottom = kbUp ? entry.bounds.size.height - (strip ? 10 : 4) : entry.bounds.size.height - 43;
         CGFloat t0 = field.transform.ty, t1 = t0 + (wantBottom - CGRectGetMaxY(ffNow));
-        if (fabs(t1) > 250) t1 = 0;
+        if (fabs(t1) > 2000) t1 = 0;   // Messages can leave the box far off after a chat reopens: always pull it back
         shift = t1;
         gKbTop = kbUp ? CGRectGetMaxY(ef) : 0;
         if (fabs(t1 - t0) > 0.5) field.transform = CGAffineTransformMakeTranslation(0, t1);
@@ -570,7 +571,7 @@ static void StyleEntry(UIView *entry) {
         for (UIView *v in row) if (v != field) {
             CGRect vf = [v convertRect:v.bounds toView:entry];
             CGFloat d = midY - CGRectGetMidY(vf);
-            if (fabs(d) > 0.5 && fabs(v.transform.ty + d) < 250) v.transform = CGAffineTransformMakeTranslation(0, v.transform.ty + d);
+            if (fabs(d) > 0.5 && fabs(v.transform.ty + d) < 2000) v.transform = CGAffineTransformMakeTranslation(0, v.transform.ty + d);
         }
         // their boxes must not cut them off (the mic was drawn outside its box, so it vanished)
         if (!gRowCtls) gRowCtls = [NSHashTable weakObjectsHashTable];
@@ -580,7 +581,7 @@ static void StyleEntry(UIView *entry) {
             for (UIView *p = v.superview; p && p != entry; p = p.superview) if (p.clipsToBounds) p.clipsToBounds = NO;
         }
         NSMutableArray *rn = [NSMutableArray array];
-        for (UIView *v in row) if (v != field) [rn addObject:[NSString stringWithFormat:@"%@ a=%.1f h=%d", NSStringFromClass([v class]), v.alpha, v.hidden]];
+        for (UIView *v in row) if (v != field) { CGFloat a = 1; BOOL hd = NO; for (UIView *q = v; q && q != entry; q = q.superview) { hd |= q.hidden; a *= q.alpha; } [rn addObject:[NSString stringWithFormat:@"%@ a=%.1f h=%d en=%d", NSStringFromClass([v class]), a, hd, [v isKindOfClass:[UIControl class]] ? ((UIControl *)v).enabled : 1]]; }
         gRowDebug = rn.count ? [rn componentsJoinedByString:@", "] : @"(no mic found)";
         gRowOut = NO;
     } else if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
@@ -744,8 +745,18 @@ static UIView *EntryHit(UIView *self, SEL _cmd, CGPoint p, UIEvent *e) {
     if (gBarOn && !self.hidden && self.alpha > 0.05) {
         UIView *plus = [self viewWithTag:PLUS_TAG];
         if (plus && !plus.hidden && CGRectContainsPoint(CGRectInset([plus convertRect:plus.bounds toView:self], -4, -4), p)) return plus;
-        for (UIView *c in [gRowCtls allObjects])
-            if (c.window && !c.hidden && c.alpha > 0.05 && c.userInteractionEnabled && [c isDescendantOfView:self] && CGRectContainsPoint(CGRectInset([c convertRect:c.bounds toView:self], -4, -4), p)) return c;
+        // mic and send sit on the same spot: give the touch to the one that's actually showing
+        UIView *best = nil; CGFloat bestA = 0.05;
+        for (UIView *c in [gRowCtls allObjects]) {
+            if (!c.window || !c.userInteractionEnabled || ![c isDescendantOfView:self]) continue;
+            if ([c isKindOfClass:[UIControl class]] && !((UIControl *)c).enabled) continue;
+            if (!CGRectContainsPoint(CGRectInset([c convertRect:c.bounds toView:self], -4, -4), p)) continue;
+            CGFloat a = 1; BOOL hid = NO;
+            for (UIView *q = c; q && q != self; q = q.superview) { if (q.hidden) { hid = YES; break; } a *= q.alpha; }
+            if (hid) continue;
+            if (a > bestA) { bestA = a; best = c; }
+        }
+        if (best) { CGPoint q = [self convertPoint:p toView:best]; q.x = MIN(MAX(q.x, 1), best.bounds.size.width - 1); q.y = MIN(MAX(q.y, 1), best.bounds.size.height - 1); return [best hitTest:q withEvent:e] ?: best; }
         UIView *f = gField;
         if (f.window && [f isDescendantOfView:self]) {
             UIView *pill = [f.superview viewWithTag:PILL_TAG];
@@ -1108,7 +1119,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.8.3 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.8.4 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
