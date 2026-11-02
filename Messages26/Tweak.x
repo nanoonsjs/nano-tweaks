@@ -1,4 +1,5 @@
-// Messages26 0.10.3 - made by nano
+// Messages26 0.10.4 - made by nano
+// 0.10.4: typing in To: starts after the label; + is white
 // 0.10.3: To: row fits the capsule (no overlap), white + right under the X
 // 0.10.2: rim sits on the bubble edge, none on big emoji; reply arrow no longer grows huge
 // 0.10.1: bubble rim follows the bubble shape; swipe reply opens the reply view
@@ -929,6 +930,7 @@ static void CancelToX(UINavigationItem *ni) {
 - (void)tap:(UIButton *)b { UIButton *add = objc_getAssociatedObject(b, "m26add"); [add sendActionsForControlEvents:UIControlEventTouchUpInside]; }
 @end
 // New message "To:" row: a glass capsule, with a white glass + inside.
+static NSString *gToDebug = @"to: -";
 static void StyleToField(UIWindow *w) {
     UILabel *to = (UILabel *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UILabel class]] && [[((UILabel *)v).text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] hasPrefix:@"To:"] && v.window && !v.hidden && v.alpha > 0.05; }, 6000);
     if (!to) return;
@@ -966,7 +968,9 @@ static void StyleToField(UIWindow *w) {
         if ([v isKindOfClass:[UIButton class]] && !v.hidden && v.alpha > 0.01 && v.bounds.size.width < 70) { CGFloat x = [v convertPoint:CGPointZero toView:row].x; if (x > ax) { ax = x; add = (UIButton *)v; } }
         [bs addObjectsFromArray:v.subviews]; } }
     if (add) {
-        if (add.alpha > 0) add.alpha = 0.02;   // Apple's blue one: invisible
+        if (add.alpha > 0.02) add.alpha = 0.02;   // Apple's blue one: invisible (and white if it shows)
+        add.tintColor = Ink(row);
+        if ([add imageForState:UIControlStateNormal]) { UIImage *im = [add imageForState:UIControlStateNormal]; if (im.renderingMode != UIImageRenderingModeAlwaysTemplate) [add setImage:[im imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal]; }
         if (!CGAffineTransformIsIdentity(add.transform)) add.transform = CGAffineTransformIdentity;
         UIButton *mine = (UIButton *)[row viewWithTag:GLASS_TAG + 11];
         if (!mine) {
@@ -997,6 +1001,21 @@ static void StyleToField(UIWindow *w) {
         CGRect mf = CGRectMake(cx - d / 2, CGRectGetMidY(g.frame) - d / 2, d, d);
         if (!CGRectEqualToRect(mine.frame, mf)) { mine.frame = mf; mine.layer.cornerRadius = d / 2; }
         if (row.subviews.lastObject != mine) [row bringSubviewToFront:mine];
+        mine.hidden = NO; mine.alpha = 1;
+        [mine setImage:[[UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]] imageWithTintColor:Ink(row) renderingMode:UIImageRenderingModeAlwaysOriginal] forState:UIControlStateNormal];
+    }
+    // the typing spot starts after "To:" (it was drawn under it)
+    UITextView *tv = (UITextView *)Find(row, ^BOOL(UIView *v) { return [v isKindOfClass:[UITextView class]] && !v.hidden; }, 200);
+    if (tv) {
+        CGRect lw = [to convertRect:to.bounds toView:nil];
+        CGRect cr = [tv caretRectForPosition:tv.beginningOfDocument];
+        CGFloat caretX = [tv convertPoint:cr.origin toView:nil].x;
+        CGFloat need = CGRectGetMaxX(lw) + 6 - caretX;
+        if ([tv isDescendantOfView:to]) need = 0;
+        if (need > 0.5 && need < 80) {
+            UIEdgeInsets in = tv.textContainerInset; in.left += need; tv.textContainerInset = in;
+        }
+        gToDebug = [NSString stringWithFormat:@"to: label=%.0f caret=%.0f add=%@ a=%.2f", CGRectGetMaxX(lw), caretX, add ? NSStringFromClass([add class]) : @"-", add.alpha];
     }
 }
 
@@ -1616,8 +1635,8 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
-    l.text = [l.text stringByAppendingFormat:@"\n %@ %@", gBubbleDebug, gReplyDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.4 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@", gBubbleDebug, gReplyDebug, gToDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
