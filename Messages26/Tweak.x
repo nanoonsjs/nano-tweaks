@@ -1,4 +1,5 @@
-// Messages26 0.6.0 - made by nano
+// Messages26 0.6.1 - made by nano
+// 0.6.1: text starts just inside the pill, the mic sits inside its right end
 // 0.6.0: + menu and hold-for-Photos work again (the app row is switched on when it's off),
 //        the menu remembers its apps; text starts at the pill's left; no leftover name glass;
 //        soft blur behind the status bar
@@ -499,10 +500,11 @@ static void StyleEntry(UIView *entry) {
         NSArray *byX = [left sortedArrayUsingComparator:^NSComparisonResult(UIView *a, UIView *b) { return [a convertPoint:CGPointZero toView:nil].x < [b convertPoint:CGPointZero toView:nil].x ? NSOrderedAscending : NSOrderedDescending; }];
         gPhotoBtn = byX[0]; gAppsBtn = byX[1];
     }
+    UIView *textV = Find(field, ^BOOL(UIView *v) { return [v isKindOfClass:[UITextView class]]; }, 100) ?: field;
     {
-        CGFloat pxx = 12, Dd = 46;
-        CGFloat want = pxx + Dd + 10 + 4;
-        CGRect cur = [field convertRect:field.bounds toView:entry];
+        // the typed text starts 14pt inside the pill
+        CGFloat want = 12 + 46 + 10 + 14;
+        CGRect cur = [textV convertRect:textV.bounds toView:entry];
         CGFloat dx = CGRectGetMinX(cur) - want;
         if (fabs(dx) > 1 && field.superview) {
             CGRect b = field.bounds; b.size.width += dx; field.bounds = b;
@@ -514,7 +516,22 @@ static void StyleEntry(UIView *entry) {
     CGFloat padY = 6, D = MAX(46, MIN(ff.size.height + padY * 2, 52));
     CGFloat px = 12;
     CGRect plusF = CGRectMake(px, round(CGRectGetMaxY(ff) + padY - D), D, D);
-    CGRect pillF = CGRectMake(px + D + 10, CGRectGetMinY(ff) - padY, CGRectGetMaxX(ff) + 4 - (px + D + 10), ff.size.height + padY * 2);
+    // the pill ends just past the mic / send button (whatever is right of the text)
+    CGFloat right = CGRectGetMaxX(ff);
+    {
+        CGRect tr = [textV convertRect:textV.bounds toView:entry];
+        NSMutableArray *cs = [NSMutableArray arrayWithArray:entry.subviews];
+        int gc = 0;
+        while (cs.count && gc++ < 200) {
+            UIView *v = cs.lastObject; [cs removeLastObject];
+            if (v.tag == PLUS_TAG || v.tag == PILL_TAG || v.hidden || v.alpha < 0.05 || v == strip || [v isDescendantOfView:strip ?: v]) { if (v != strip && !strip) {} if (v == strip) continue; }
+            CGRect f = [v convertRect:v.bounds toView:entry];
+            if ([v isKindOfClass:[UIControl class]] && CGRectGetMinX(f) >= CGRectGetMaxX(tr) - 6 && f.size.width < 60 && fabs(CGRectGetMidY(f) - CGRectGetMidY(tr)) < 30) right = MAX(right, CGRectGetMaxX(f));
+            [cs addObjectsFromArray:v.subviews];
+        }
+    }
+    right = MIN(right + 8, entry.bounds.size.width - 8);
+    CGRect pillF = CGRectMake(px + D + 10, CGRectGetMinY(ff) - padY, right - (px + D + 10), ff.size.height + padY * 2);
     UIView *pill = [entry viewWithTag:PILL_TAG];
     UIView *top = container;
     while (top.superview && top.superview != entry) top = top.superview;
@@ -794,7 +811,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.6.0 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.6.1 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
