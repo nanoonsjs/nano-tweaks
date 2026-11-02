@@ -1,4 +1,5 @@
-// Messages26 0.15.0 - made by nano
+// Messages26 0.15.1 - made by nano
+// 0.15.1: settings is a glass button (opens for real); frames on up to 3 people; Set Frame in the hold menu
 // 0.15.0: Messages26 settings (gear on the list) with animated Contact Frames
 // 0.14.0: Bubble Colors per chat (theirs / mine, solid or gradient, presets, live preview)
 // 0.13.1: Shuffle (up to 5 photos, on tap or every open) and Live photo (hold to play) backgrounds
@@ -1414,7 +1415,7 @@ static void PaintCapsule(UIButton *b, BOOL dark) {
     b.layer.cornerRadius = b.bounds.size.height / 2;
     RimFit(b, dark);
 }
-static UIBarButtonItem *GearItem(void);
+__attribute__((unused)) static UIBarButtonItem *GearItem(void);
 static void StyleSearchPill(UIWindow *w) {
     if (!w) return;
     UIButton *pill = (UIButton *)[w viewWithTag:SEARCH_TAG], *comp = (UIButton *)[w viewWithTag:SCOMPOSE_TAG];
@@ -1436,8 +1437,7 @@ static void StyleSearchPill(UIWindow *w) {
         for (UIBarButtonItem *it in ni.rightBarButtonItems) { if (gSearchOn && IsComposeItem(it)) { S.compose = it; removed = YES; } else [keep addObject:it]; }
         if (removed) ni.rightBarButtonItems = keep;
         // our settings gear (top right of the list)
-        BOOL hasGear = NO; for (UIBarButtonItem *it in ni.rightBarButtonItems) if (it.customView.tag == GEAR_TAG) hasGear = YES;
-        if (!hasGear && vc) ni.rightBarButtonItems = [@[GearItem()] arrayByAddingObjectsFromArray:ni.rightBarButtonItems ?: @[]];
+        { NSMutableArray *k2 = [NSMutableArray array]; BOOL had = NO; for (UIBarButtonItem *it in ni.rightBarButtonItems) { if (it.customView.tag == GEAR_TAG) had = YES; else [k2 addObject:it]; } if (had) ni.rightBarButtonItems = k2; }
         if (!gSearchOn && S.compose && ![ni.rightBarButtonItems containsObject:S.compose]) { ni.rightBarButtonItems = [@[S.compose] arrayByAddingObjectsFromArray:ni.rightBarButtonItems ?: @[]]; S.compose = nil; }
     }
     // glass left behind by a button that's gone or hidden
@@ -2734,6 +2734,12 @@ static void StyleBubblePill(UIViewController *vc) {
 #pragma mark - contact frames + Messages26 settings
 
 static NSString *FrameFor(NSString *key) { return key ? [[NSUserDefaults standardUserDefaults] stringForKey:[@"m26.frame." stringByAppendingString:key]] : nil; }
+static NSArray *FramedKeys(void) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (NSString *k in [[NSUserDefaults standardUserDefaults] dictionaryRepresentation]) if ([k hasPrefix:@"m26.frame."]) [a addObject:[k substringFromIndex:10]];
+    return a;
+}
+#define MAX_FRAMES 3
 static void SetFrame(NSString *key, NSString *name) {
     if (!key) return;
     if (name.length && ![name isEqualToString:@"None"]) [[NSUserDefaults standardUserDefaults] setObject:name forKey:[@"m26.frame." stringByAppendingString:key]];
@@ -2894,6 +2900,7 @@ static void StyleFrames(UIWindow *w) {
 @property (nonatomic, copy) NSString *key, *name;
 @end
 @implementation M26FramePickVC
+- (void)m26done { [self dismissViewControllerAnimated:YES completion:nil]; }
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = self.name;
@@ -2921,11 +2928,75 @@ static void StyleFrames(UIWindow *w) {
     return c;
 }
 - (void)collectionView:(UICollectionView *)cv didSelectItemAtIndexPath:(NSIndexPath *)ip {
+    NSString *fn = FrameNames()[ip.item];
+    NSArray *taken = FramedKeys();
+    if (![fn isEqualToString:@"None"] && ![taken containsObject:self.key] && taken.count >= MAX_FRAMES) {
+        [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeError];
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Up to 3 Frames" message:@"Frames can be on 3 people at once. Set another person's frame to None first." preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:ac animated:YES completion:nil];
+        return;
+    }
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-    SetFrame(self.key, FrameNames()[ip.item]);
+    SetFrame(self.key, fn);
     [cv reloadData];
 }
 @end
+
+// Hold a conversation -> "Set Frame" right under Pin
+static NSString *ConvNameForKey(NSString *key) {
+    Class CL = NSClassFromString(@"CKConversationList"); SEL sh = NSSelectorFromString(@"sharedConversationList");
+    id list = [CL respondsToSelector:sh] ? ((id (*)(id, SEL))objc_msgSend)(CL, sh) : nil;
+    NSArray *convs = nil; @try { convs = [list valueForKey:@"conversations"]; } @catch (__unused id e) {}
+    for (id conv in convs) {
+        NSString *k = nil; @try { k = [conv valueForKeyPath:@"chat.guid"]; } @catch (__unused id e) {}
+        if ([k isEqualToString:key]) { for (NSString *nk in @[@"displayName", @"name"]) { NSString *n = nil; @try { n = [conv valueForKey:nk]; } @catch (__unused id e) {} if ([n isKindOfClass:[NSString class]] && n.length) return n; } }
+    }
+    return @"Frame";
+}
+static void OpenFramePicker(NSString *key, UIViewController *from) {
+    UICollectionViewFlowLayout *fl = [UICollectionViewFlowLayout new];
+    CGFloat w = (from.view.bounds.size.width - 16 * 2 - 12 * 2) / 3;
+    fl.itemSize = CGSizeMake(w, 132); fl.minimumInteritemSpacing = 12; fl.minimumLineSpacing = 14; fl.sectionInset = UIEdgeInsetsMake(16, 16, 30, 16);
+    M26FramePickVC *pk = [[M26FramePickVC alloc] initWithCollectionViewLayout:fl];
+    pk.key = key; pk.name = ConvNameForKey(key);
+    UINavigationController *nc = [[UINavigationController alloc] initWithRootViewController:pk];
+    pk.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:pk action:@selector(m26done)];
+    if (@available(iOS 15.0, *)) { nc.sheetPresentationController.detents = @[UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent]; nc.sheetPresentationController.prefersGrabberVisible = YES; }
+    UIViewController *top = from; while (top.presentedViewController && !top.presentedViewController.isBeingDismissed) top = top.presentedViewController;
+    [top presentViewController:nc animated:YES completion:nil];
+}
+static UIMenu *AddSetFrame(UIMenu *m, UIAction *act, BOOL *done) {
+    NSMutableArray *kids = [NSMutableArray array];
+    for (UIMenuElement *e in m.children) {
+        if ([e isKindOfClass:[UIMenu class]] && !*done) { [kids addObject:AddSetFrame((UIMenu *)e, act, done)]; continue; }
+        [kids addObject:e];
+        if (!*done && [e isKindOfClass:[UIAction class]] && ([e.title hasPrefix:@"Pin"] || [e.title hasPrefix:@"Unpin"])) { [kids addObject:act]; *done = YES; }
+    }
+    return [m menuByReplacingChildren:kids];
+}
+static id (*origCtxMenu)(id, SEL, id, id, CGPoint);
+static id CtxMenu(id self, SEL _cmd, UICollectionView *cv, NSIndexPath *ip, CGPoint pt) {
+    UIContextMenuConfiguration *cfg = origCtxMenu(self, _cmd, cv, ip, pt);
+    if (!cfg || !gOn) return cfg;
+    UICollectionViewCell *cell = [cv cellForItemAtIndexPath:ip];
+    NSString *key = cell ? KeyForView(cell) : nil;
+    if (!key) return cfg;
+    UIContextMenuActionProvider prov = nil; UIContextMenuContentPreviewProvider prev = nil;
+    @try { prov = [cfg valueForKey:@"actionProvider"]; prev = [cfg valueForKey:@"previewProvider"]; } @catch (__unused id e) { return cfg; }
+    __weak UIViewController *weakSelf = [self isKindOfClass:[UIViewController class]] ? self : nil;
+    return [UIContextMenuConfiguration configurationWithIdentifier:cfg.identifier previewProvider:prev actionProvider:^UIMenu *(NSArray<UIMenuElement *> *suggested) {
+        UIMenu *m = prov ? prov(suggested) : [UIMenu menuWithTitle:@"" children:suggested];
+        NSString *cur = FrameFor(key);
+        UIAction *act = [UIAction actionWithTitle:cur ? [NSString stringWithFormat:@"Set Frame (%@)", cur] : @"Set Frame" image:[UIImage systemImageNamed:@"person.crop.circle.dashed"] identifier:nil handler:^(__unused UIAction *a) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ OpenFramePicker(key, weakSelf ?: cv.window.rootViewController); });
+        }];
+        BOOL done = NO;
+        UIMenu *out = AddSetFrame(m, act, &done);
+        if (!done) out = [m menuByReplacingChildren:[@[act] arrayByAddingObjectsFromArray:m.children]];
+        return out;
+    }];
+}
 @interface M26FramesVC : UITableViewController
 @property (nonatomic, strong) NSArray *convs;   // @[@[name, key], ...]
 @end
@@ -2933,6 +3004,7 @@ static void StyleFrames(UIWindow *w) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Contact Frames";
+    self.navigationItem.prompt = nil;
     NSMutableArray *a = [NSMutableArray array];
     id list = nil; Class CL = NSClassFromString(@"CKConversationList");
     SEL sh = NSSelectorFromString(@"sharedConversationList");
@@ -2976,7 +3048,7 @@ static void StyleFrames(UIWindow *w) {
 }
 - (void)done { [self dismissViewControllerAnimated:YES completion:nil]; }
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return 1; }
-- (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s { return @"More settings come here as new features are added."; }
+- (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s { return @"Animated frames around up to 3 people's photos. You can also hold a conversation and tap Set Frame. More settings come here as new features are added."; }
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
     UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
     c.textLabel.text = @"Contact Frames";
@@ -2996,15 +3068,16 @@ static void StyleFrames(UIWindow *w) {
 + (instancetype)shared { static M26Gear *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Gear new]; }); return t; }
 - (void)open:(UIButton *)b {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-    UIViewController *top = SearchList() ?: b.window.rootViewController;
-    while (top.presentedViewController) top = top.presentedViewController;
+    UIViewController *top = b.window.rootViewController;
+    while (top.presentedViewController && !top.presentedViewController.isBeingDismissed && ![top.presentedViewController isKindOfClass:[UISearchController class]]) top = top.presentedViewController;
+    gFrameDebug = [NSString stringWithFormat:@"gear: open from %@", NSStringFromClass([top class])];
     UINavigationController *nc = [[UINavigationController alloc] initWithRootViewController:[[M26SettingsVC alloc] initWithStyle:UITableViewStyleInsetGrouped]];
     nc.navigationBar.prefersLargeTitles = YES;
     if (@available(iOS 15.0, *)) { nc.sheetPresentationController.detents = @[UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent]; nc.sheetPresentationController.prefersGrabberVisible = YES; }
     [top presentViewController:nc animated:YES completion:nil];
 }
 @end
-static UIBarButtonItem *GearItem(void) {
+__attribute__((unused)) static UIBarButtonItem *GearItem(void) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     b.tag = GEAR_TAG;
     [b setImage:[UIImage systemImageNamed:@"gearshape.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
@@ -3013,6 +3086,39 @@ static UIBarButtonItem *GearItem(void) {
     return [[UIBarButtonItem alloc] initWithCustomView:b];
 }
 
+
+// Settings: a glass circle (filter icon) at the top right of the list, level with Edit
+#define FGEAR_TAG 0x4D32365B
+static void StyleGear(UIWindow *w) {
+    UIButton *b = (UIButton *)[w viewWithTag:FGEAR_TAG];
+    UIViewController *vc = gOn ? ListVC(w.rootViewController, 0) : nil;
+    UINavigationController *nc = vc.navigationController;
+    UISearchController *sc = vc.navigationItem.searchController;
+    BOOL show = vc && (!nc || nc.topViewController == vc) && !vc.presentedViewController && !vc.isEditing && !gEntry.window && !sc.active && !nc.navigationBarHidden;
+    if (!b) {
+        b = [UIButton buttonWithType:UIButtonTypeCustom]; b.tag = FGEAR_TAG;
+        [b setImage:[UIImage systemImageNamed:@"line.3.horizontal.decrease" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+        b.layer.cornerCurve = kCACornerCurveContinuous;
+        b.layer.shadowColor = UIColor.blackColor.CGColor; b.layer.shadowRadius = 12; b.layer.shadowOffset = CGSizeMake(0, 5);
+        [b addTarget:[M26Gear shared] action:@selector(open:) forControlEvents:UIControlEventTouchUpInside];
+        [b addTarget:[M26Search shared] action:@selector(down:) forControlEvents:UIControlEventTouchDown];
+        [b addTarget:[M26Search shared] action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchUpInside];
+        b.alpha = 0; [w addSubview:b];
+    }
+    CGFloat d = 50;
+    UINavigationBar *nb = nc.navigationBar;
+    CGFloat cy = nb ? CGRectGetMinY([nb convertRect:nb.bounds toView:w]) + 22 : w.safeAreaInsets.top + 22;
+    CGRect f = CGRectMake(w.bounds.size.width - 16 - d, cy - d / 2, d, d);
+    if (!CGRectEqualToRect(b.frame, f) && CGAffineTransformIsIdentity(b.transform)) { b.frame = f; b.layer.cornerRadius = d / 2; RimFit(b, IsDark(w)); }
+    BOOL dark = IsDark(w);
+    b.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.97 alpha:0.97];
+    b.layer.shadowOpacity = dark ? 0.35 : 0.12;
+    b.tintColor = Ink(w);
+    CGFloat a = show ? 1 : 0;
+    b.userInteractionEnabled = show;
+    if (fabs(b.alpha - a) > 0.01 && ![b.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.2 animations:^{ b.alpha = a; }];
+    if (show && w.subviews.lastObject != b) [w bringSubviewToFront:b];
+}
 // Pull the chat up past the last message to see the whole background; pull down to bring it back.
 @interface M26Peek : NSObject
 + (instancetype)shared;
@@ -3237,6 +3343,7 @@ static void Tick(void) {
     @try { StyleDetails(w); } @catch (__unused id e) {}
     @try { ApplyChatBg(w); } @catch (__unused id e) {}
     @try { StyleFrames(w); } @catch (__unused id e) {}
+    @try { StyleGear(w); } @catch (__unused id e) {}
     { UIView *ce = gEntry; if (!ce.window) gChatShown = NO; }
     if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
@@ -3265,7 +3372,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.15.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.15.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@", gFrameDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -3324,6 +3431,9 @@ static void Tick(void) {
         MSHookMessageEx([UITextView class], @selector(setTextContainerInset:), (IMP)TVInset, (IMP *)&origTVInset);
         @try { HookThemes(); } @catch (__unused id ex) {}
         @try { HookDetailsTable(); } @catch (__unused id ex) {}
+        { SEL cm = @selector(collectionView:contextMenuConfigurationForItemAtIndexPath:point:);
+          Class LC = NSClassFromString(@"CKConversationListCollectionViewController");
+          if (LC && class_getInstanceMethod(LC, cm)) MSHookMessageEx(LC, cm, (IMP)CtxMenu, (IMP *)&origCtxMenu); }
         { Class SA = NSClassFromString(@"CKSearchViewController"), SB = NSClassFromString(@"CKDetailsSearchViewController");
           SEL ss = NSSelectorFromString(@"_newSnapshotForCurrentControllerState");
           if (SA && class_getInstanceMethod(SA, ss)) MSHookMessageEx(SA, ss, (IMP)SnapA, (IMP *)&origSnapA);
