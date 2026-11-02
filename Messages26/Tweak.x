@@ -1,4 +1,5 @@
-// Messages26 0.13.0 - made by nano
+// Messages26 0.13.1 - made by nano
+// 0.13.1: Shuffle (up to 5 photos, on tap or every open) and Live photo (hold to play) backgrounds
 // 0.13.0: live Sky / Water / Aurora backgrounds (move faster in full-screen peek)
 // 0.12.3: background stays put while scrolling; smoother peek (zoom + shade lift)
 // 0.12.2: pull up past the last message to see the full background, pull down to come back
@@ -74,6 +75,7 @@
 #import <objc/message.h>
 #import <substrate.h>
 #import <PhotosUI/PhotosUI.h>
+#import <Photos/Photos.h>
 
 #define PLUS_TAG  0x4D323650
 #define GLASS_TAG 0x4D323647
@@ -2183,6 +2185,15 @@ static NSString *BgFile(NSString *key) {
     for (NSUInteger i = 0; i < key.length; i++) { unichar c = [key characterAtIndex:i]; [safe appendFormat:(isalnum(c) ? @"%C" : @"_"), c]; }
     return [BgDir() stringByAppendingPathComponent:[NSString stringWithFormat:@"bg_%@.jpg", safe]];
 }
+static NSString *BgFileX(NSString *key, NSString *suffix) { return [[BgFile(key) stringByDeletingPathExtension] stringByAppendingString:suffix]; }
+static NSMutableDictionary *gShufCache;
+static UIImage *ShufImage(NSString *key, NSInteger i, NSNumber *t) {
+    if (!gShufCache) gShufCache = [NSMutableDictionary dictionary];
+    NSString *k = [NSString stringWithFormat:@"%@|%ld|%@", key, (long)i, t];
+    UIImage *im = gShufCache[k];
+    if (!im) { im = [UIImage imageWithContentsOfFile:BgFileX(key, [NSString stringWithFormat:@"_s%ld.jpg", (long)i])]; if (im) gShufCache[k] = im; }
+    return im;
+}
 static NSDictionary *BgFor(NSString *key) { return key ? [[NSUserDefaults standardUserDefaults] dictionaryForKey:[@"m26.bg." stringByAppendingString:key]] : nil; }
 static void SetBg(NSString *key, NSDictionary *d) {
     if (!key) return;
@@ -2211,7 +2222,14 @@ static UIImage *BgImage(NSString *key) {
 + (instancetype)shared;
 @property (nonatomic, copy) NSString *key;
 @property (nonatomic, weak) UIViewController *host;
+@property (nonatomic) NSInteger mode;   // 1 photo, 6 shuffle, 7 live
 @end
+static UIImage *Shrink(UIImage *im) {
+    CGFloat maxSide = 1600, sc = MIN(1, maxSide / MAX(im.size.width, im.size.height));
+    CGSize sz = CGSizeMake(round(im.size.width * sc), round(im.size.height * sc));
+    UIGraphicsImageRendererFormat *f = [UIGraphicsImageRendererFormat defaultFormat]; f.scale = 1;
+    return [[[UIGraphicsImageRenderer alloc] initWithSize:sz format:f] imageWithActions:^(__unused UIGraphicsImageRendererContext *c) { [im drawInRect:CGRectMake(0, 0, sz.width, sz.height)]; }];
+}
 @implementation M26Bg
 + (instancetype)shared { static M26Bg *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Bg new]; }); return t; }
 - (void)pick:(UIButton *)b {
@@ -2219,10 +2237,13 @@ static UIImage *BgImage(NSString *key) {
     if (!self.key) return;
     NSInteger idx = b.tag - 100;
     if (idx == 0) { SetBg(self.key, nil); return; }
-    if (idx >= 3) { SetBg(self.key, @{@"type": @"dynamic", @"name": @[@"Sky", @"Water", @"Aurora"][idx - 3], @"t": @([NSDate date].timeIntervalSince1970)}); return; }
-    if (idx == 1) {
+    if (idx >= 3 && idx <= 5) { SetBg(self.key, @{@"type": @"dynamic", @"name": @[@"Sky", @"Water", @"Aurora"][idx - 3], @"t": @([NSDate date].timeIntervalSince1970)}); return; }
+    if (idx == 1 || idx == 6 || idx == 7) {
+        self.mode = idx;
         PHPickerConfiguration *cfg = [PHPickerConfiguration new];
-        cfg.filter = [PHPickerFilter imagesFilter]; cfg.selectionLimit = 1;
+        cfg.filter = idx == 7 ? [PHPickerFilter livePhotosFilter] : [PHPickerFilter imagesFilter];
+        cfg.selectionLimit = idx == 6 ? 5 : 1;
+        if (idx == 7) cfg.preferredAssetRepresentationMode = PHPickerConfigurationAssetRepresentationModeCurrent;
         PHPickerViewController *pk = [[PHPickerViewController alloc] initWithConfiguration:cfg];
         pk.delegate = self;
         [self.host presentViewController:pk animated:YES completion:nil];
@@ -2235,19 +2256,77 @@ static UIImage *BgImage(NSString *key) {
     [self.host presentViewController:cp animated:YES completion:nil];
 }
 - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
+    NSString *key = self.key;
+    NSInteger mode = self.mode;
+    UIViewController *host = self.host;
+    if (!results.count || !key) { [picker dismissViewControllerAnimated:YES completion:nil]; return; }
+    if (mode == 7) {
+        [picker dismissViewControllerAnimated:YES completion:nil];
+        NSItemProvider *ip = results.firstObject.itemProvider;
+        if (![ip canLoadObjectOfClass:[PHLivePhoto class]]) return;
+        [ip loadObjectOfClass:[PHLivePhoto class] completionHandler:^(id obj, NSError *err) {
+            PHLivePhoto *lp = [obj isKindOfClass:[PHLivePhoto class]] ? obj : nil;
+            if (!lp) return;
+            NSArray *res = [PHAssetResource assetResourcesForLivePhoto:lp];
+            dispatch_group_t grp = dispatch_group_create();
+            __block NSString *ph = nil, *mv = nil;
+            for (PHAssetResource *r in res) {
+                BOOL vid = r.type == PHAssetResourceTypePairedVideo;
+                if (!vid && r.type != PHAssetResourceTypePhoto) continue;
+                NSString *ext = r.originalFilename.pathExtension.length ? r.originalFilename.pathExtension : (vid ? @"mov" : @"jpg");
+                NSString *path = BgFileX(key, [NSString stringWithFormat:@"_live.%@", ext.lowercaseString]);
+                [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+                dispatch_group_enter(grp);
+                [[PHAssetResourceManager defaultManager] writeDataForAssetResource:r toFile:[NSURL fileURLWithPath:path] options:nil completionHandler:^(NSError *e2) {
+                    if (!e2) { if (vid) mv = path.lastPathComponent; else ph = path.lastPathComponent; }
+                    dispatch_group_leave(grp);
+                }];
+            }
+            dispatch_group_notify(grp, dispatch_get_main_queue(), ^{
+                if (ph && mv) SetBg(key, @{@"type": @"live", @"photo": ph, @"video": mv, @"t": @([NSDate date].timeIntervalSince1970)});
+            });
+        }];
+        return;
+    }
+    if (mode == 6) {
+        // shuffle: up to 5 photos, then how should it change?
+        NSArray *rs = [results subarrayWithRange:NSMakeRange(0, MIN(5, results.count))];
+        dispatch_group_t grp = dispatch_group_create();
+        __block NSInteger n = 0;
+        NSMutableArray *imgs = [NSMutableArray arrayWithCapacity:rs.count];
+        for (NSUInteger i = 0; i < rs.count; i++) [imgs addObject:[NSNull null]];
+        for (NSUInteger i = 0; i < rs.count; i++) {
+            NSItemProvider *ip = ((PHPickerResult *)rs[i]).itemProvider;
+            if (![ip canLoadObjectOfClass:[UIImage class]]) continue;
+            dispatch_group_enter(grp);
+            [ip loadObjectOfClass:[UIImage class] completionHandler:^(id obj, NSError *err) {
+                if ([obj isKindOfClass:[UIImage class]]) { UIImage *sm = Shrink(obj); @synchronized (imgs) { imgs[i] = sm; } }
+                dispatch_group_leave(grp);
+            }];
+        }
+        [picker dismissViewControllerAnimated:YES completion:^{
+            dispatch_group_notify(grp, dispatch_get_main_queue(), ^{
+                for (id im in imgs) if ([im isKindOfClass:[UIImage class]]) { [UIImageJPEGRepresentation(im, 0.85) writeToFile:BgFileX(key, [NSString stringWithFormat:@"_s%ld.jpg", (long)n]) atomically:YES]; n++; }
+                if (!n) return;
+                NSNumber *t = @([NSDate date].timeIntervalSince1970);
+                NSInteger count = n;
+                UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Shuffle" message:@"When should the background change?" preferredStyle:UIAlertControllerStyleActionSheet];
+                [ac addAction:[UIAlertAction actionWithTitle:@"On Tap" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) { SetBg(key, @{@"type": @"shuffle", @"n": @(count), @"mode": @"tap", @"idx": @0, @"t": t}); }]];
+                [ac addAction:[UIAlertAction actionWithTitle:@"Every Open" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) { SetBg(key, @{@"type": @"shuffle", @"n": @(count), @"mode": @"open", @"idx": @0, @"t": t}); }]];
+                [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+                ac.popoverPresentationController.sourceView = host.view;
+                [host presentViewController:ac animated:YES completion:nil];
+            });
+        }];
+        return;
+    }
     [picker dismissViewControllerAnimated:YES completion:nil];
     NSItemProvider *ip = results.firstObject.itemProvider;
-    NSString *key = self.key;
-    if (!ip || !key || ![ip canLoadObjectOfClass:[UIImage class]]) return;
+    if (!ip || ![ip canLoadObjectOfClass:[UIImage class]]) return;
     [ip loadObjectOfClass:[UIImage class] completionHandler:^(id obj, NSError *err) {
         UIImage *im = [obj isKindOfClass:[UIImage class]] ? obj : nil;
         if (!im) return;
-        // keep it screen-sized
-        CGFloat maxSide = 1600, sc = MIN(1, maxSide / MAX(im.size.width, im.size.height));
-        CGSize sz = CGSizeMake(round(im.size.width * sc), round(im.size.height * sc));
-        UIGraphicsImageRendererFormat *f = [UIGraphicsImageRendererFormat defaultFormat]; f.scale = 1;
-        UIImage *small = [[[UIGraphicsImageRenderer alloc] initWithSize:sz format:f] imageWithActions:^(__unused UIGraphicsImageRendererContext *c) { [im drawInRect:CGRectMake(0, 0, sz.width, sz.height)]; }];
-        [UIImageJPEGRepresentation(small, 0.85) writeToFile:BgFile(key) atomically:YES];
+        [UIImageJPEGRepresentation(Shrink(im), 0.85) writeToFile:BgFile(key) atomically:YES];
         dispatch_async(dispatch_get_main_queue(), ^{ SetBg(key, @{@"type": @"photo", @"t": @([NSDate date].timeIntervalSince1970)}); });
     }];
 }
@@ -2341,17 +2420,17 @@ static void StyleBgTab(UIViewController *vc) {
     M26Bg *B = [M26Bg shared]; B.key = key; B.host = vc;
     if (!on || !key || gHeadRowSection < 0) { box.hidden = YES; return; }
     BOOL dark = IsDark(tb);
-    NSArray *names = @[@"None", @"Photo", @"Color", @"Sky", @"Water", @"Aurora"];
+    NSArray *names = @[@"None", @"Photo", @"Color", @"Sky", @"Water", @"Aurora", @"Shuffle", @"Live"];
     CGFloat W = tb.bounds.size.width, d = 84, lab = 26, gap = (W - 3 * d) / 4, rowH = d + lab + 34;
     if (!box) {
         box = [UIView new]; box.tag = BGTAB_TAG;
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 8; i++) {
             int col = i % 3, row = i / 3;
             UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom]; b.tag = 100 + i;
             b.layer.cornerRadius = d / 2; b.clipsToBounds = YES; b.imageView.contentMode = UIViewContentModeScaleAspectFill;
             [b addTarget:B action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
             b.frame = CGRectMake(gap + col * (d + gap), 8 + row * rowH, d, d);
-            if (i >= 3) { UIView *dv = MakeDyn(names[i], b.bounds); [b addSubview:dv]; }
+            if (i >= 3 && i <= 5) { UIView *dv = MakeDyn(names[i], b.bounds); [b addSubview:dv]; }
             [box addSubview:b];
             UIView *ring = [[UIView alloc] initWithFrame:CGRectInset(b.frame, -5, -5)]; ring.tag = 200 + i; ring.userInteractionEnabled = NO;
             ring.layer.cornerRadius = ring.bounds.size.width / 2; ring.layer.borderWidth = 3;
@@ -2368,14 +2447,14 @@ static void StyleBgTab(UIViewController *vc) {
     }
     box.hidden = NO;
     CGRect hr = [tb rectForSection:gHeadRowSection];
-    CGRect bf = CGRectMake(0, CGRectGetMaxY(hr) + 6, W, rowH * 2 + 10);
+    CGRect bf = CGRectMake(0, CGRectGetMaxY(hr) + 6, W, rowH * 3 + 10);
     if (!CGRectEqualToRect(box.frame, bf)) box.frame = bf;
     if (tb.subviews.lastObject != box) [tb bringSubviewToFront:box];
     NSDictionary *cur = BgFor(key);
     NSString *ty = cur[@"type"];
-    NSInteger sel = [ty isEqualToString:@"photo"] ? 1 : [ty isEqualToString:@"color"] ? 2 : [ty isEqualToString:@"dynamic"] ? (NSInteger)[names indexOfObject:cur[@"name"] ?: @""] : 0;
+    NSInteger sel = [ty isEqualToString:@"photo"] ? 1 : [ty isEqualToString:@"color"] ? 2 : [ty isEqualToString:@"dynamic"] ? (NSInteger)[names indexOfObject:cur[@"name"] ?: @""] : [ty isEqualToString:@"shuffle"] ? 6 : [ty isEqualToString:@"live"] ? 7 : 0;
     if (sel == NSNotFound) sel = 0;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 8; i++) {
         UIButton *b = (UIButton *)[box viewWithTag:100 + i];
         UIView *ring = [box viewWithTag:200 + i]; UIImageView *chk = (UIImageView *)[box viewWithTag:300 + i]; UILabel *l = (UILabel *)[box viewWithTag:400 + i];
         l.textColor = Ink(tb);
@@ -2386,6 +2465,13 @@ static void StyleBgTab(UIViewController *vc) {
             UIImage *im = sel == 1 ? BgImage(key) : nil;
             if (im) { [b setImage:im forState:UIControlStateNormal]; b.backgroundColor = UIColor.blackColor; b.imageView.contentMode = UIViewContentModeScaleAspectFill; }
             else { [b setImage:[UIImage systemImageNamed:@"photo" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:28 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal]; b.imageView.contentMode = UIViewContentModeCenter; b.tintColor = Ink(tb); b.backgroundColor = dark ? [UIColor colorWithWhite:0.09 alpha:1] : [UIColor colorWithWhite:0.8 alpha:1]; }
+        }
+        if (i == 6 || i == 7) {
+            UIImage *im = nil;
+            if (i == 6 && sel == 6) im = ShufImage(key, [cur[@"idx"] integerValue], cur[@"t"]);
+            if (i == 7 && sel == 7) im = [UIImage imageWithContentsOfFile:[BgDir() stringByAppendingPathComponent:cur[@"photo"] ?: @"-"]];
+            if (im) { [b setImage:im forState:UIControlStateNormal]; b.imageView.contentMode = UIViewContentModeScaleAspectFill; b.backgroundColor = UIColor.blackColor; }
+            else { [b setImage:[UIImage systemImageNamed:i == 6 ? @"shuffle" : @"livephoto" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:28 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal]; b.imageView.contentMode = UIViewContentModeCenter; b.tintColor = Ink(tb); b.backgroundColor = dark ? [UIColor colorWithWhite:0.09 alpha:1] : [UIColor colorWithWhite:0.8 alpha:1]; }
         }
         if (i == 2) {
             CAGradientLayer *gl = nil; for (CALayer *x in b.layer.sublayers) if ([x.name isEqualToString:@"g"]) gl = (CAGradientLayer *)x;
@@ -2450,6 +2536,48 @@ static void StyleBgTab(UIViewController *vc) {
 }
 @end
 // In the chat: that conversation's background behind the messages.
+static void ApplyChatBg(UIWindow *w);
+
+static BOOL gChatShown = NO;   // the chat was on screen last tick (for "every open")
+@interface M26BgTouch : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+@implementation M26BgTouch
++ (instancetype)shared { static M26BgTouch *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26BgTouch new]; }); return t; }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
+// only on empty background, never on a message
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g {
+    UICollectionView *cv = (UICollectionView *)g.view;
+    NSDictionary *bg = BgFor(objc_getAssociatedObject(cv, "m26key"));
+    NSString *ty = bg[@"type"];
+    if ([g isKindOfClass:[UITapGestureRecognizer class]] && !([ty isEqualToString:@"shuffle"] && [bg[@"mode"] isEqualToString:@"tap"])) return NO;
+    if ([g isKindOfClass:[UILongPressGestureRecognizer class]] && ![ty isEqualToString:@"live"]) return NO;
+    CGPoint p = [g locationInView:cv];
+    for (UICollectionViewCell *c in cv.visibleCells) {
+        UIView *b = Find(c, ^BOOL(UIView *v) { Class B = NSClassFromString(@"CKBalloonView"); return B && [v isKindOfClass:B]; }, 60);
+        if (b && CGRectContainsPoint(CGRectInset([b convertRect:b.bounds toView:cv], -6, -6), p)) return NO;
+    }
+    UIView *e = gEntry; if (e && [cv isFirstResponder]) return NO;
+    return YES;
+}
+- (void)tap:(UITapGestureRecognizer *)g {
+    UICollectionView *cv = (UICollectionView *)g.view;
+    NSString *key = objc_getAssociatedObject(cv, "m26key");
+    NSDictionary *bg = BgFor(key);
+    if ([bg[@"n"] integerValue] < 2) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    NSMutableDictionary *m = [bg mutableCopy]; m[@"idx"] = @(([bg[@"idx"] integerValue] + 1) % [bg[@"n"] integerValue]); SetBg(key, m);
+    ApplyChatBg(cv.window);
+}
+- (void)hold:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    UIView *host = objc_getAssociatedObject(g.view, "m26bghost");
+    PHLivePhotoView *lv = (PHLivePhotoView *)[host viewWithTag:4];
+    if (!lv.livePhoto) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    [lv startPlaybackWithStyle:PHLivePhotoViewPlaybackStyleHint];
+}
+@end
 static void ApplyChatBg(UIWindow *w) {
     UIView *e = gEntry;
     if (!e.window) return;
@@ -2460,6 +2588,21 @@ static void ApplyChatBg(UIWindow *w) {
     if (!key) { id d = cv.delegate; for (int i = 0; i < 3 && d && !key; i++) { key = ConvKey(d); @try { d = [d valueForKey:@"delegate"]; } @catch (__unused id ex) { d = nil; } } }
     if (key) objc_setAssociatedObject(cv, "m26key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (!objc_getAssociatedObject(cv, "m26peekon")) { objc_setAssociatedObject(cv, "m26peekon", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [cv.panGestureRecognizer addTarget:[M26Peek shared] action:@selector(pan:)]; }
+    if (!objc_getAssociatedObject(cv, "m26bggest")) {
+        objc_setAssociatedObject(cv, "m26bggest", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UITapGestureRecognizer *tp = [[UITapGestureRecognizer alloc] initWithTarget:[M26BgTouch shared] action:@selector(tap:)];
+        tp.cancelsTouchesInView = NO; tp.delegate = [M26BgTouch shared]; [cv addGestureRecognizer:tp];
+        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[M26BgTouch shared] action:@selector(hold:)];
+        lp.minimumPressDuration = 0.35; lp.cancelsTouchesInView = NO; lp.delegate = [M26BgTouch shared]; [cv addGestureRecognizer:lp];
+    }
+    // shuffle "every open": next photo each time the chat comes up
+    if (!gChatShown && key) {
+        gChatShown = YES;
+        NSDictionary *b0 = BgFor(key);
+        if ([b0[@"type"] isEqualToString:@"shuffle"] && [b0[@"mode"] isEqualToString:@"open"] && [b0[@"n"] integerValue] > 1) {
+            NSMutableDictionary *m = [b0 mutableCopy]; m[@"idx"] = @(([b0[@"idx"] integerValue] + 1) % [b0[@"n"] integerValue]); SetBg(key, m);
+        }
+    }
     NSDictionary *bg = gOn ? BgFor(key) : nil;
     // the background lives behind the chat (not inside it), so scrolling never moves it
     UIView *sup = cv.superview;
@@ -2482,19 +2625,31 @@ static void ApplyChatBg(UIWindow *w) {
         dim.frame = host.bounds;
     }
     if (cv.backgroundColor && CGColorGetAlpha(cv.backgroundColor.CGColor) > 0) cv.backgroundColor = UIColor.clearColor;
-    NSString *stamp = [NSString stringWithFormat:@"%@|%@|%@|%@|%.0fx%.0f", key, bg[@"t"], bg[@"hex"], bg[@"name"], cv.bounds.size.width, cv.bounds.size.height];
+    NSString *stamp = [NSString stringWithFormat:@"%@|%@|%@|%@|%@|%.0fx%.0f", key, bg[@"t"], bg[@"hex"], bg[@"name"], bg[@"idx"], cv.bounds.size.width, cv.bounds.size.height];
     if ([objc_getAssociatedObject(cv, "m26bg") isEqual:stamp]) return;
     objc_setAssociatedObject(cv, "m26bg", stamp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     UIImageView *iv = (UIImageView *)[host viewWithTag:1]; UIView *dim = [host viewWithTag:2];
-    BOOL photo = [bg[@"type"] isEqualToString:@"photo"], dyn = [bg[@"type"] isEqualToString:@"dynamic"];
+    NSString *ty = bg[@"type"];
+    BOOL shuf = [ty isEqualToString:@"shuffle"], live = [ty isEqualToString:@"live"];
+    BOOL photo = [ty isEqualToString:@"photo"] || shuf || live, dyn = [ty isEqualToString:@"dynamic"];
     [[host viewWithTag:3] removeFromSuperview];
+    PHLivePhotoView *lv = (PHLivePhotoView *)[host viewWithTag:4];
+    if (live) {
+        if (!lv) { lv = [[PHLivePhotoView alloc] initWithFrame:host.bounds]; lv.tag = 4; lv.contentMode = UIViewContentModeScaleAspectFill; lv.clipsToBounds = YES; lv.muted = YES; lv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [host insertSubview:lv aboveSubview:iv]; }
+        lv.frame = host.bounds;
+        NSURL *pu = [NSURL fileURLWithPath:[BgDir() stringByAppendingPathComponent:bg[@"photo"]]], *vu = [NSURL fileURLWithPath:[BgDir() stringByAppendingPathComponent:bg[@"video"]]];
+        UIImage *still = [UIImage imageWithContentsOfFile:pu.path];
+        [PHLivePhoto requestLivePhotoWithResourceFileURLs:@[pu, vu] placeholderImage:still targetSize:CGSizeZero contentMode:PHImageContentModeAspectFill resultHandler:^(PHLivePhoto *lp, NSDictionary *info) { if (lp) lv.livePhoto = lp; }];
+    } else [lv removeFromSuperview];
     if (dyn) {
         UIView *dv = MakeDyn(bg[@"name"], host.bounds); dv.tag = 3;
         dv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [host insertSubview:dv atIndex:0];
         dim.hidden = NO; dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
     } else dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.28];
-    iv.image = photo ? BgImage(key) : nil;
+    UIImage *pic = shuf ? ShufImage(key, [bg[@"idx"] integerValue], bg[@"t"]) : live ? [UIImage imageWithContentsOfFile:[BgDir() stringByAppendingPathComponent:bg[@"photo"] ?: @"-"]] : photo ? BgImage(key) : nil;
+    if (shuf && iv.image && pic && iv.image != pic) [UIView transitionWithView:iv duration:0.6 options:UIViewAnimationOptionTransitionCrossDissolve | UIViewAnimationOptionAllowUserInteraction animations:^{ iv.image = pic; } completion:nil];
+    else iv.image = pic;
     iv.hidden = !photo; dim.hidden = !photo && !dyn;
     host.backgroundColor = (photo || dyn) ? UIColor.blackColor : HexColor(bg[@"hex"]);
     BOOL peek = [objc_getAssociatedObject(cv, "m26peek") doubleValue] > 0;
@@ -2543,6 +2698,7 @@ static void Tick(void) {
     @try { InstallSwipe(w); } @catch (__unused id e) {}
     @try { StyleDetails(w); } @catch (__unused id e) {}
     @try { ApplyChatBg(w); } @catch (__unused id e) {}
+    { UIView *ce = gEntry; if (!ce.window) gChatShown = NO; }
     if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
     UIView *e = gEntry;
@@ -2570,7 +2726,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.13.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.13.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
