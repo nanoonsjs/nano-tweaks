@@ -1,4 +1,5 @@
-// Messages26 0.18.4 - made by nano
+// Messages26 0.18.5 - made by nano
+// 0.18.5: no reply swipe on tapbacks; custom frames: 1-3 emojis, no-ring option, 9 emoji animations
 // 0.18.4: 3D reactions only (no animations), icons centered
 // 0.18.3: real 3D tapback icons (iOS 18 style) on bubbles and in the tapback picker
 // 0.18.2: Custom frames (any 3 emojis + color / match photo), Ignored Words for Spelling Fix, much richer 3D reactions
@@ -1666,7 +1667,7 @@ static void BalloonMove(UIView *self, SEL _cmd) { origBalloonMove(self, _cmd); i
 @end
 static UIView *BalloonIn(UIView *root) {
     Class B = NSClassFromString(@"CKBalloonView");
-    return Find(root, ^BOOL(UIView *v) { return B && [v isKindOfClass:B] && !v.hidden && v.bounds.size.width > 20; }, 200);
+    return Find(root, ^BOOL(UIView *v) { return B && [v isKindOfClass:B] && !v.hidden && v.bounds.size.width > 20 && ![NSStringFromClass([v class]) containsString:@"Acknowledg"]; }, 200);
 }
 @implementation M26Swipe
 + (instancetype)shared { static M26Swipe *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Swipe new]; }); return t; }
@@ -1679,6 +1680,9 @@ static UIView *BalloonIn(UIView *root) {
     UICollectionViewCell *c = ip ? [cv cellForItemAtIndexPath:ip] : nil;
     UIView *b = c ? BalloonIn(c) : nil;
     if (!b) return NO;
+    // a tapback (reaction) cell: no reply swipe
+    if (Find(c, ^BOOL(UIView *v) { return [NSStringFromClass([v class]) containsString:@"Acknowledg"]; }, 120)) return NO;
+    if ([NSStringFromClass([c class]) containsString:@"Acknowledg"]) return NO;
     self.cell = c; self.balloon = b;
     return YES;
 }
@@ -2814,10 +2818,13 @@ static UIView *MakeFrameX(NSString *name, CGFloat d, NSDictionary *custom, UICol
     else if ([name isEqualToString:@"Neon"]) { cols = @[(id)UIColor.systemPinkColor.CGColor, (id)UIColor.systemPurpleColor.CGColor, (id)UIColor.systemBlueColor.CGColor, (id)UIColor.systemTealColor.CGColor, (id)UIColor.systemGreenColor.CGColor, (id)UIColor.systemYellowColor.CGColor, (id)UIColor.systemPinkColor.CGColor]; spin = YES; spinT = 3; }
     else if ([name isEqualToString:@"Snow"]) { cols = @[(id)[UIColor colorWithRed:0.75 green:0.9 blue:1 alpha:1].CGColor, (id)UIColor.whiteColor.CGColor, (id)[UIColor colorWithRed:0.5 green:0.75 blue:1 alpha:1].CGColor, (id)[UIColor colorWithRed:0.75 green:0.9 blue:1 alpha:1].CGColor]; spin = YES; spinT = 9; }
     else if ([name isEqualToString:@"Custom"]) {
-        UIColor *base = [custom[@"match"] boolValue] ? (match ?: [UIColor colorWithRed:0.55 green:0.65 blue:0.95 alpha:1]) : HexColor(custom[@"hex"] ?: @"FF4F8B");
-        CGFloat h0, s0, b0, a0; [base getHue:&h0 saturation:&s0 brightness:&b0 alpha:&a0];
-        UIColor *lt = [UIColor colorWithHue:h0 saturation:s0 * 0.45 brightness:MIN(1, b0 + 0.3) alpha:1], *dk = [UIColor colorWithHue:h0 saturation:MIN(1, s0 * 1.1) brightness:b0 * 0.6 alpha:1];
-        cols = @[(id)base.CGColor, (id)lt.CGColor, (id)base.CGColor, (id)dk.CGColor, (id)base.CGColor]; spin = YES; spinT = 5;
+        NSString *ring = custom[@"ring"] ?: ([custom[@"match"] boolValue] ? @"match" : @"color");
+        if (![ring isEqualToString:@"none"]) {
+            UIColor *base = [ring isEqualToString:@"match"] ? (match ?: [UIColor colorWithRed:0.55 green:0.65 blue:0.95 alpha:1]) : HexColor(custom[@"hex"] ?: @"FF4F8B");
+            CGFloat h0, s0, b0, a0; [base getHue:&h0 saturation:&s0 brightness:&b0 alpha:&a0];
+            UIColor *lt = [UIColor colorWithHue:h0 saturation:s0 * 0.45 brightness:MIN(1, b0 + 0.3) alpha:1], *dk = [UIColor colorWithHue:h0 saturation:MIN(1, s0 * 1.1) brightness:b0 * 0.6 alpha:1];
+            cols = @[(id)base.CGColor, (id)lt.CGColor, (id)base.CGColor, (id)dk.CGColor, (id)base.CGColor]; spin = YES; spinT = 5;
+        }
     }
     else if ([name isEqualToString:@"Butterfly"]) { cols = @[(id)[UIColor colorWithRed:0.55 green:0.75 blue:1 alpha:1].CGColor, (id)[UIColor colorWithRed:0.85 green:0.6 blue:1 alpha:1].CGColor, (id)[UIColor colorWithRed:0.5 green:0.95 blue:0.9 alpha:1].CGColor, (id)[UIColor colorWithRed:0.55 green:0.75 blue:1 alpha:1].CGColor]; spin = YES; spinT = 7; }
     if (cols) {
@@ -2860,12 +2867,25 @@ static UIView *MakeFrameX(NSString *name, CGFloat d, NSDictionary *custom, UICol
         CAEmitterLayer *em = Emitter(@"❄️", CGPointMake(c.x, 0), CGSizeMake(S, 1), 2.5, d * 0.04, d * 0.2, 0.1 * d / 60, 2.6); em.emitterShape = kCAEmitterLayerLine; em.frame = v.bounds; [v.layer addSublayer:em];
         CALayer *sm = EmojiLayer(@"☃️", e * 0.8, at(135, R + 1)); [v.layer addSublayer:sm];
     } else if ([name isEqualToString:@"Custom"]) {
-        NSArray *es = custom[@"e"]; NSArray *angs = @[@(-50), @(50), @(180)]; NSArray *szs = @[@1.0, @0.75, @0.7];
-        for (NSUInteger i = 0; i < MIN(3, es.count); i++) {
-            NSString *em = es[i]; if (![em isKindOfClass:[NSString class]] || !em.length) continue;
-            CALayer *l = EmojiLayer(em, e * [szs[i] doubleValue], at([angs[i] doubleValue], R + 2)); [v.layer addSublayer:l];
-            Anim(l, @"position.y", @(l.position.y), @(l.position.y - d * 0.05), 1.1 + i * 0.3, YES, i * 0.4);
-            Anim(l, @"transform.rotation.z", @(-0.18), @0.18, 1.5 + i * 0.25, YES, i * 0.3);
+        NSMutableArray *es = [NSMutableArray array];
+        for (id x in custom[@"e"]) if ([x isKindOfClass:[NSString class]] && [x length]) [es addObject:x];
+        NSArray *angs = es.count == 1 ? @[@(-50)] : es.count == 2 ? @[@(-50), @(130)] : @[@(-50), @(50), @(180)];
+        NSArray *szs = es.count == 1 ? @[@1.1] : es.count == 2 ? @[@1.0, @0.85] : @[@1.0, @0.75, @0.7];
+        NSString *an = custom[@"anim"] ?: @"Float";
+        CALayer *orbit = nil;
+        if ([an isEqualToString:@"Orbit"]) { orbit = [CALayer layer]; orbit.frame = v.bounds; [v.layer addSublayer:orbit]; Anim(orbit, @"transform.rotation.z", @0, @(M_PI * 2), 9, NO, 0); }
+        for (NSUInteger i = 0; i < es.count && i < 3; i++) {
+            CALayer *l = EmojiLayer(es[i], e * [szs[i] doubleValue], at([angs[i] doubleValue], R + 2));
+            [(orbit ?: v.layer) addSublayer:l];
+            CFTimeInterval off = i * 0.35;
+            if ([an isEqualToString:@"Float"]) { Anim(l, @"position.y", @(l.position.y), @(l.position.y - d * 0.06), 1.1 + i * 0.3, YES, off); Anim(l, @"transform.rotation.z", @(-0.15), @0.15, 1.5 + i * 0.25, YES, off); }
+            else if ([an isEqualToString:@"Sway"]) Anim(l, @"transform.rotation.z", @(-0.45), @0.45, 0.9 + i * 0.15, YES, off);
+            else if ([an isEqualToString:@"Spin"]) Anim(l, @"transform.rotation.z", @0, @(M_PI * 2 * (i % 2 ? -1 : 1)), 2.4 + i * 0.4, NO, off);
+            else if ([an isEqualToString:@"Pulse"]) Anim(l, @"transform.scale", @0.8, @1.2, 0.6 + i * 0.1, YES, off);
+            else if ([an isEqualToString:@"Bounce"]) { CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"position.y"]; k.values = @[@(l.position.y), @(l.position.y - d * 0.14), @(l.position.y), @(l.position.y - d * 0.04), @(l.position.y)]; k.keyTimes = @[@0, @0.3, @0.55, @0.7, @1]; k.duration = 1.1; k.repeatCount = HUGE_VALF; k.removedOnCompletion = NO; k.timeOffset = off; [l addAnimation:k forKey:@"b"]; }
+            else if ([an isEqualToString:@"Wiggle"]) { CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"]; k.values = @[@0, @0.3, @-0.3, @0.2, @-0.2, @0, @0]; k.keyTimes = @[@0, @0.08, @0.16, @0.24, @0.32, @0.4, @1]; k.duration = 1.6; k.repeatCount = HUGE_VALF; k.removedOnCompletion = NO; k.timeOffset = off; [l addAnimation:k forKey:@"w"]; }
+            else if ([an isEqualToString:@"Glow"]) { l.shadowColor = UIColor.whiteColor.CGColor; l.shadowOffset = CGSizeZero; l.shadowRadius = e * 0.25; Anim(l, @"shadowOpacity", @0, @1, 0.9, YES, off); }
+            else if ([an isEqualToString:@"Orbit"]) Anim(l, @"transform.rotation.z", @0, @(-M_PI * 2), 9, NO, 0);   // stays upright
         }
     } else if ([name isEqualToString:@"Butterfly"]) {
         for (int i = 0; i < 2; i++) { CALayer *b = EmojiLayer(@"🦋", e * (i ? 0.6 : 0.85), at(i ? 150 : -40, R + 2)); [v.layer addSublayer:b]; Anim(b, @"transform.scale.x", @1, @0.4, 0.25 + i * 0.05, YES, i * 0.1); Anim(b, @"position", [NSValue valueWithCGPoint:b.position], [NSValue valueWithCGPoint:CGPointMake(b.position.x + (i ? -1 : 1) * d * 0.06, b.position.y - d * 0.07)], 1.4 + i * 0.4, YES, 0); }
@@ -2971,7 +2991,7 @@ static void StyleFrames(UIWindow *w) {
 @property (nonatomic, copy) NSString *key, *name;
 @property (nonatomic, copy) void (^onSave)(void);
 @end
-@implementation M26CustomFrameVC { NSMutableArray *_em; NSInteger _slot; NSArray *_slots; UIView *_photo; UISegmentedControl *_mode; UIColorWell *_well; UITextField *_typer; UIScrollView *_sc; }
+@implementation M26CustomFrameVC { NSMutableArray *_em; NSInteger _slot; NSArray *_slots; UIView *_photo; UISegmentedControl *_mode; UIColorWell *_well; UITextField *_typer; UIScrollView *_sc; NSString *_anim; NSArray *_animBtns; NSArray *_xBtns; }
 static NSArray *QuickEmojis(void) { return @[@"❤️", @"💖", @"💕", @"🔥", @"✨", @"⭐️", @"🌙", @"👑", @"🦋", @"🌸", @"🌹", @"🍀", @"🎀", @"💎", @"🦇", @"🎃", @"👻", @"💀", @"🎄", @"🎅", @"❄️", @"☃️", @"🎁", @"🎉", @"🥳", @"😈", @"😇", @"😍", @"🥺", @"😎", @"🤍", @"🖤", @"💜", @"💙", @"💚", @"💛", @"🧡", @"🐼", @"🐻", @"🐱", @"🐶", @"🦄", @"🌈", @"☀️", @"⚡️", @"💫", @"🍓", @"🍒", @"🎮", @"⚽️", @"🏀", @"🎵"]; }
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -2997,6 +3017,15 @@ static NSArray *QuickEmojis(void) { return @[@"❤️", @"💖", @"💕", @"🔥
         [_sc addSubview:b]; [slots addObject:b];
     }
     _slots = slots;
+    NSMutableArray *xs = [NSMutableArray array];
+    for (UIButton *b in slots) {
+        UIButton *x = [UIButton buttonWithType:UIButtonTypeCustom]; x.tag = 50 + b.tag; x.frame = CGRectMake(CGRectGetMaxX(b.frame) - 16, CGRectGetMinY(b.frame) - 8, 24, 24);
+        [x setImage:[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+        x.tintColor = UIColor.systemGrayColor; x.backgroundColor = UIColor.systemBackgroundColor; x.layer.cornerRadius = 12;
+        [x addTarget:self action:@selector(clearSlot:) forControlEvents:UIControlEventTouchUpInside];
+        [_sc addSubview:x]; [xs addObject:x];
+    }
+    _xBtns = xs;
     UIButton *kb = [UIButton buttonWithType:UIButtonTypeSystem]; kb.frame = CGRectMake(20, 248, W - 40, 30);
     [kb setTitle:@"Type any emoji ⌨︎" forState:UIControlStateNormal]; [kb addTarget:self action:@selector(type) forControlEvents:UIControlEventTouchUpInside]; [_sc addSubview:kb];
     _typer = [[UITextField alloc] initWithFrame:CGRectMake(-100, -100, 10, 10)]; _typer.delegate = self; [_typer addTarget:self action:@selector(typed) forControlEvents:UIControlEventEditingChanged]; [_sc addSubview:_typer];
@@ -3009,8 +3038,25 @@ static NSArray *QuickEmojis(void) { return @[@"❤️", @"💖", @"💕", @"🔥
     }
     y += ((qs.count + 7) / 8) * cell + 16;
     // color
-    _mode = [[UISegmentedControl alloc] initWithItems:@[@"Pick Color", @"Match Their Photo"]]; _mode.frame = CGRectMake(20, y, W - 40, 34);
-    _mode.selectedSegmentIndex = [cur[@"match"] boolValue] ? 1 : 0; [_mode addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged]; [_sc addSubview:_mode];
+    // emoji animation
+    _anim = cur[@"anim"] ?: @"Float";
+    UILabel *al = [[UILabel alloc] initWithFrame:CGRectMake(20, y, W - 40, 20)]; al.text = @"EMOJI ANIMATION"; al.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold]; al.textColor = UIColor.secondaryLabelColor; [_sc addSubview:al];
+    UIScrollView *ar = [[UIScrollView alloc] initWithFrame:CGRectMake(0, y + 24, W, 40)]; ar.showsHorizontalScrollIndicator = NO;
+    NSArray *anims = @[@"Float", @"Sway", @"Spin", @"Pulse", @"Bounce", @"Wiggle", @"Orbit", @"Glow", @"None"];
+    NSMutableArray *abs = [NSMutableArray array]; CGFloat ax = 16;
+    for (NSString *an in anims) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom]; [b setTitle:an forState:UIControlStateNormal]; b.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+        CGFloat bw = [b.titleLabel sizeThatFits:CGSizeMake(200, 34)].width + 28; b.frame = CGRectMake(ax, 3, bw, 34); ax += bw + 8;
+        b.layer.cornerRadius = 17; [b addTarget:self action:@selector(animTap:) forControlEvents:UIControlEventTouchUpInside];
+        [ar addSubview:b]; [abs addObject:b];
+    }
+    ar.contentSize = CGSizeMake(ax + 8, 40); [_sc addSubview:ar]; _animBtns = abs;
+    y += 80;
+    UILabel *rl = [[UILabel alloc] initWithFrame:CGRectMake(20, y, W - 40, 20)]; rl.text = @"RING"; rl.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold]; rl.textColor = UIColor.secondaryLabelColor; [_sc addSubview:rl];
+    y += 26;
+    _mode = [[UISegmentedControl alloc] initWithItems:@[@"Color", @"Match Photo", @"No Ring"]]; _mode.frame = CGRectMake(20, y, W - 40, 34);
+    NSString *rg = cur[@"ring"] ?: ([cur[@"match"] boolValue] ? @"match" : @"color");
+    _mode.selectedSegmentIndex = [rg isEqualToString:@"none"] ? 2 : [rg isEqualToString:@"match"] ? 1 : 0; [_mode addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged]; [_sc addSubview:_mode];
     _well = [[UIColorWell alloc] initWithFrame:CGRectMake((W - 44) / 2, y + 50, 44, 44)]; _well.supportsAlpha = NO; _well.selectedColor = HexColor(cur[@"hex"] ?: @"FF4F8B");
     [_well addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged]; [_sc addSubview:_well];
     UILabel *note = [[UILabel alloc] initWithFrame:CGRectMake(20, y + 50, W - 40, 44)]; note.tag = 77; note.text = @"The ring takes the main color of their contact photo."; note.textColor = UIColor.secondaryLabelColor; note.font = [UIFont systemFontOfSize:14]; note.textAlignment = NSTextAlignmentCenter; note.numberOfLines = 2; [_sc addSubview:note];
@@ -3018,10 +3064,16 @@ static NSArray *QuickEmojis(void) { return @[@"❤️", @"💖", @"💕", @"🔥
     _slot = 0;
     [self refresh];
 }
-- (NSDictionary *)data { return @{@"e": _em, @"hex": ColorHex(_well.selectedColor ?: UIColor.systemPinkColor), @"match": @(_mode.selectedSegmentIndex == 1)}; }
+- (NSDictionary *)data { return @{@"e": _em, @"hex": ColorHex(_well.selectedColor ?: UIColor.systemPinkColor), @"ring": @[@"color", @"match", @"none"][_mode.selectedSegmentIndex], @"match": @(_mode.selectedSegmentIndex == 1), @"anim": _anim ?: @"Float"}; }
+- (void)clearSlot:(UIButton *)b { _em[b.tag - 50] = @""; _slot = b.tag - 50; [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred]; [self refresh]; }
+- (void)animTap:(UIButton *)b { _anim = [b titleForState:UIControlStateNormal]; [[[UISelectionFeedbackGenerator alloc] init] selectionChanged]; [self refresh]; }
 - (void)refresh {
-    for (UIButton *b in _slots) { [b setTitle:_em[b.tag] forState:UIControlStateNormal]; b.layer.borderWidth = b.tag == _slot ? 2.5 : 0; b.layer.borderColor = UIColor.systemBlueColor.CGColor; }
-    _well.hidden = _mode.selectedSegmentIndex == 1; [_sc viewWithTag:77].hidden = !_well.hidden;
+    for (UIButton *b in _slots) { [b setTitle:[_em[b.tag] length] ? _em[b.tag] : @"＋" forState:UIControlStateNormal]; [b setTitleColor:UIColor.tertiaryLabelColor forState:UIControlStateNormal]; b.layer.borderWidth = b.tag == _slot ? 2.5 : 0; b.layer.borderColor = UIColor.systemBlueColor.CGColor; }
+    for (UIButton *x in _xBtns) x.hidden = ![_em[x.tag - 50] length];
+    for (UIButton *b in _animBtns) { BOOL on = [[b titleForState:UIControlStateNormal] isEqualToString:_anim]; b.backgroundColor = on ? UIColor.systemBlueColor : UIColor.secondarySystemGroupedBackgroundColor; [b setTitleColor:on ? UIColor.whiteColor : UIColor.labelColor forState:UIControlStateNormal]; }
+    _well.hidden = _mode.selectedSegmentIndex != 0;
+    UILabel *note = (UILabel *)[_sc viewWithTag:77]; note.hidden = _mode.selectedSegmentIndex == 0;
+    note.text = _mode.selectedSegmentIndex == 1 ? @"The ring takes the main color of their contact photo." : @"No ring, just your emojis.";
     for (UIView *x in _photo.subviews) if (x.tag == 99) [x removeFromSuperview];
     UIView *fv = MakeFrameX(@"Custom", 96, [self data], nil); fv.tag = 99; fv.center = CGPointMake(48, 48); [_photo addSubview:fv];
 }
@@ -4917,7 +4969,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.4 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.5 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
