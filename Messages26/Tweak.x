@@ -1,4 +1,5 @@
-// Messages26 0.10.1 - made by nano
+// Messages26 0.10.2 - made by nano
+// 0.10.2: rim sits on the bubble edge, none on big emoji; reply arrow no longer grows huge
 // 0.10.1: bubble rim follows the bubble shape; swipe reply opens the reply view
 // 0.10.0: glass rim on received bubbles, deeper blue iMessages, swipe right to reply
 // 0.9.2: search pill mic starts dictation; no FaceTime tap animation
@@ -1355,6 +1356,9 @@ static void BubbleRim(UIView *b) {
     BOOL gray = NO;
     @try { id c = [b valueForKey:@"color"]; gray = c ? [c intValue] == -1 : NO; } @catch (__unused id e) {}
     if (!gray) { @try { gray = [[b valueForKey:@"orientation"] intValue] == 0; } @catch (__unused id e) {} }
+    // big emoji (no bubble behind them): no rim
+    @try { if (![[b valueForKey:@"hasBackground"] boolValue]) gray = NO; } @catch (__unused id e) {}
+    if ([NSStringFromClass([b class]) containsString:@"Emoji"]) gray = NO;
     UIView *host = b.superview;
     if (!gBubblesOn || !gray || !host || b.bounds.size.width < 10) { [rim removeFromSuperview]; return; }
     BOOL dark = IsDark(b);
@@ -1370,9 +1374,9 @@ static void BubbleRim(UIView *b) {
     // on top of the bubble (only the outline is drawn, so the text stays clear)
     if (rim.superview != host || [host.subviews indexOfObject:rim] < [host.subviews indexOfObject:b]) [host insertSubview:rim aboveSubview:b];
     BOOL tail = NO; @try { tail = [[b valueForKey:@"hasTail"] boolValue]; } @catch (__unused id e) {}
-    UIEdgeInsets ins = b.alignmentRectInsets;
-    CGRect body = UIEdgeInsetsInsetRect(b.bounds, ins);
-    if (body.size.width < 10 || body.size.height < 10) body = b.bounds;
+    // the bubble fills the view, except the room kept for the tail on the left
+    CGRect body = b.bounds;
+    body.origin.x += 5.5; body.size.width -= 5.5;
     body = CGRectInset(body, 0.65, 0.65);
     CGFloat x0 = CGRectGetMinX(body), x1 = CGRectGetMaxX(body), y0 = CGRectGetMinY(body), y1 = CGRectGetMaxY(body);
     CGFloat r = MIN(17.5, body.size.height / 2);
@@ -1463,7 +1467,8 @@ static UIView *BalloonIn(UIView *root) {
         BOOL dark = IsDark(c);
         self.arrow.tintColor = Ink(c);
         self.arrow.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.93 alpha:0.97];
-        self.arrow.frame = CGRectMake(0, 0, 34, 34);
+        self.arrow.transform = CGAffineTransformIdentity; [self.arrow.layer removeAllAnimations];
+        self.arrow.bounds = CGRectMake(0, 0, 34, 34); self.arrow.alpha = 0;
         [c.superview insertSubview:self.arrow belowSubview:c];
     }
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
@@ -1586,7 +1591,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@", gBubbleDebug, gReplyDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
