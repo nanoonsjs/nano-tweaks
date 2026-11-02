@@ -1,4 +1,5 @@
-// Messages26 0.10.7 - made by nano
+// Messages26 0.10.8 - made by nano
+// 0.10.8: photo found anywhere on screen above the name
 // 0.10.7: photo + name scaled one by one (bigger for real); drag the debug box anywhere
 // 0.10.6: bigger contact photo + name at the top of a chat
 // 0.10.5: To: typing spot stays after the label (Messages' resets are undone right away)
@@ -1130,6 +1131,7 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
 // Bigger contact photo + name in a chat (iOS 26 size), a little lower.
 static __weak UIView *gAvatarV;
 static NSString *gTitleDebug = @"title: -";
+static NSString *gTitleNear = @"";
 #define TITLE_SCALE 1.3
 static void Crisp(UIView *root, CGFloat s) {
     CGFloat cs = UIScreen.mainScreen.scale * s;
@@ -1142,30 +1144,32 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     UIView *name = gNameNow, *oldA = gAvatarV;
     UIView *av = nil;
     if (chat && gTopOn && name.window && nb) {
-        CGFloat W = nb.bounds.size.width;
-        CGRect nr = [name convertRect:name.bounds toView:nb];
-        // the photo: a square right above the name, in the middle
-        CGFloat bestW = 0;
-        NSMutableArray *st = [NSMutableArray arrayWithArray:nb.subviews]; int g = 0;
-        while (st.count && g++ < 600) { UIView *v = st.lastObject; [st removeLastObject];
+        // the photo: a square right above the name, in the middle (searched in the whole window)
+        UIWindow *win = name.window;
+        CGRect nw = [name convertRect:name.bounds toView:nil];
+        CGFloat Wd = win.bounds.size.width, bestW = 0;
+        NSMutableArray *near = [NSMutableArray array];
+        NSMutableArray *st = [NSMutableArray arrayWithObject:win]; int g = 0;
+        while (st.count && g++ < 5000) { UIView *v = st.lastObject; [st removeLastObject];
             if (v.hidden || v.alpha < 0.05 || v.tag == GLASS_TAG || v == name || [v isDescendantOfView:name]) continue;
-            CGSize sz = v.bounds.size;
-            if (![v isKindOfClass:[UILabel class]] && ![name isDescendantOfView:v] && sz.width >= 30 && sz.width <= 90 && fabs(sz.width - sz.height) < 4) {
-                CGPoint c = [v convertPoint:CGPointMake(sz.width / 2, sz.height / 2) toView:nb];
-                CGFloat ty = v.transform.ty;
-                if (fabs(c.x - W / 2) < 30 && c.y - ty < CGRectGetMinY(nr) + 6 && sz.width > bestW) { bestW = sz.width; av = v; }
-            }
+            CGRect r = [v convertRect:v.bounds toView:nil];
+            if (CGRectGetMinY(r) > CGRectGetMaxY(nw) + 10) continue;   // nothing below the name matters
+            CGSize sz = r.size;
+            BOOL mid = fabs(CGRectGetMidX(r) - Wd / 2) < 30, above = CGRectGetMidY(r) < CGRectGetMinY(nw) + 4 && CGRectGetMaxY(r) > CGRectGetMinY(nw) - 40;
+            if (mid && above && sz.width < 120 && near.count < 6) [near addObject:[NSString stringWithFormat:@"%@ %.0fx%.0f", NSStringFromClass([v class]), sz.width, sz.height]];
+            if (mid && above && ![v isKindOfClass:[UILabel class]] && ![name isDescendantOfView:v] && sz.width >= 28 && sz.width <= 100 && fabs(sz.width - sz.height) < 8 && sz.width > bestW) { bestW = sz.width; av = v; }
             [st addObjectsFromArray:v.subviews];
         }
+        gTitleNear = [near componentsJoinedByString:@", "];
         // the outermost view of that size
-        while (av.superview && av.superview != nb && fabs(av.superview.bounds.size.width - av.bounds.size.width) < 1 && fabs(av.superview.bounds.size.height - av.bounds.size.height) < 1) av = av.superview;
+        while (av.superview && ![av.superview isKindOfClass:[UINavigationBar class]] && fabs(av.superview.bounds.size.width - av.bounds.size.width) < 1 && fabs(av.superview.bounds.size.height - av.bounds.size.height) < 1) av = av.superview;
     }
     if (oldA && oldA != av) oldA.transform = CGAffineTransformIdentity;
     gAvatarV = av;
     CGFloat s = TITLE_SCALE;
     if (!av) {
         if (name && !CGAffineTransformIsIdentity(name.transform) && !(chat && gTopOn)) name.transform = CGAffineTransformIdentity;
-        gTitleDebug = @"title: no photo";
+        gTitleDebug = [NSString stringWithFormat:@"title: no photo; near: %@", gTitleNear];
         return;
     }
     CGFloat a = av.bounds.size.height, n = name.bounds.size.height;
@@ -1726,7 +1730,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.7 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.8 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
