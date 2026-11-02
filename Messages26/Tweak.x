@@ -1,4 +1,5 @@
-// Messages26 0.18.7 - made by nano
+// Messages26 0.18.8 - made by nano
+// 0.18.8: contact page photo + name a little higher
 // 0.18.7: any swipe out of the full background view puts the messages back
 // 0.18.6: reactions slide along with a message when you swipe to reply
 // 0.18.5: no reply swipe on tapbacks; custom frames: 1-3 emojis, no-ring option, 9 emoji animations
@@ -2218,6 +2219,19 @@ static void StyleDetails(UIWindow *w) {
     }
     if (row.subviews.lastObject != tabs) [row bringSubviewToFront:tabs];
     for (UIView *p = row; p && p != root; p = p.superview) if (p.clipsToBounds && p.bounds.size.height < 300) p.clipsToBounds = NO;
+    // photo + name sit a little higher
+    { UIView *hc = row; while (hc && ![hc isKindOfClass:[UITableViewCell class]]) hc = hc.superview;
+      if (hc) {
+          NSMutableArray *st2 = [NSMutableArray arrayWithObject:hc]; int g2 = 0;
+          while (st2.count && g2++ < 400) { UIView *v = st2.lastObject; [st2 removeLastObject];
+              CGRect r = [v convertRect:v.bounds toView:row];
+              BOOL above = CGRectGetMaxY(r) <= T + 2 && v != hc && ![row isDescendantOfView:v];
+              BOOL isName = [v isKindOfClass:[UILabel class]] && ((UILabel *)v).font.pointSize >= 22;
+              BOOL isPic = !([v isKindOfClass:[UILabel class]]) && v.bounds.size.width >= 70 && v.bounds.size.width <= 160 && fabs(v.bounds.size.width - v.bounds.size.height) < 14;
+              if (above && (isName || isPic)) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, -18); if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t; continue; }
+              if (![row isDescendantOfView:v] && v != hc && CGRectGetMinY(r) > T) continue;
+              [st2 addObjectsFromArray:v.subviews]; }
+      } }
     @try { StyleBgTab(vc); } @catch (__unused id e) {}
     @try { StyleBubblePill(vc); } @catch (__unused id e) {}
     gDetDebug = [NSString stringWithFormat:@"details: %@ tiles=%@ T=%.0f B=%.0f table=%@", NSStringFromClass([vc class]), [tiles.allKeys componentsJoinedByString:@","], T, B, gDetTable ? NSStringFromClass([gDetTable class]) : @"-"];
@@ -5002,7 +5016,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.7 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.8 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
