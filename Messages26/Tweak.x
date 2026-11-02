@@ -1,4 +1,5 @@
-// Messages26 0.7.4 - made by nano
+// Messages26 0.7.5 - made by nano
+// 0.7.5: the field row's place is worked out inside the bar itself, so it's the same every time
 // 0.7.4: back to moving just the field row (no blur), right on the keyboard / just above the home bar;
 //        To: capsule matches the message pill, its + sits inside under the X
 // 0.7.3: the whole bar moves down (pill touches the keyboard / sits just above the home bar),
@@ -527,13 +528,15 @@ static void StyleEntry(UIView *entry) {
             [cs addObjectsFromArray:v.subviews]; }
         CGRect ef = [entry convertRect:entry.bounds toView:nil];
         BOOL kbUp = CGRectGetMaxY(ef) < ew.bounds.size.height - 120;   // the bar rides on the keyboard
-        CGFloat rowBottom = CGRectGetMaxY([entry convertRect:fu toView:nil]) + 6;
-        CGFloat target = kbUp ? CGRectGetMaxY(ef) - 4 : ew.bounds.size.height - ew.safeAreaInsets.bottom - 2;
-        shift = MAX(0, target - rowBottom);
+        // All in the bar's own space (screen math gave wrong numbers while the bar
+        // moves between windows): the text box's bottom goes to a fixed place.
+        CGFloat wantBottom = kbUp ? entry.bounds.size.height - 10 : entry.bounds.size.height - 43;
+        shift = wantBottom - CGRectGetMaxY(fu);
+        if (fabs(shift) > 200) shift = 0;
         gKbTop = kbUp ? CGRectGetMaxY(ef) : 0;
         CGAffineTransform rt = CGAffineTransformMakeTranslation(0, shift);
         for (UIView *v in row) if (!CGAffineTransformEqualToTransform(v.transform, rt)) v.transform = rt;
-        gRowOut = CGRectGetMaxY(fu) + shift + 6 > entry.bounds.size.height;
+        gRowOut = NO;
     } else if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
     if (container) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift); if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t; }
     // Instagram-style... no: iOS 26 field look is drawn by our pill behind it
@@ -1003,7 +1006,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.7.4 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.7.5 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
