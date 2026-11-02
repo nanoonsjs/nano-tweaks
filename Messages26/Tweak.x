@@ -1,4 +1,5 @@
-// Messages26 1.0.2 - made by nano
+// Messages26 1.0.3 - made by nano
+// 1.0.3: the small original name no longer peeks out above the name capsule
 // 1.0.2: smoother on older iPhones (8 / 8 Plus / X): fewer screen checks, none while touching or scrolling
 // 1.0.1: contact name always shows in its capsule at the top of a chat; name + capsule a little lower
 // 1.0: first public release - iOS 26 Messages redesign plus custom features (all in the Messages26 settings)
@@ -956,6 +957,23 @@ static __weak UIView *gNameNow;
 static CGFloat gNameTy = 0, gNameTx = 0;
 #define TITLE_SCALE 1.3
 static CGRect NameDrawn(UIView *name, CGRect r, UIView *host);
+// A bare name label: only the capsule (with the name drawn on it) may show; the label's own
+// small text, left where Messages put it, is masked away.
+static void NameMask(UIView *v) {
+    UIView *g = objc_getAssociatedObject(v, &kGlassKey);
+    if (![v isKindOfClass:[UILabel class]] || !g || g.superview != v || g.hidden) { if (v.layer.mask) v.layer.mask = nil; return; }
+    CATransform3D st = v.layer.sublayerTransform;
+    CGAffineTransform t = CATransform3DIsAffine(st) ? CATransform3DGetAffineTransform(st) : CGAffineTransformIdentity;
+    CGPoint c = CGPointMake(v.bounds.size.width * v.layer.anchorPoint.x, v.bounds.size.height * v.layer.anchorPoint.y);
+    CGRect r = CGRectOffset(g.frame, -c.x, -c.y);
+    r = CGRectApplyAffineTransform(r, t);
+    r = CGRectOffset(r, c.x, c.y);
+    r = CGRectInset(r, -3, -3);
+    CALayer *m = v.layer.mask;
+    if (![m.name isEqualToString:@"m26.namemask"]) { m = [CALayer layer]; m.name = @"m26.namemask"; m.backgroundColor = UIColor.blackColor.CGColor; v.layer.mask = m; }
+    CGFloat rad = MIN(r.size.width, r.size.height) / 2;
+    if (!CGRectEqualToRect(m.frame, r) || m.cornerRadius != rad) { [CATransaction begin]; [CATransaction setDisableActions:YES]; m.frame = r; m.cornerRadius = rad; [CATransaction commit]; }
+}
 static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     // the name's glass lives inside the name itself, so it grows and moves with it
     BOOL inside = (v == gNameNow);
@@ -996,12 +1014,13 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
         CGRect mf = CGRectOffset(src.bounds, -g.frame.origin.x, -g.frame.origin.y);
         if (!CGRectEqualToRect(m.frame, mf)) m.frame = mf;
         m.hidden = !src.text.length;
+        NameMask(v);
     }
     for (UIView *p = host; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
 }
 static NSHashTable *gFaded;   // bar backgrounds we hid
 static void UndoNav(void) {
-    for (UIView *v in [gStyled allObjects]) { [objc_getAssociatedObject(v, &kGlassKey) removeFromSuperview]; objc_setAssociatedObject(v, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    for (UIView *v in [gStyled allObjects]) { if ([v.layer.mask.name isEqualToString:@"m26.namemask"]) v.layer.mask = nil; [objc_getAssociatedObject(v, &kGlassKey) removeFromSuperview]; objc_setAssociatedObject(v, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
     [gStyled removeAllObjects];
     for (UIView *v in [gFaded allObjects]) { v.alpha = 1; v.hidden = NO; }
     [gFaded removeAllObjects];
@@ -1326,7 +1345,7 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     gAvatarV = av;
     CGFloat s = TITLE_SCALE;
     if (!av) {
-        if (name && !(chat && gTopOn)) { name.layer.sublayerTransform = CATransform3DIdentity; gNameTy = 0; }
+        if (name && !(chat && gTopOn)) { name.layer.sublayerTransform = CATransform3DIdentity; gNameTy = 0; name.layer.mask = nil; }
         gTitleDebug = [NSString stringWithFormat:@"title: no photo; near: %@", gTitleNear];
         return;
     }
@@ -1360,6 +1379,7 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     if (!CATransform3DEqualToTransform(av.layer.sublayerTransform, ta)) av.layer.sublayerTransform = ta;
     if (!CATransform3DEqualToTransform(name.layer.sublayerTransform, tn)) name.layer.sublayerTransform = tn;
     gNameTy = tyN;
+    NameMask(name);
     // the name capsule sits on top of the photo
     { UIView *common = av.superview;
       while (common && ![name isDescendantOfView:common]) common = common.superview;
@@ -5231,7 +5251,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.0.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.0.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
