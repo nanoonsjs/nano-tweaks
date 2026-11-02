@@ -1,4 +1,5 @@
-// Messages26 0.10.10 - made by nano
+// Messages26 0.10.11 - made by nano
+// 0.10.11: name glass moves with the name; name centered
 // 0.10.10: photo + name scaled without fighting Messages' layout; name hangs right under the photo
 // 0.10.9: photo is the 51x60 avatar container
 // 0.10.8: photo found anywhere on screen above the name
@@ -827,24 +828,27 @@ static CGRect DrawnRect(UIView *v) {
     return CGRectIsNull(u) ? v.frame : u;
 }
 static __weak UIView *gNameNow;
-static CGFloat gNameTy = 0;
+static CGFloat gNameTy = 0, gNameTx = 0;
 #define TITLE_SCALE 1.3
 static CGRect NameDrawn(UIView *name, CGRect r, UIView *host);
 static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
-    UIView *host = v.superview;
-    if (!host) return;
+    // the name's glass lives inside the name itself, so it grows and moves with it
+    BOOL inside = (v == gNameNow);
+    UIView *host = inside ? v : v.superview;
+    if (!host || !v.superview) return;
     if (!gStyled) gStyled = [NSHashTable weakObjectsHashTable];
     [gStyled addObject:v];
     UIVisualEffectView *g = objc_getAssociatedObject(v, &kGlassKey);
     if (!g || g.superview != host) {
         [g removeFromSuperview];
         g = GlassView(v); g.tag = GLASS_TAG;
-        [host insertSubview:g belowSubview:v];
+        if (inside) [host insertSubview:g atIndex:0]; else [host insertSubview:g belowSubview:v];
         objc_setAssociatedObject(v, &kGlassKey, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
+    if (inside && host.subviews.firstObject != g) [host sendSubviewToBack:g];
     CGRect f = DrawnRect(v);
-    f = NameDrawn(v, f, host);
-    CGRect want = CGRectInset(f, -padX * (v == gNameNow && !CATransform3DIsIdentity(v.layer.sublayerTransform) ? TITLE_SCALE : 1), -padY * (v == gNameNow && !CATransform3DIsIdentity(v.layer.sublayerTransform) ? TITLE_SCALE : 1));
+    if (inside) f = [v.superview convertRect:f toView:v];
+    CGRect want = CGRectInset(f, -padX, -padY);
     if (circle) { CGFloat d = MAX(want.size.width, want.size.height); want = CGRectMake(CGRectGetMidX(f) - d / 2, CGRectGetMidY(f) - d / 2, d, d); }
     want = CGRectIntegral(want);
     if (g.layer.animationKeys.count || g.alpha < 1) return;
@@ -1194,14 +1198,20 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     CGFloat nC = CGRectGetMidY(nr);
     CGFloat tyN = circleBottom - 5 - nC + s * n / 2;
     CATransform3D ta = CATransform3DScale(CATransform3DMakeTranslation(0, tyA, 0), s, s, 1);
-    CATransform3D tn = CATransform3DScale(CATransform3DMakeTranslation(0, tyN, 0), s, s, 1);
+    // keep the name centered on screen
+    CGFloat tx = 0;
+    { CGRect dr = DrawnRect(name); dr = [name.superview convertRect:dr toView:nil];
+      if (!gDrewNothing) { CGFloat hc = CGRectGetMidX(nr), cx0 = CGRectGetMidX(dr), Wd = name.window.bounds.size.width;
+        tx = Wd / 2 - hc - s * (cx0 - hc); if (fabs(tx) > 24) tx = 0; } }
+    gNameTx = tx;
+    CATransform3D tn = CATransform3DScale(CATransform3DMakeTranslation(tx, tyN, 0), s, s, 1);
     if (!CATransform3DEqualToTransform(av.layer.sublayerTransform, ta)) av.layer.sublayerTransform = ta;
     if (!CATransform3DEqualToTransform(name.layer.sublayerTransform, tn)) name.layer.sublayerTransform = tn;
     gNameTy = tyN;
     Crisp(name, s);
     for (UIView *p = av; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
     for (UIView *p = name; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
-    gTitleDebug = [NSString stringWithFormat:@"title: photo=%@ %.0fx%.0f circ=%.0f name=%@ %.0f tyN=%.0f", NSStringFromClass([av class]), ar.size.width, a, circBot, NSStringFromClass([name class]), n, tyN];
+    gTitleDebug = [NSString stringWithFormat:@"title: photo=%@ %.0fx%.0f circ=%.0f name=%@ %.0f tyN=%.0f tx=%.0f", NSStringFromClass([av class]), ar.size.width, a, circBot, NSStringFromClass([name class]), n, tyN, gNameTx];
 }
 // where the scaled name is actually drawn (in host's space)
 static CGRect NameDrawn(UIView *name, CGRect r, UIView *host) {
@@ -1209,7 +1219,7 @@ static CGRect NameDrawn(UIView *name, CGRect r, UIView *host) {
     CGPoint c = [name convertPoint:CGPointMake(name.bounds.size.width / 2, name.bounds.size.height / 2) toView:host];
     CGFloat s = TITLE_SCALE;
     CGPoint rc = CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r));
-    CGPoint nc = CGPointMake(c.x + (rc.x - c.x) * s, c.y + (rc.y - c.y) * s + gNameTy);
+    CGPoint nc = CGPointMake(c.x + (rc.x - c.x) * s + gNameTx, c.y + (rc.y - c.y) * s + gNameTy);
     return CGRectMake(nc.x - r.size.width * s / 2, nc.y - r.size.height * s / 2, r.size.width * s, r.size.height * s);
 }
 static void StyleNav(UIWindow *w) {
@@ -1758,7 +1768,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.10 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.11 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
