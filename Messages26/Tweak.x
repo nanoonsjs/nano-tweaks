@@ -1,4 +1,5 @@
-// Messages26 0.9.1 - made by nano
+// Messages26 0.9.2 - made by nano
+// 0.9.2: search pill mic starts dictation; no FaceTime tap animation
 // 0.9.1: search moves above the keyboard with an X; all glass matches the search pill; top compose gone
 // 0.9.0: iOS 26 search pill + compose circle at the bottom of the conversation list
 // 0.8.4: pill always pulled back after reopening a chat; mic tap goes to the visible button
@@ -1025,10 +1026,7 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
                     if ([x isKindOfClass:[UILabel class]]) { UIColor *c = IsDark(nb) ? UIColor.blackColor : UIColor.whiteColor; if (![((UILabel *)x).textColor isEqual:c]) ((UILabel *)x).textColor = c; }
                     [ls addObjectsFromArray:x.subviews]; }
             }
-            if (right && [v isKindOfClass:[UIControl class]] && !objc_getAssociatedObject(v, "m26ft")) {
-                objc_setAssociatedObject(v, "m26ft", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                [(UIControl *)v addTarget:[M26FaceTime shared] action:@selector(tap:) forControlEvents:UIControlEventTouchDown];
-            }
+            // (no FaceTime morph on tap anymore)
             if (right && gSearchOn && !chat) {
                 UIViewController *lv = SearchList();
                 if (lv && lv.navigationController.navigationBar == nb && lv.navigationController.topViewController == lv) {
@@ -1088,6 +1086,7 @@ static void StyleNav(UIWindow *w) {
 #define SEARCH_TAG  0x4D323653
 #define SCOMPOSE_TAG 0x4D323643
 static NSString *gSearchDebug = @"";
+static NSString *gDictDebug = @"-";
 static UIViewController *ListVC(UIViewController *vc, int depth) {
     if (!vc || depth > 12) return nil;
     if ([NSStringFromClass([vc class]) containsString:@"ConversationList"] && vc.viewIfLoaded.window) return vc;
@@ -1136,6 +1135,24 @@ static UIWindow *KeyWin(void) {
     UIWindow *w = KeyWin();
     [UIView animateWithDuration:0.3 animations:^{ StyleSearchPill(w); }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[self field] becomeFirstResponder]; });
+}
+- (void)mic:(UIView *)b {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    if (!self.searching) [self search:[KeyWin() viewWithTag:SEARCH_TAG]];
+    else [[self field] becomeFirstResponder];
+    // start dictation once the keyboard is up
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        Class DC = NSClassFromString(@"UIDictationController");
+        SEL si = NSSelectorFromString(@"sharedInstance");
+        id dc = [DC respondsToSelector:si] ? ((id (*)(id, SEL))objc_msgSend)(DC, si) : nil;
+        NSString *how = @"none";
+        @try {
+            if ([dc respondsToSelector:NSSelectorFromString(@"switchToDictationInputModeWithTouch:mediaPlayingNotificationLauncherIsVisible:")]) { how = @"switch2"; ((void (*)(id, SEL, id, BOOL))objc_msgSend)(dc, NSSelectorFromString(@"switchToDictationInputModeWithTouch:mediaPlayingNotificationLauncherIsVisible:"), nil, NO); }
+            else if ([dc respondsToSelector:NSSelectorFromString(@"switchToDictationInputModeWithTouch:")]) { how = @"switch"; ((void (*)(id, SEL, id))objc_msgSend)(dc, NSSelectorFromString(@"switchToDictationInputModeWithTouch:"), nil); }
+            else if ([dc respondsToSelector:NSSelectorFromString(@"startDictation")]) { how = @"start"; ((void (*)(id, SEL))objc_msgSend)(dc, NSSelectorFromString(@"startDictation")); }
+        } @catch (__unused id e) { how = @"error"; }
+        gDictDebug = how;
+    });
 }
 - (void)push:(UITextField *)tf {
     UISearchController *sc = [self sc];
@@ -1215,7 +1232,7 @@ static void StyleSearchPill(UIWindow *w) {
     // glass left behind by a button that's gone or hidden
     for (UIView *v in [gStyled allObjects]) if (!v.window || v.hidden || v.alpha < 0.05) { [objc_getAssociatedObject(v, &kGlassKey) removeFromSuperview]; objc_setAssociatedObject(v, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [gStyled removeObject:v]; }
     if (vc) S.list = vc;
-    gSearchDebug = [NSString stringWithFormat:@"search: list=%@ show=%d sc=%d act=%d ours=%d compose=%d kb=%.0f", vc ? NSStringFromClass([vc class]) : @"-", show, sc != nil, sc.active, S.searching, S.compose != nil, S.kbTop];
+    gSearchDebug = [NSString stringWithFormat:@"search: list=%@ show=%d sc=%d act=%d ours=%d compose=%d kb=%.0f dict=%@", vc ? NSStringFromClass([vc class]) : @"-", show, sc != nil, sc.active, S.searching, S.compose != nil, S.kbTop, gDictDebug];
     if (!gSearchOn) { [pill removeFromSuperview]; [comp removeFromSuperview]; return; }
     BOOL dark = IsDark(w);
     if (!pill) {
@@ -1223,8 +1240,9 @@ static void StyleSearchPill(UIWindow *w) {
         UIImageView *mag = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightMedium]]];
         mag.tag = 1; mag.contentMode = UIViewContentModeCenter; mag.userInteractionEnabled = NO; [pill addSubview:mag];
         UILabel *t = [UILabel new]; t.tag = 2; t.text = @"Search"; t.font = [UIFont systemFontOfSize:19]; t.userInteractionEnabled = NO; [pill addSubview:t];
-        UIImageView *mic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"mic" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightRegular]]];
-        mic.tag = 3; mic.contentMode = UIViewContentModeCenter; mic.userInteractionEnabled = NO; [pill addSubview:mic];
+        UIButton *mic = [UIButton buttonWithType:UIButtonTypeSystem];
+        [mic setImage:[UIImage systemImageNamed:@"mic" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightRegular]] forState:UIControlStateNormal];
+        mic.tag = 3; [mic addTarget:S action:@selector(mic:) forControlEvents:UIControlEventTouchUpInside]; [pill addSubview:mic];
         UITextField *tf = [UITextField new]; tf.tag = SEARCH_TAG + 4; tf.font = [UIFont systemFontOfSize:19];
         tf.returnKeyType = UIReturnKeySearch; tf.autocorrectionType = UITextAutocorrectionTypeNo; tf.delegate = S; tf.alpha = 0;
         [tf addTarget:S action:@selector(push:) forControlEvents:UIControlEventEditingChanged];
@@ -1246,8 +1264,8 @@ static void StyleSearchPill(UIWindow *w) {
         pill.frame = pf;
         [pill viewWithTag:1].frame = CGRectMake(14, 0, 28, h);
         [pill viewWithTag:2].frame = CGRectMake(50, 0, pf.size.width - 100, h);
-        tf.frame = CGRectMake(48, 0, pf.size.width - 96, h);
-        [pill viewWithTag:3].frame = CGRectMake(pf.size.width - 46, 0, 30, h);
+        tf.frame = CGRectMake(48, 0, pf.size.width - 104, h);
+        [pill viewWithTag:3].frame = CGRectMake(pf.size.width - 54, 0, 44, h);
     }
     if (!CGRectEqualToRect(comp.frame, cf) && CGAffineTransformIsIdentity(comp.transform)) comp.frame = cf;
     NSString *ci = searching ? @"xmark" : @"square.and.pencil";
@@ -1258,7 +1276,7 @@ static void StyleSearchPill(UIWindow *w) {
     UIColor *ink = Ink(w), *dim = [UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.55 : 0.45];
     ((UIImageView *)[pill viewWithTag:1]).tintColor = ink;
     ((UILabel *)[pill viewWithTag:2]).textColor = dim;
-    ((UIImageView *)[pill viewWithTag:3]).tintColor = ink;
+    [pill viewWithTag:3].tintColor = ink;
     tf.textColor = ink; tf.keyboardAppearance = dark ? UIKeyboardAppearanceDark : UIKeyboardAppearanceLight;
     if (!tf.attributedPlaceholder.length) tf.attributedPlaceholder = [[NSAttributedString alloc] initWithString:@"Search" attributes:@{NSForegroundColorAttributeName: dim}];
     comp.tintColor = ink;
@@ -1342,7 +1360,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.9.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.9.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
