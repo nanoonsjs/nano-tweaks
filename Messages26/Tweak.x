@@ -1,4 +1,5 @@
-// Messages26 0.10.11 - made by nano
+// Messages26 0.10.12 - made by nano
+// 0.10.12: name + glass measured without the scaling (no double move, no jitter)
 // 0.10.11: name glass moves with the name; name centered
 // 0.10.10: photo + name scaled without fighting Messages' layout; name hangs right under the photo
 // 0.10.9: photo is the 51x60 avatar container
@@ -846,8 +847,13 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
         objc_setAssociatedObject(v, &kGlassKey, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (inside && host.subviews.firstObject != g) [host sendSubviewToBack:g];
+    // measure without our scaling (positions would count it twice)
+    CATransform3D keep = v.layer.sublayerTransform;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if (inside) v.layer.sublayerTransform = CATransform3DIdentity;
     CGRect f = DrawnRect(v);
-    if (inside) f = [v.superview convertRect:f toView:v];
+    if (inside) { f = [v.superview convertRect:f toView:v]; v.layer.sublayerTransform = keep; }
+    [CATransaction commit];
     CGRect want = CGRectInset(f, -padX, -padY);
     if (circle) { CGFloat d = MAX(want.size.width, want.size.height); want = CGRectMake(CGRectGetMidX(f) - d / 2, CGRectGetMidY(f) - d / 2, d, d); }
     want = CGRectIntegral(want);
@@ -1190,8 +1196,15 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     CGFloat a = ar.size.height, n = nr.size.height;
     // the round photo inside the box (its bottom is where the name should hang)
     CGFloat circBot = ar.size.width;   // local
+    CATransform3D keepA = av.layer.sublayerTransform, keepN = name.layer.sublayerTransform;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    av.layer.sublayerTransform = CATransform3DIdentity; name.layer.sublayerTransform = CATransform3DIdentity;
     UIView *circ = Find(av, ^BOOL(UIView *v) { return v != av && v.bounds.size.width >= 30 && fabs(v.bounds.size.width - v.bounds.size.height) < 2; }, 40);
     if (circ) circBot = CGRectGetMaxY([circ convertRect:circ.bounds toView:av]);
+    CGRect dr0 = DrawnRect(name); dr0 = [name.superview convertRect:dr0 toView:nil];
+    BOOL drewNone = gDrewNothing;
+    av.layer.sublayerTransform = keepA; name.layer.sublayerTransform = keepN;
+    [CATransaction commit];
     CGFloat tyA = 10 + (s - 1) * a / 2;
     CGFloat avC = CGRectGetMidY(ar);
     CGFloat circleBottom = avC + s * (circBot - a / 2) + tyA;
@@ -1200,8 +1213,7 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     CATransform3D ta = CATransform3DScale(CATransform3DMakeTranslation(0, tyA, 0), s, s, 1);
     // keep the name centered on screen
     CGFloat tx = 0;
-    { CGRect dr = DrawnRect(name); dr = [name.superview convertRect:dr toView:nil];
-      if (!gDrewNothing) { CGFloat hc = CGRectGetMidX(nr), cx0 = CGRectGetMidX(dr), Wd = name.window.bounds.size.width;
+    { if (!drewNone) { CGFloat hc = CGRectGetMidX(nr), cx0 = CGRectGetMidX(dr0), Wd = name.window.bounds.size.width;
         tx = Wd / 2 - hc - s * (cx0 - hc); if (fabs(tx) > 24) tx = 0; } }
     gNameTx = tx;
     CATransform3D tn = CATransform3DScale(CATransform3DMakeTranslation(tx, tyN, 0), s, s, 1);
@@ -1768,7 +1780,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.11 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.12 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
