@@ -1,4 +1,5 @@
-// Messages26 0.11.0 - made by nano
+// Messages26 0.11.1 - made by nano
+// 0.11.1: tabs really split the page (Info / Photos / Links / Documents / Collaboration); Edit presses info
 // 0.11.0: iOS 26 contact page: glass back + Edit, three glass icon buttons, Info / Backgrounds / Photos / Links tabs
 // 0.10.13: name capsule drawn over the photo
 // 0.10.12: name + glass measured without the scaling (no double move, no jitter)
@@ -1740,75 +1741,100 @@ static UIViewController *DetailsVC(UIViewController *vc, int depth) {
     return nil;
 }
 // press a view that isn't a button: its control, or its tap gesture's target
+static NSString *gEditDebug = @"";
 static BOOL ForwardTap(UIView *v) {
+    NSMutableString *log = [NSMutableString string];
+    // a control inside it, or one it sits in
     UIControl *c = (UIControl *)Find(v, ^BOOL(UIView *x) { return [x isKindOfClass:[UIControl class]]; }, 40);
-    if (!c) for (UIView *p = v.superview; p && !c; p = p.superview) if ([p isKindOfClass:[UIControl class]]) c = (UIControl *)p;
-    if (c && [c isDescendantOfView:v.superview ?: v]) { [c sendActionsForControlEvents:UIControlEventTouchUpInside]; return YES; }
+    int up = 0;
+    for (UIView *p = v; p && !c && up < 4; p = p.superview, up++) if ([p isKindOfClass:[UIControl class]]) c = (UIControl *)p;
+    if (c) { [log appendFormat:@"ctl=%@ ", NSStringFromClass([c class])]; [c sendActionsForControlEvents:UIControlEventTouchUpInside]; [c sendActionsForControlEvents:UIControlEventPrimaryActionTriggered]; gEditDebug = log; return YES; }
     NSMutableArray *views = [NSMutableArray array];
-    for (UIView *p = v; p && views.count < 4; p = p.superview) [views addObject:p];
-    [views addObjectsFromArray:v.subviews];
+    for (UIView *p = v; p && views.count < 5; p = p.superview) [views addObject:p];
+    NSMutableArray *sub = [NSMutableArray arrayWithArray:v.subviews]; int gs = 0;
+    while (sub.count && gs++ < 40) { UIView *x = sub.lastObject; [sub removeLastObject]; [views addObject:x]; [sub addObjectsFromArray:x.subviews]; }
     for (UIView *p in views) for (UIGestureRecognizer *g in p.gestureRecognizers) {
-        if (![g isKindOfClass:[UITapGestureRecognizer class]]) continue;
+        [log appendFormat:@"%@@%@ ", NSStringFromClass([g class]), NSStringFromClass([p class])];
+        if (![g isKindOfClass:[UITapGestureRecognizer class]] || !g.enabled) continue;
         NSArray *ts = nil; @try { ts = [g valueForKey:@"_targets"]; } @catch (__unused id e) {}
         for (id t in ts) {
             Ivar ti = class_getInstanceVariable([t class], "_target"), ai = class_getInstanceVariable([t class], "_action");
             if (!ti || !ai) continue;
             id target = object_getIvar(t, ti);
             SEL act = *(SEL *)((uint8_t *)(__bridge void *)t + ivar_getOffset(ai));
-            if (target && act && [target respondsToSelector:act]) { ((void (*)(id, SEL, id))objc_msgSend)(target, act, g); return YES; }
+            if (target && act && [target respondsToSelector:act]) {
+                [log appendFormat:@"-> %@ %@", NSStringFromClass([target class]), NSStringFromSelector(act)];
+                gEditDebug = log;
+                ((void (*)(id, SEL, id))objc_msgSend)(target, act, g); return YES;
+            }
         }
     }
+    gEditDebug = log.length ? log : @"nothing to press";
     return NO;
+}
+
+// Tabs: each section of the page belongs to one tab (by its controller's title/class)
+static NSString *SectionKind(id ctl) {
+    NSString *t = nil; @try { if ([[ctl class] respondsToSelector:@selector(sectionTitle)]) t = [[ctl class] performSelector:@selector(sectionTitle)]; } @catch (__unused id e) {}
+    NSString *k = [[NSString stringWithFormat:@"%@ %@", NSStringFromClass([ctl class]), [t isKindOfClass:[NSString class]] ? t : @""] lowercaseString];
+    if ([k containsString:@"collab"]) return @"Collaboration";
+    if ([k containsString:@"link"]) return @"Links";
+    if ([k containsString:@"document"] || [k containsString:@"pass"]) return @"Documents";
+    if ([k containsString:@"photo"] || [k containsString:@"attachment"] || [k containsString:@"image"]) return @"Photos";
+    if ([k containsString:@"location"]) return @"Info";
+    return @"Info";
+}
+static NSString *gSnapDebug = @"";
+static id (*origSnapA)(id, SEL);
+static id (*origSnapB)(id, SEL);
+static id FilterSnap(id self, id snap) {
+    if (!gTopOn || ![NSStringFromClass([self class]) containsString:@"Details"] || ![snap respondsToSelector:@selector(sectionIdentifiers)]) return snap;
+    NSArray *ctls = nil; @try { ctls = [self valueForKey:@"searchControllers"]; } @catch (__unused id e) {}
+    NSArray *ids = [snap sectionIdentifiers];
+    NSMutableArray *drop = [NSMutableArray array], *log = [NSMutableArray array];
+    for (NSUInteger i = 0; i < ids.count; i++) {
+        id sid = ids[i];
+        id ctl = nil;
+        for (id c in ctls) {
+            id cs = nil; @try { if ([[c class] respondsToSelector:@selector(sectionIdentifier)]) cs = [[c class] performSelector:@selector(sectionIdentifier)]; } @catch (__unused id e) {}
+            if (cs && [cs isEqual:sid]) { ctl = c; break; }
+        }
+        if (!ctl) for (id c in ctls) { @try { if ([[c valueForKey:@"sectionIndex"] unsignedIntegerValue] == i) { ctl = c; break; } } @catch (__unused id e) {} }
+        NSString *kind = ctl ? SectionKind(ctl) : @"Info";
+        BOOL keep = [kind isEqualToString:gDetTab];
+        [log addObject:[NSString stringWithFormat:@"%@:%@%@", ctl ? [NSStringFromClass([ctl class]) stringByReplacingOccurrencesOfString:@"SearchController" withString:@""] : [sid description], kind, keep ? @"" : @"-"]];
+        if (!keep) [drop addObject:sid];
+    }
+    gSnapDebug = [log componentsJoinedByString:@" "];
+    if (drop.count) [snap deleteSectionsWithIdentifiers:drop];
+    return snap;
+}
+static id SnapA(id self, SEL _cmd) { return FilterSnap(self, origSnapA(self, _cmd)); }
+static id SnapB(id self, SEL _cmd) { return FilterSnap(self, origSnapB(self, _cmd)); }
+static void ReloadDetailSections(void) {
+    UIScrollView *cv = gDetTable;
+    for (UIResponder *r = cv; r; r = r.nextResponder) if ([r respondsToSelector:@selector(reloadData)] && [r isKindOfClass:[UIViewController class]]) { [(id)r performSelector:@selector(reloadData)]; return; }
+    id d = [(id)cv delegate];
+    if ([d isKindOfClass:[UIViewController class]] && [d respondsToSelector:@selector(reloadData)]) [d performSelector:@selector(reloadData)];
 }
 @interface M26Details : NSObject
 + (instancetype)shared;
 @end
 @implementation M26Details
 + (instancetype)shared { static M26Details *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Details new]; }); return t; }
-- (void)edit:(id)sender { UIView *t = gInfoTile; BOOL ok = t ? ForwardTap(t) : NO; gDetDebug = [gDetDebug stringByAppendingFormat:@" edit=%d", ok]; }
+- (void)edit:(id)sender { UIView *t = gInfoTile; if (!t) gEditDebug = @"no info tile"; else ForwardTap(t); }
 - (void)tab:(UIButton *)b {
     [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
-    NSString *name = [b titleForState:UIControlStateNormal];
-    gDetTab = name;
+    gDetTab = [b titleForState:UIControlStateNormal];
+    ReloadDetailSections();
     UIScrollView *sv = gDetTable;
-    if (!sv) return;
-    CGFloat top = -sv.adjustedContentInset.top;
-    if ([name isEqualToString:@"Info"]) { [sv setContentOffset:CGPointMake(0, top) animated:YES]; return; }
-    if ([name isEqualToString:@"Backgrounds"]) return;   // coming next
-    // find the "Photos" / "Links" section and scroll to it
-    if ([sv isKindOfClass:[UITableView class]]) {
-        UITableView *tv = (UITableView *)sv;
-        for (NSInteger sct = 0; sct < tv.numberOfSections; sct++) {
-            BOOL hit = NO;
-            if ([tv.delegate respondsToSelector:@selector(tableView:viewForHeaderInSection:)]) {
-                UIView *h = [tv.delegate tableView:tv viewForHeaderInSection:sct];
-                if (h && Find(h, ^BOOL(UIView *x) { return [x isKindOfClass:[UILabel class]] && [((UILabel *)x).text.lowercaseString hasPrefix:name.lowercaseString]; }, 40)) hit = YES;
-            }
-            if (!hit && [tv.dataSource respondsToSelector:@selector(tableView:titleForHeaderInSection:)]) {
-                NSString *t = [tv.dataSource tableView:tv titleForHeaderInSection:sct];
-                if ([t.lowercaseString hasPrefix:name.lowercaseString]) hit = YES;
-            }
-            if (!hit && [tv numberOfRowsInSection:sct] > 0) {
-                CGRect rr = [tv rectForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:sct]];
-                UITableViewCell *c = [tv cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:sct]];
-                if (!c) { [tv scrollRectToVisible:rr animated:NO]; [tv layoutIfNeeded]; c = [tv cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:sct]]; }
-                if (c && Find(c, ^BOOL(UIView *x) { return [x isKindOfClass:[UILabel class]] && [((UILabel *)x).text.lowercaseString hasPrefix:name.lowercaseString] && ((UILabel *)x).font.pointSize >= 17; }, 300)) hit = YES;
-            }
-            if (hit) {
-                CGRect r = [tv rectForSection:sct];
-                [tv setContentOffset:CGPointMake(0, MAX(top, MIN(r.origin.y - 120, tv.contentSize.height - tv.bounds.size.height + tv.adjustedContentInset.bottom))) animated:YES];
-                gDetDebug = [gDetDebug stringByAppendingFormat:@" %@=s%ld", name, (long)sct];
-                return;
-            }
-        }
-        gDetDebug = [gDetDebug stringByAppendingFormat:@" %@=none", name];
-    }
+    [sv setContentOffset:CGPointMake(0, -sv.adjustedContentInset.top) animated:YES];
 }
 @end
 static UIBarButtonItem *GlassTextItem(NSString *t, id target, SEL a) { return [[UIBarButtonItem alloc] initWithTitle:t style:UIBarButtonItemStylePlain target:target action:a]; }
 static void StyleDetails(UIWindow *w) {
     UIViewController *vc = gTopOn ? DetailsVC(w.rootViewController, 0) : nil;
-    if (!vc) { gDetDebug = @"details: -"; return; }
+    if (!vc) { gDetDebug = @"details: -"; gDetTab = @"Info"; return; }
     UIView *root = vc.view;
     CGFloat W = root.bounds.size.width;
     // the action tiles: call / video / mail / info (found by their labels)
@@ -1902,9 +1928,9 @@ static void StyleDetails(UIWindow *w) {
     }
     // tabs: Info / Backgrounds / Photos / Links
     UIView *tabs = [row viewWithTag:DTABS_TAG];
-    NSArray *tn = @[@"Info", @"Backgrounds", @"Photos", @"Links"];
+    NSArray *tn = @[@"Info", @"Backgrounds", @"Photos", @"Links", @"Documents", @"Collaboration"];
     if (!tabs) {
-        tabs = [UIView new]; tabs.tag = DTABS_TAG;
+        tabs = [UIScrollView new]; tabs.tag = DTABS_TAG; ((UIScrollView *)tabs).showsHorizontalScrollIndicator = NO; tabs.clipsToBounds = NO;
         UIVisualEffectView *sel = GlassView(row); sel.tag = 99; [tabs addSubview:sel];
         for (NSString *n in tn) {
             UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -1920,8 +1946,10 @@ static void StyleDetails(UIWindow *w) {
     for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]]) { CGFloat bw = [((UIButton *)b).titleLabel sizeThatFits:CGSizeMake(300, 40)].width + 28; [bws addObject:@(bw)]; }
     CGFloat total = 0; for (NSNumber *n in bws) total += n.doubleValue;
     total += 4 * (bws.count - 1);
-    CGRect tf = CGRectMake(rc.x - total / 2, B - 10, total, th);
+    CGFloat left = [root convertPoint:CGPointMake(16, 0) toView:row].x;
+    CGRect tf = CGRectMake(left, B - 10, W - 32, th);
     if (!CGRectEqualToRect(tabs.frame, tf)) tabs.frame = tf;
+    ((UIScrollView *)tabs).contentSize = CGSizeMake(total, th);
     int bi = 0;
     for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]]) {
         CGFloat bw = [bws[bi++] doubleValue];
@@ -2006,9 +2034,9 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.11.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.11.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
-    l.text = [l.text stringByAppendingFormat:@"\n %@", gDetDebug];
+    l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@\n sections: %@\n edit: %@", gDetDebug, gDetTab, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
         NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
@@ -2063,6 +2091,11 @@ static void Tick(void) {
         }
         MSHookMessageEx([UITextView class], @selector(setTextContainerInset:), (IMP)TVInset, (IMP *)&origTVInset);
         @try { HookThemes(); } @catch (__unused id ex) {}
+        { Class SA = NSClassFromString(@"CKSearchViewController"), SB = NSClassFromString(@"CKDetailsSearchViewController");
+          SEL ss = NSSelectorFromString(@"_newSnapshotForCurrentControllerState");
+          if (SA && class_getInstanceMethod(SA, ss)) MSHookMessageEx(SA, ss, (IMP)SnapA, (IMP *)&origSnapA);
+          if (SB) { unsigned int mc = 0; Method *ms = class_copyMethodList(SB, &mc); BOOL own = NO; for (unsigned int k = 0; k < mc; k++) if (method_getName(ms[k]) == ss) own = YES; free(ms);
+                    if (own) MSHookMessageEx(SB, ss, (IMP)SnapB, (IMP *)&origSnapB); } }
         Class CB = NSClassFromString(@"CKColoredBalloonView");
         if (CB) {
             MSHookMessageEx(CB, @selector(layoutSubviews), (IMP)BalloonLayout, (IMP *)&origBalloonLayout);
