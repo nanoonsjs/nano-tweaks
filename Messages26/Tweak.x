@@ -1,4 +1,5 @@
-// Messages26 0.7.5 - made by nano
+// Messages26 0.7.6 - made by nano
+// 0.7.6: every blur inside the message bar is removed (it covered the text box and blocked taps)
 // 0.7.5: the field row's place is worked out inside the bar itself, so it's the same every time
 // 0.7.4: back to moving just the field row (no blur), right on the keyboard / just above the home bar;
 //        To: capsule matches the message pill, its + sits inside under the X
@@ -623,6 +624,21 @@ static void StyleEntry(UIView *entry) {
         pill.frame = pillIn; pill.layer.cornerRadius = MIN(pillIn.size.height / 2, 26);
         for (CALayer *l in pill.layer.sublayers) if ([l.name isEqualToString:@"m26.sheen"]) { [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = pill.bounds; l.cornerRadius = pill.layer.cornerRadius; [CATransaction commit]; }
     }
+    // no blur anywhere in the bar (it covered the text box and took its taps)
+    {
+        NSMutableArray *bs = [NSMutableArray arrayWithObject:entry]; int gb = 0;
+        while (bs.count && gb++ < 600) {
+            UIView *v = bs.lastObject; [bs removeLastObject];
+            if (v.tag == PLUS_TAG || v.tag == PILL_TAG || v.tag == MENU_TAG || v == strip) continue;
+            NSString *n = NSStringFromClass([v class]);
+            if (v != entry && ([v isKindOfClass:[UIVisualEffectView class]] || [n containsString:@"Backdrop"] || [n containsString:@"BlurView"])) {
+                if (!v.hidden) v.hidden = YES;
+                if (v.userInteractionEnabled) v.userInteractionEnabled = NO;
+                continue;
+            }
+            [bs addObjectsFromArray:v.subviews];
+        }
+    }
     // no blurred bar behind the field row
     for (UIView *v in entry.subviews) {
         if (v == strip || v.tag == PLUS_TAG || v.tag == PILL_TAG || [field isDescendantOfView:v] || [strip isDescendantOfView:v]) continue;
@@ -1006,7 +1022,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.7.5 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.7.6 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
