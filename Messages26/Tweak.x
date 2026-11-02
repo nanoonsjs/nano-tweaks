@@ -80,6 +80,7 @@ static __weak UIView *gEntry, *gStrip, *gPhotoBtn, *gAppsBtn;
 static NSArray *gAppsCache;
 static NSString *gTextDebug = @"-";
 static __weak UIView *gField;
+static NSString *gRowDebug = @"-";
 static CGFloat gKbTop = 0;   // top of the keyboard on screen (0 = no keyboard)
 static BOOL gRowOut = NO;    // our row sits below the bar's own edge   // the last app list seen (names + icons)
 static __weak UICollectionView *gStripCV;
@@ -562,7 +563,7 @@ static void StyleEntry(UIView *entry) {
         for (UIView *v in row) if (!CGAffineTransformEqualToTransform(v.transform, rt)) v.transform = rt;
         NSMutableArray *rn = [NSMutableArray array];
         for (UIView *v in row) if (v != field) [rn addObject:[NSString stringWithFormat:@"%@ a=%.1f h=%d", NSStringFromClass([v class]), v.alpha, v.hidden]];
-        gTextDebug = [gTextDebug stringByAppendingFormat:@"\n row: %@", rn.count ? [rn componentsJoinedByString:@", "] : @"(no mic found)"];
+        gRowDebug = rn.count ? [rn componentsJoinedByString:@", "] : @"(no mic found)";
         gRowOut = NO;
     } else if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
     if (container) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift); if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t; }
@@ -606,7 +607,7 @@ static void StyleEntry(UIView *entry) {
             CGPoint c = field.center; c.x += dx / 2; field.center = c;
             [field setNeedsLayout]; [field layoutIfNeeded];
         }
-        gTextDebug = [NSString stringWithFormat:@"textX=%.0f want=%.0f", textX, want];
+        gTextDebug = [NSString stringWithFormat:@"textX=%.0f want=%.0f\n row: %@", textX, want, gRowDebug];
     }
     CGRect ff = [field convertRect:field.bounds toView:entry];   // includes the move down
     CGFloat padY = 6, D = MAX(46, MIN(ff.size.height + padY * 2, 52));
