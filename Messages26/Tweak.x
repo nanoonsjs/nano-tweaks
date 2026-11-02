@@ -1,4 +1,5 @@
-// Messages26 0.15.1 - made by nano
+// Messages26 0.15.2 - made by nano
+// 0.15.2: frames only on the list (not inside chats)
 // 0.15.1: settings is a glass button (opens for real); frames on up to 3 people; Set Frame in the hold menu
 // 0.15.0: Messages26 settings (gear on the list) with animated Contact Frames
 // 0.14.0: Bubble Colors per chat (theirs / mine, solid or gradient, presets, live preview)
@@ -2889,9 +2890,8 @@ static void StyleFrames(UIWindow *w) {
             [st addObjectsFromArray:v.subviews];
         }
     }
-    // the photo at the top of an open chat
     UIView *av = gAvatarV;
-    if (av.window && gChatKeyNow) PutFrame(av, FrameFor(gChatKeyNow));
+    if (av) PutFrame(av, nil);   // frames only on the list, never inside a chat
     gFrameDebug = [NSString stringWithFormat:@"frames: avatars=%d keyed=%d framed=%d", found, keyed, framed];
 }
 
@@ -3372,7 +3372,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.15.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.15.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@", gFrameDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
