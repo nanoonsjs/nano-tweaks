@@ -1,4 +1,5 @@
-// Messages26 0.7.6 - made by nano
+// Messages26 0.7.7 - made by nano
+// 0.7.7: the message field takes taps again and the mic is back; iOS 26 rim on the pill and +
 // 0.7.6: every blur inside the message bar is removed (it covered the text box and blocked taps)
 // 0.7.5: the field row's place is worked out inside the bar itself, so it's the same every time
 // 0.7.4: back to moving just the field row (no blur), right on the keyboard / just above the home bar;
@@ -77,6 +78,7 @@ static BOOL gShowDebug = NO;
 static __weak UIView *gEntry, *gStrip, *gPhotoBtn, *gAppsBtn;
 static NSArray *gAppsCache;
 static NSString *gTextDebug = @"-";
+static __weak UIView *gField;
 static CGFloat gKbTop = 0;   // top of the keyboard on screen (0 = no keyboard)
 static BOOL gRowOut = NO;    // our row sits below the bar's own edge   // the last app list seen (names + icons)
 static __weak UICollectionView *gStripCV;
@@ -483,10 +485,30 @@ static void UnstyleEntry(UIView *entry, UIView *field, UIView *container) {
     UIView *strip = StripOf(entry);
     if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
 }
+// iOS 26 field edge: a thin rim that's bright along the top and fades toward the
+// bottom, plus a faint sheen inside the top half.
+static void RimFit(UIView *v, BOOL dark) {
+    CGFloat r = v.layer.cornerRadius;
+    CAGradientLayer *rim = nil;
+    for (CALayer *l in v.layer.sublayers) if ([l.name isEqualToString:@"m26.rim"]) rim = (CAGradientLayer *)l;
+    if (!rim) {
+        rim = [CAGradientLayer layer]; rim.name = @"m26.rim";
+        rim.startPoint = CGPointMake(0.5, 0); rim.endPoint = CGPointMake(0.5, 1);
+        CAShapeLayer *m = [CAShapeLayer layer]; m.fillColor = UIColor.clearColor.CGColor; m.strokeColor = UIColor.blackColor.CGColor; m.lineWidth = 1.2;
+        rim.mask = m;
+        [v.layer addSublayer:rim];
+    }
+    rim.colors = @[(id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.32 : 0.14].CGColor, (id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.10 : 0.06].CGColor, (id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.18 : 0.10].CGColor];
+    rim.locations = @[@0, @0.55, @1];
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    rim.frame = v.bounds;
+    ((CAShapeLayer *)rim.mask).path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(v.bounds, 0.6, 0.6) cornerRadius:MAX(0, r - 0.6)].CGPath;
+    [CATransaction commit];
+}
 static void StyleEntry(UIView *entry) {
     UIView *field = FieldOf(entry);
     if (!field) { gDebug = [NSString stringWithFormat:@"entry=%@ no field", NSStringFromClass([entry class])]; return; }
-    gEntry = entry;
+    gEntry = entry; gField = field;
     // the part of the bar holding the field (moved as one)
     UIView *container = field;
     while (container.superview && container.superview != entry) container = container.superview;
@@ -615,13 +637,14 @@ static void StyleEntry(UIView *entry) {
         [pHost insertSubview:pill belowSubview:field];
     }
     if ([pHost.subviews indexOfObject:pill] > [pHost.subviews indexOfObject:field]) [pHost insertSubview:pill belowSubview:field];
-    pill.backgroundColor = dark ? [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:0.96] : [UIColor colorWithWhite:0.97 alpha:0.96];
-    pill.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.16] : [UIColor colorWithWhite:0 alpha:0.10]).CGColor;
+    pill.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1] : [UIColor colorWithWhite:0.96 alpha:1];
+    pill.layer.borderColor = UIColor.clearColor.CGColor;
     CGRect pillIn = [entry convertRect:pillF toView:pHost];
     // in the field's space the move down is already in field's transform: follow it
     pillIn = CGRectOffset(pillIn, 0, 0);
     if (!CGRectEqualToRect(pill.frame, pillIn)) {
         pill.frame = pillIn; pill.layer.cornerRadius = MIN(pillIn.size.height / 2, 26);
+        RimFit(pill, dark);
         for (CALayer *l in pill.layer.sublayers) if ([l.name isEqualToString:@"m26.sheen"]) { [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = pill.bounds; l.cornerRadius = pill.layer.cornerRadius; [CATransaction commit]; }
     }
     // no blur anywhere in the bar (it covered the text box and took its taps)
@@ -631,9 +654,16 @@ static void StyleEntry(UIView *entry) {
             UIView *v = bs.lastObject; [bs removeLastObject];
             if (v.tag == PLUS_TAG || v.tag == PILL_TAG || v.tag == MENU_TAG || v == strip) continue;
             NSString *n = NSStringFromClass([v class]);
-            if (v != entry && ([v isKindOfClass:[UIVisualEffectView class]] || [n containsString:@"Backdrop"] || [n containsString:@"BlurView"])) {
+            if (v != entry && [v isKindOfClass:[UIVisualEffectView class]]) {
+                UIVisualEffectView *ev = (UIVisualEffectView *)v;
+                if (ev.hidden) ev.hidden = NO;   // (0.7.6 hid these, with the mic inside)
+                if (ev.effect) ev.effect = nil;
+                ev.backgroundColor = UIColor.clearColor;
+                [bs addObject:ev.contentView];
+                continue;
+            }
+            if (v != entry && ([n containsString:@"Backdrop"] || [n containsString:@"BlurView"]) && !v.subviews.count) {
                 if (!v.hidden) v.hidden = YES;
-                if (v.userInteractionEnabled) v.userInteractionEnabled = NO;
                 continue;
             }
             [bs addObjectsFromArray:v.subviews];
@@ -673,6 +703,7 @@ static void StyleEntry(UIView *entry) {
     UIView *g = [plus viewWithTag:GLASS_TAG];
     g.frame = plus.bounds; g.layer.cornerRadius = D / 2;
     g.backgroundColor = pill.backgroundColor; g.layer.borderColor = pill.layer.borderColor;
+    if (!CGSizeEqualToSize([objc_getAssociatedObject(g, "m26rim") CGSizeValue], g.bounds.size)) { objc_setAssociatedObject(g, "m26rim", [NSValue valueWithCGSize:g.bounds.size], OBJC_ASSOCIATION_RETAIN_NONATOMIC); RimFit(g, dark); }
     [plus bringSubviewToFront:plus.imageView];
     if (entry.subviews.lastObject != plus) [entry bringSubviewToFront:plus];
     if (entry.clipsToBounds) entry.clipsToBounds = NO;
@@ -1022,7 +1053,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.7.6 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.7.7 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
@@ -1031,13 +1062,16 @@ static void Tick(void) {
 %hook UIView
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
     BOOL r = %orig;
-    if (r || !gRowOut) return r;
+    if (r) return r;
     UIView *en = gEntry;
     if (!en || (self != en && ![en isDescendantOfView:self])) return r;
     for (NSNumber *t in @[@(PILL_TAG), @(PLUS_TAG)]) {
         UIView *v = [en viewWithTag:t.integerValue];
+        if (!v) { UIView *f = gField; v = [f.superview viewWithTag:t.integerValue]; }
         if (v && !v.hidden && CGRectContainsPoint(CGRectInset([v convertRect:v.bounds toView:self], -4, -4), p)) return YES;
     }
+    UIView *f = gField;
+    if (f.window && CGRectContainsPoint([f convertRect:f.bounds toView:self], p)) return YES;
     return r;
 }
 %end
