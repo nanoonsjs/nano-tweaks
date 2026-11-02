@@ -1,4 +1,5 @@
-// Messages26 1.0.3 - made by nano
+// Messages26 1.1 - made by nano
+// 1.1: public release of 1.0.1-1.0.3 (name capsule fixes, smoother on older iPhones)
 // 1.0.3: the small original name no longer peeks out above the name capsule
 // 1.0.2: smoother on older iPhones (8 / 8 Plus / X): fewer screen checks, none while touching or scrolling
 // 1.0.1: contact name always shows in its capsule at the top of a chat; name + capsule a little lower
@@ -5251,7 +5252,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.0.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
