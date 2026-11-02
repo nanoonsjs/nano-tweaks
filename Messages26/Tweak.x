@@ -1,4 +1,5 @@
-// Messages26 0.18.6 - made by nano
+// Messages26 0.18.7 - made by nano
+// 0.18.7: any swipe out of the full background view puts the messages back
 // 0.18.6: reactions slide along with a message when you swipe to reply
 // 0.18.5: no reply swipe on tapbacks; custom frames: 1-3 emojis, no-ring option, 9 emoji animations
 // 0.18.4: 3D reactions only (no animations), icons centered
@@ -4749,9 +4750,10 @@ static void StyleGear(UIWindow *w) {
 + (instancetype)shared { static M26Peek *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Peek new]; }); return t; }
 - (void)pan:(UIPanGestureRecognizer *)g {
     UICollectionView *cv = (UICollectionView *)g.view;
-    if (![cv isKindOfClass:[UICollectionView class]] || !BgFor(objc_getAssociatedObject(cv, "m26key"))) return;
+    if (![cv isKindOfClass:[UICollectionView class]]) return;
     if (g.state != UIGestureRecognizerStateEnded) return;
     CGFloat extra = [objc_getAssociatedObject(cv, "m26peek") doubleValue];
+    if (extra <= 0 && !BgFor(objc_getAssociatedObject(cv, "m26key"))) return;
     UIEdgeInsets in = cv.adjustedContentInset;
     CGFloat maxY = cv.contentSize.height + in.bottom - cv.bounds.size.height;
     CGFloat vy = [g velocityInView:cv].y;
@@ -4760,7 +4762,9 @@ static void StyleGear(UIWindow *w) {
             CGFloat E = MAX(0, cv.bounds.size.height - in.top - 160);
             objc_setAssociatedObject(cv, "m26peek", @(E), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
-            UIEdgeInsets ci = cv.contentInset; ci.bottom += E;
+            UIEdgeInsets ci = cv.contentInset;
+            objc_setAssociatedObject(cv, "m26peekbase", @(ci.bottom), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            ci.bottom += E;
             CGFloat target = maxY + E;
             UIView *host = objc_getAssociatedObject(cv, "m26bghost");
             UIView *iv = [host viewWithTag:1], *dim = [host viewWithTag:2];
@@ -4777,10 +4781,13 @@ static void StyleGear(UIWindow *w) {
                 }
             });
         }
-    } else if (vy > 120 || cv.contentOffset.y < maxY - 60) {
+    } else if (fabs([g translationInView:cv].y) > 12 || fabs(vy) > 80) {
+        // any swipe (up or down) while peeking: messages come back to their place
         objc_setAssociatedObject(cv, "m26peek", @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        UIEdgeInsets ci = cv.contentInset; ci.bottom = MAX(0, ci.bottom - extra);
-        CGFloat target = maxY - extra;
+        UIEdgeInsets ci = cv.contentInset;
+        NSNumber *base = objc_getAssociatedObject(cv, "m26peekbase");
+        ci.bottom = base ? base.doubleValue : MAX(0, ci.bottom - extra);
+        CGFloat target = cv.contentSize.height + (in.bottom - (cv.contentInset.bottom - ci.bottom)) - cv.bounds.size.height;
         UIView *host = objc_getAssociatedObject(cv, "m26bghost");
         UIView *iv = [host viewWithTag:1], *dim = [host viewWithTag:2];
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
@@ -4995,7 +5002,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.6 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.7 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
