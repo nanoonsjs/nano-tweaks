@@ -3928,6 +3928,7 @@ static void WillDisplay(id self, SEL _cmd, UICollectionView *cv, UICollectionVie
 }
 static void SpellFix(UIWindow *w);
 static void MoodPill(UIWindow *w);
+static void Glyphs3DIn(UIWindow *w);
 static void StyleFeatures(UIWindow *w) {
     @try { CheckScheduled(); } @catch (__unused id e) {}
     @try { ChatLock(w); } @catch (__unused id e) {}
