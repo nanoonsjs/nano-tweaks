@@ -1,4 +1,5 @@
-// Messages26 0.10.5 - made by nano
+// Messages26 0.10.6 - made by nano
+// 0.10.6: bigger contact photo + name at the top of a chat
 // 0.10.5: To: typing spot stays after the label (Messages' resets are undone right away)
 // 0.10.4: typing in To: starts after the label; + is white
 // 0.10.3: To: row fits the capsule (no overlap), white + right under the X
@@ -881,6 +882,7 @@ static UIViewController *SearchList(void);
 static NSHashTable *gNameGlass;
 static __weak UIView *gNameNow;
 // A soft blur fading down from the top (behind the status bar and the buttons).
+static __weak UIView *gTitleBox;
 static void TopBlur(UINavigationBar *nb) {
     UIView *host = nb.superview;
     if (!host) return;
@@ -894,7 +896,10 @@ static void TopBlur(UINavigationBar *nb) {
         b.layer.mask = m;
     }
     if (b.superview != host || [host.subviews indexOfObject:b] > [host.subviews indexOfObject:nb]) [host insertSubview:b belowSubview:nb];
-    CGRect f = CGRectMake(0, 0, host.bounds.size.width, CGRectGetMaxY([nb convertRect:nb.bounds toView:host]) + 6);
+    CGFloat bot = CGRectGetMaxY([nb convertRect:nb.bounds toView:host]) + 6;
+    UIView *tb = gTitleBox;
+    if (tb.window && [tb isDescendantOfView:nb]) bot = MAX(bot, CGRectGetMaxY([tb convertRect:tb.bounds toView:host]) + 14);
+    CGRect f = CGRectMake(0, 0, host.bounds.size.width, bot);
     if (!CGRectEqualToRect(b.frame, f)) { b.frame = f; [CATransaction begin]; [CATransaction setDisableActions:YES]; b.layer.mask.frame = b.bounds; [CATransaction commit]; }
 }
 @interface M26Cancel : NSObject
@@ -1120,6 +1125,35 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
         [st addObjectsFromArray:v.subviews];
     }
 }
+
+// Bigger contact photo + name in a chat (iOS 26 size), a little lower.
+#define TITLE_SCALE 1.3
+static void ScaleTitle(BOOL chat) {
+    UIView *h = gNameNow, *old = gTitleBox;
+    UIView *box = nil;
+    if (chat && gTopOn && h.window) {
+        CGFloat W = h.window.bounds.size.width;
+        box = h;
+        while (box.superview && ![box.superview isKindOfClass:[UINavigationBar class]] && box.superview.bounds.size.width < W * 0.8) box = box.superview;
+        // must hold the photo too
+        BOOL pic = Find(box, ^BOOL(UIView *v) { return v != h && ![v isDescendantOfView:h] && ![v isKindOfClass:[UILabel class]] && v.bounds.size.width >= 30 && fabs(v.bounds.size.width - v.bounds.size.height) < 4; }, 80) != nil;
+        if (!pic || box == h) box = nil;
+    }
+    if (old && old != box) old.transform = CGAffineTransformIdentity;
+    gTitleBox = box;
+    if (!box) return;
+    CGFloat hgt = box.bounds.size.height, s = TITLE_SCALE;
+    CGAffineTransform t = CGAffineTransformMakeTranslation(0, (s - 1) * hgt / 2 + 14);
+    t = CGAffineTransformScale(t, s, s);
+    if (!CGAffineTransformEqualToTransform(box.transform, t)) box.transform = t;
+    // crisp text at the bigger size
+    CGFloat cs = UIScreen.mainScreen.scale * s;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:box]; int g = 0;
+    while (st.count && g++ < 60) { UIView *v = st.lastObject; [st removeLastObject];
+        if ([v isKindOfClass:[UILabel class]] && fabs(v.layer.contentsScale - cs) > 0.01) { v.layer.contentsScale = cs; [v setNeedsDisplay]; }
+        [st addObjectsFromArray:v.subviews]; }
+    for (UIView *p = box.superview; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
+}
 static void StyleNav(UIWindow *w) {
     UIView *e = gEntry;
     BOOL chat = e.window != nil;
@@ -1145,6 +1179,7 @@ static void StyleNav(UIWindow *w) {
         [gNameGlass removeObject:h];
     }
     if (!chat) gNameNow = nil;
+    @try { ScaleTitle(chat); } @catch (__unused id e) {}
     gNavDebug = [NSString stringWithFormat:@"nav chat=%d bars=%d items: %@", chat, bars, [found componentsJoinedByString:@" "]];
 }
 
@@ -1653,7 +1688,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.5 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.6 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@", gBubbleDebug, gReplyDebug, gToDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
@@ -1664,6 +1699,8 @@ static void Tick(void) {
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
     BOOL r = %orig;
     if (r) return r;
+    UIView *tb = gTitleBox;
+    if (tb && tb.window && (self == tb || [tb isDescendantOfView:self]) && CGRectContainsPoint([tb convertRect:tb.bounds toView:self], p)) return YES;
     UIView *en = gEntry, *fld = gField;
     if (!en || (self != en && ![en isDescendantOfView:self] && !(fld && [fld isDescendantOfView:self]))) return r;
     for (NSNumber *t in @[@(PILL_TAG), @(PLUS_TAG)]) {
