@@ -1,4 +1,5 @@
-// Messages26 0.9.0 - made by nano
+// Messages26 0.9.1 - made by nano
+// 0.9.1: search moves above the keyboard with an X; all glass matches the search pill; top compose gone
 // 0.9.0: iOS 26 search pill + compose circle at the bottom of the conversation list
 // 0.8.4: pill always pulled back after reopening a chat; mic tap goes to the visible button
 // 0.8.3: field row placed from where it's drawn now (corrects itself); mic / send found by position and kept in the pill
@@ -99,12 +100,12 @@ static BOOL IsDark(UIView *v) { return v.traitCollection.userInterfaceStyle != U
 // iOS 26 glass: blur + a light tint + a thin bright rim.
 static UIVisualEffectView *GlassView(UIView *forTrait) {
     BOOL dark = IsDark(forTrait);
-    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:dark ? UIBlurEffectStyleSystemUltraThinMaterialDark : UIBlurEffectStyleSystemUltraThinMaterialLight]];
+    // same look as the search pill: solid dark glass, bright rim along the top
+    UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:nil];
     g.userInteractionEnabled = NO; g.clipsToBounds = YES;
     g.layer.cornerCurve = kCACornerCurveContinuous;
-    g.contentView.backgroundColor = dark ? [UIColor colorWithWhite:1 alpha:0.07] : [UIColor colorWithWhite:1 alpha:0.45];
-    g.layer.borderWidth = 0.8;
-    g.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.17] : [UIColor colorWithWhite:0 alpha:0.08]).CGColor;
+    g.contentView.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.97 alpha:0.97];
+    g.layer.borderWidth = 0;
     return g;
 }
 // Extra-glassy (iOS 26): clear blur, a light sheen on top and a bright rim.
@@ -123,7 +124,7 @@ __attribute__((unused)) static UIVisualEffectView *ClearGlass(UIView *forTrait) 
     return g;
 }
 static UIColor *Ink(UIView *v) { return IsDark(v) ? UIColor.whiteColor : UIColor.blackColor; }
-static void SheenFit(UIView *g) {
+__attribute__((unused)) static void SheenFit(UIView *g) {
     if (![g isKindOfClass:[UIVisualEffectView class]]) return;
     for (CALayer *l in ((UIVisualEffectView *)g).contentView.layer.sublayers) if ([l.name isEqualToString:@"m26.sheen"]) { [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = g.bounds; [CATransaction commit]; }
 }
@@ -711,7 +712,9 @@ static void StyleEntry(UIView *entry) {
             for (UIView *v in p.subviews) if (!([entry isDescendantOfView:v]) && ([v isKindOfClass:[UIVisualEffectView class]] || [NSStringFromClass([v class]) containsString:@"Backdrop"]) && v.bounds.size.width >= entry.bounds.size.width * 0.95 && v.alpha > 0) v.alpha = 0;
         }
     }
-    pill.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.17] : [UIColor colorWithWhite:0 alpha:0.08]).CGColor;
+    pill.layer.borderWidth = 0; pill.layer.borderColor = UIColor.clearColor.CGColor;
+    pill.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.97 alpha:0.97];
+    pill.layer.shadowColor = UIColor.blackColor.CGColor; pill.layer.shadowOpacity = dark ? 0.35 : 0.12; pill.layer.shadowRadius = 14; pill.layer.shadowOffset = CGSizeMake(0, 6);
     UIButton *plus = (UIButton *)[entry viewWithTag:PLUS_TAG];
     if (!plus) {
         plus = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -731,7 +734,8 @@ static void StyleEntry(UIView *entry) {
     if (!CGRectEqualToRect(plus.frame, plusF) && CGAffineTransformIsIdentity(plus.transform)) plus.frame = plusF;
     UIView *g = [plus viewWithTag:GLASS_TAG];
     g.frame = plus.bounds; g.layer.cornerRadius = D / 2;
-    g.backgroundColor = pill.backgroundColor; g.layer.borderColor = pill.layer.borderColor;
+    g.backgroundColor = pill.backgroundColor; g.layer.borderWidth = 0;
+    g.layer.shadowColor = UIColor.blackColor.CGColor; g.layer.shadowOpacity = pill.layer.shadowOpacity; g.layer.shadowRadius = 14; g.layer.shadowOffset = CGSizeMake(0, 6);
     if (!CGSizeEqualToSize([objc_getAssociatedObject(g, "m26rim") CGSizeValue], g.bounds.size)) { objc_setAssociatedObject(g, "m26rim", [NSValue valueWithCGSize:g.bounds.size], OBJC_ASSOCIATION_RETAIN_NONATOMIC); RimFit(g, dark); }
     [plus bringSubviewToFront:plus.imageView];
     if (entry.subviews.lastObject != plus) [entry bringSubviewToFront:plus];
@@ -825,7 +829,7 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     if (circle) { CGFloat d = MAX(want.size.width, want.size.height); want = CGRectMake(CGRectGetMidX(f) - d / 2, CGRectGetMidY(f) - d / 2, d, d); }
     want = CGRectIntegral(want);
     if (g.layer.animationKeys.count || g.alpha < 1) return;
-    if (!CGRectEqualToRect(g.frame, want)) { g.frame = want; g.layer.cornerRadius = MIN(want.size.width, want.size.height) / 2; }
+    if (!CGRectEqualToRect(g.frame, want)) { g.frame = want; g.layer.cornerRadius = MIN(want.size.width, want.size.height) / 2; RimFit(g, IsDark(v)); }
     g.hidden = v.hidden || v.alpha < 0.05 || gDrewNothing;
     for (UIView *p = host; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
 }
@@ -864,6 +868,7 @@ static void UndoNav(void) {
     [g.layer addAnimation:cr forKey:@"cr"];
 }
 @end
+static UIViewController *SearchList(void);
 static NSHashTable *gNameGlass;
 static __weak UIView *gNameNow;
 // A soft blur fading down from the top (behind the status bar and the buttons).
@@ -929,11 +934,11 @@ static void StyleToField(UIWindow *w) {
     UIView *g = [row viewWithTag:GLASS_TAG + 9];
     if (!g) { g = [UIView new]; g.userInteractionEnabled = NO; g.tag = GLASS_TAG + 9; g.layer.borderWidth = 1; g.layer.cornerCurve = kCACornerCurveContinuous; [row insertSubview:g atIndex:0]; }
     { BOOL dk = IsDark(row);
-      g.backgroundColor = dk ? [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:0.96] : [UIColor colorWithWhite:0.97 alpha:0.96];
-      g.layer.borderColor = (dk ? [UIColor colorWithWhite:1 alpha:0.16] : [UIColor colorWithWhite:0 alpha:0.10]).CGColor; }
+      g.backgroundColor = dk ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.97 alpha:0.97];
+      g.layer.borderWidth = 0; }
     CGFloat h = MIN(row.bounds.size.height - 8, 52);
     CGRect gf = CGRectMake(16, CGRectGetMidY([to convertRect:to.bounds toView:row]) - h / 2, row.bounds.size.width - 32, h);
-    if (!CGRectEqualToRect(g.frame, gf)) { g.frame = gf; g.layer.cornerRadius = h / 2; SheenFit(g); }
+    if (!CGRectEqualToRect(g.frame, gf)) { g.frame = gf; g.layer.cornerRadius = h / 2; RimFit(g, IsDark(row)); }
     if (CGRectGetMinX(to.frame) < 30 && to.superview == row) { CGRect f = to.frame; f.origin.x = 32; to.frame = f; }
     UIButton *add = nil; CGFloat ax = -1;
     { NSMutableArray *bs = [NSMutableArray arrayWithObject:row]; int gb = 0;
@@ -1024,6 +1029,15 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
                 objc_setAssociatedObject(v, "m26ft", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [(UIControl *)v addTarget:[M26FaceTime shared] action:@selector(tap:) forControlEvents:UIControlEventTouchDown];
             }
+            if (right && gSearchOn && !chat) {
+                UIViewController *lv = SearchList();
+                if (lv && lv.navigationController.navigationBar == nb && lv.navigationController.topViewController == lv) {
+                    if (v.alpha > 0) { v.alpha = 0; if (!gFaded) gFaded = [NSHashTable weakObjectsHashTable]; [gFaded addObject:v]; }
+                    v.userInteractionEnabled = NO;
+                    [objc_getAssociatedObject(v, &kGlassKey) removeFromSuperview]; objc_setAssociatedObject(v, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    continue;
+                }
+            }
             if (left || right) { GlassBehind(v, left ? 10 : 7, right ? 7 : 7, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
         }
         if (chat && [v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && ((UILabel *)v).font.pointSize < 16 && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
@@ -1085,31 +1099,82 @@ static BOOL IsComposeItem(UIBarButtonItem *it) {
     NSString *a = it.action ? NSStringFromSelector(it.action).lowercaseString : @"";
     return sys == UIBarButtonSystemItemCompose || [a containsString:@"compose"] || [a containsString:@"newmessage"];
 }
-@interface M26Search : NSObject
+@interface M26Search : NSObject <UITextFieldDelegate>
 + (instancetype)shared;
 @property (nonatomic, weak) UIViewController *list;
 @property (nonatomic, strong) UIBarButtonItem *compose;   // the top compose button we moved down
+@property (nonatomic) CGFloat kbTop;                       // keyboard top on screen (0 = down)
+@property (nonatomic) BOOL searching;
 @end
+static void StyleSearchPill(UIWindow *w);
+static UIWindow *KeyWin(void) {
+    for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) if (x.isKeyWindow) return x;
+    return nil;
+}
 @implementation M26Search
-+ (instancetype)shared { static M26Search *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Search new]; }); return t; }
++ (instancetype)shared { static M26Search *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Search new]; [[NSNotificationCenter defaultCenter] addObserver:t selector:@selector(kb:) name:UIKeyboardWillChangeFrameNotification object:nil]; }); return t; }
+- (void)kb:(NSNotification *)n {
+    CGRect e = [n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    CGFloat H = UIScreen.mainScreen.bounds.size.height;
+    self.kbTop = (e.origin.y >= H - 1 || e.size.height < 10) ? 0 : e.origin.y;
+    double d = [n.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    UIWindow *w = KeyWin();
+    if (!w || ![w viewWithTag:SEARCH_TAG]) return;
+    [UIView animateWithDuration:MAX(d, 0.25) delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ StyleSearchPill(w); [w layoutIfNeeded]; } completion:nil];
+}
+- (UISearchController *)sc { return self.list.navigationItem.searchController; }
+- (UITextField *)field { return (UITextField *)[KeyWin() viewWithTag:SEARCH_TAG + 4]; }
 - (void)down:(UIView *)b { [UIView animateWithDuration:0.18 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformMakeScale(1.06, 1.06); } completion:nil]; }
 - (void)up:(UIView *)b { [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil]; }
 - (void)search:(UIView *)b {
     [self up:b];
-    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-    UIViewController *vc = self.list;
-    UISearchController *sc = vc.navigationItem.searchController;
+    UISearchController *sc = [self sc];
     if (!sc) { gSearchDebug = @"search: no search controller"; return; }
-    sc.active = YES;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [sc.searchBar becomeFirstResponder]; });
+    if (!self.searching) [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    self.searching = YES;
+    if (!sc.active) sc.active = YES;
+    UIWindow *w = KeyWin();
+    [UIView animateWithDuration:0.3 animations:^{ StyleSearchPill(w); }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.06 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[self field] becomeFirstResponder]; });
+}
+- (void)push:(UITextField *)tf {
+    UISearchController *sc = [self sc];
+    UISearchBar *bar = sc.searchBar;
+    if (!bar) return;
+    bar.text = tf.text ?: @"";
+    id d = bar.delegate;
+    if ([d respondsToSelector:@selector(searchBar:textDidChange:)]) [d searchBar:bar textDidChange:bar.text];
+    if (sc.searchResultsUpdater && sc.searchResultsUpdater != d) [sc.searchResultsUpdater updateSearchResultsForSearchController:sc];
+    else if (sc.searchResultsUpdater && ![d respondsToSelector:@selector(searchBar:textDidChange:)]) [sc.searchResultsUpdater updateSearchResultsForSearchController:sc];
+}
+- (BOOL)textFieldShouldReturn:(UITextField *)tf {
+    UISearchBar *bar = [self sc].searchBar;
+    id d = bar.delegate;
+    if ([d respondsToSelector:@selector(searchBarSearchButtonClicked:)]) [d searchBarSearchButtonClicked:bar];
+    [tf resignFirstResponder];
+    return YES;
+}
+- (void)endSearch {
+    UITextField *tf = [self field];
+    tf.text = @""; [tf resignFirstResponder];
+    UISearchController *sc = [self sc];
+    sc.searchBar.text = @"";
+    id d = sc.searchBar.delegate;
+    if ([d respondsToSelector:@selector(searchBarCancelButtonClicked:)]) [d searchBarCancelButtonClicked:sc.searchBar];
+    sc.active = NO;
+    self.searching = NO;
+    UIWindow *w = KeyWin();
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{ StyleSearchPill(w); } completion:nil];
 }
 - (void)composeTap:(UIView *)b {
     [self up:b];
+    if (self.searching) { [self endSearch]; return; }
     UIBarButtonItem *it = self.compose;
     if (it.target && it.action) ((void (*)(id, SEL, id))objc_msgSend)(it.target, it.action, it);
     else if (it.action) [UIApplication.sharedApplication sendAction:it.action to:nil from:it forEvent:nil];
 }
 @end
+static UIViewController *SearchList(void) { return [M26Search shared].list; }
 static UIButton *GlassCapsule(NSInteger tag, SEL action, SEL down) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
     b.tag = tag; b.layer.cornerCurve = kCACornerCurveContinuous;
@@ -1126,13 +1191,19 @@ static void PaintCapsule(UIButton *b, BOOL dark) {
     RimFit(b, dark);
 }
 static void StyleSearchPill(UIWindow *w) {
+    if (!w) return;
     UIButton *pill = (UIButton *)[w viewWithTag:SEARCH_TAG], *comp = (UIButton *)[w viewWithTag:SCOMPOSE_TAG];
     M26Search *S = [M26Search shared];
     UIViewController *vc = gSearchOn ? ListVC(w.rootViewController, 0) : nil;
     UINavigationController *nc = vc.navigationController;
-    BOOL show = vc && (!nc || nc.topViewController == vc) && !vc.presentedViewController && !vc.isEditing && !gEntry.window;
     UISearchController *sc = vc.navigationItem.searchController;
-    if (sc.active) show = NO;
+    UIViewController *pres = vc.presentedViewController;
+    BOOL show = vc && (!nc || nc.topViewController == vc) && (!pres || pres == sc) && !vc.isEditing && !gEntry.window;
+    if (S.searching && vc && !sc.active) { S.searching = NO; ((UITextField *)[w viewWithTag:SEARCH_TAG + 4]).text = @""; }
+    if (sc.active && !S.searching) show = NO;   // Messages' own search (not ours)
+    BOOL searching = show && S.searching;
+    if (searching && sc.searchBar.alpha > 0) sc.searchBar.alpha = 0;   // ours is at the bottom
+    if (!sc.active && sc.searchBar.alpha < 1) sc.searchBar.alpha = 1;
     // the top compose button moves down next to the pill (and comes back when off)
     UINavigationItem *ni = vc.navigationItem ?: S.list.navigationItem;
     if (ni) {
@@ -1141,10 +1212,10 @@ static void StyleSearchPill(UIWindow *w) {
         if (removed) ni.rightBarButtonItems = keep;
         if (!gSearchOn && S.compose && ![ni.rightBarButtonItems containsObject:S.compose]) { ni.rightBarButtonItems = [@[S.compose] arrayByAddingObjectsFromArray:ni.rightBarButtonItems ?: @[]]; S.compose = nil; }
     }
-    // glass left behind by a button that's gone
-    for (UIView *v in [gStyled allObjects]) if (!v.window) { [objc_getAssociatedObject(v, &kGlassKey) removeFromSuperview]; objc_setAssociatedObject(v, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [gStyled removeObject:v]; }
+    // glass left behind by a button that's gone or hidden
+    for (UIView *v in [gStyled allObjects]) if (!v.window || v.hidden || v.alpha < 0.05) { [objc_getAssociatedObject(v, &kGlassKey) removeFromSuperview]; objc_setAssociatedObject(v, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [gStyled removeObject:v]; }
     if (vc) S.list = vc;
-    gSearchDebug = [NSString stringWithFormat:@"search: list=%@ show=%d sc=%d compose=%d", vc ? NSStringFromClass([vc class]) : @"-", show, sc != nil, S.compose != nil];
+    gSearchDebug = [NSString stringWithFormat:@"search: list=%@ show=%d sc=%d act=%d ours=%d compose=%d kb=%.0f", vc ? NSStringFromClass([vc class]) : @"-", show, sc != nil, sc.active, S.searching, S.compose != nil, S.kbTop];
     if (!gSearchOn) { [pill removeFromSuperview]; [comp removeFromSuperview]; return; }
     BOOL dark = IsDark(w);
     if (!pill) {
@@ -1154,48 +1225,64 @@ static void StyleSearchPill(UIWindow *w) {
         UILabel *t = [UILabel new]; t.tag = 2; t.text = @"Search"; t.font = [UIFont systemFontOfSize:19]; t.userInteractionEnabled = NO; [pill addSubview:t];
         UIImageView *mic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"mic" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightRegular]]];
         mic.tag = 3; mic.contentMode = UIViewContentModeCenter; mic.userInteractionEnabled = NO; [pill addSubview:mic];
+        UITextField *tf = [UITextField new]; tf.tag = SEARCH_TAG + 4; tf.font = [UIFont systemFontOfSize:19];
+        tf.returnKeyType = UIReturnKeySearch; tf.autocorrectionType = UITextAutocorrectionTypeNo; tf.delegate = S; tf.alpha = 0;
+        [tf addTarget:S action:@selector(push:) forControlEvents:UIControlEventEditingChanged];
+        [pill addSubview:tf];
         pill.alpha = 0; [w addSubview:pill];
     }
     if (!comp) {
         comp = GlassCapsule(SCOMPOSE_TAG, @selector(composeTap:), @selector(down:));
-        [comp setImage:[UIImage systemImageNamed:@"square.and.pencil" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
         comp.alpha = 0; [w addSubview:comp];
     }
-    CGFloat W = w.bounds.size.width, H = w.bounds.size.height, h = 53, m = 30, gap = 14;
+    UITextField *tf = (UITextField *)[pill viewWithTag:SEARCH_TAG + 4];
+    CGFloat W = w.bounds.size.width, H = w.bounds.size.height, h = searching ? 51 : 53, m = searching ? 10 : 30, gap = searching ? 12 : 14;
     CGFloat y = H - MAX(w.safeAreaInsets.bottom, 0) + 3 - h;
     if (w.safeAreaInsets.bottom < 10) y = H - 16 - h;
-    CGRect cf = CGRectMake(W - m - h, y, h, h), pf = CGRectMake(m, y, CGRectGetMinX(cf) - gap - m, h);
-    if (!S.compose) pf.size.width = W - 2 * m;
+    if (searching && S.kbTop > 0) y = S.kbTop - 12 - h;
+    BOOL hasComp = searching || S.compose != nil;
+    CGRect cf = CGRectMake(W - m - h, y, h, h), pf = CGRectMake(m, y, hasComp ? CGRectGetMinX(cf) - gap - m : W - 2 * m, h);
     if (!CGRectEqualToRect(pill.frame, pf) && CGAffineTransformIsIdentity(pill.transform)) {
         pill.frame = pf;
         [pill viewWithTag:1].frame = CGRectMake(14, 0, 28, h);
         [pill viewWithTag:2].frame = CGRectMake(50, 0, pf.size.width - 100, h);
+        tf.frame = CGRectMake(48, 0, pf.size.width - 96, h);
         [pill viewWithTag:3].frame = CGRectMake(pf.size.width - 46, 0, 30, h);
     }
     if (!CGRectEqualToRect(comp.frame, cf) && CGAffineTransformIsIdentity(comp.transform)) comp.frame = cf;
+    NSString *ci = searching ? @"xmark" : @"square.and.pencil";
+    if (![objc_getAssociatedObject(comp, "m26img") isEqual:ci]) {
+        objc_setAssociatedObject(comp, "m26img", ci, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [comp setImage:[UIImage systemImageNamed:ci withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:searching ? 20 : 21 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
+    }
     UIColor *ink = Ink(w), *dim = [UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.55 : 0.45];
     ((UIImageView *)[pill viewWithTag:1]).tintColor = ink;
     ((UILabel *)[pill viewWithTag:2]).textColor = dim;
     ((UIImageView *)[pill viewWithTag:3]).tintColor = ink;
+    tf.textColor = ink; tf.keyboardAppearance = dark ? UIKeyboardAppearanceDark : UIKeyboardAppearanceLight;
+    if (!tf.attributedPlaceholder.length) tf.attributedPlaceholder = [[NSAttributedString alloc] initWithString:@"Search" attributes:@{NSForegroundColorAttributeName: dim}];
     comp.tintColor = ink;
+    tf.alpha = searching ? 1 : 0; tf.userInteractionEnabled = searching;
+    [pill viewWithTag:2].alpha = searching ? 0 : 1;
     if (objc_getAssociatedObject(pill, "m26dk") == nil || [objc_getAssociatedObject(pill, "m26dk") boolValue] != dark || !CGSizeEqualToSize([objc_getAssociatedObject(pill, "m26sz") CGSizeValue], pill.bounds.size)) {
         objc_setAssociatedObject(pill, "m26dk", @(dark), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(pill, "m26sz", [NSValue valueWithCGSize:pill.bounds.size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         PaintCapsule(pill, dark); PaintCapsule(comp, dark);
     }
-    BOOL showComp = show && S.compose != nil;
+    BOOL showComp = show && hasComp;
     for (UIView *v in @[pill, comp]) {
         BOOL on = v == pill ? show : showComp;
         CGFloat a = on ? 1 : 0;
         v.userInteractionEnabled = on;
-        if (fabs(v.alpha - a) > 0.01 && !v.layer.animationKeys.count) [UIView animateWithDuration:0.25 animations:^{ v.alpha = a; }];
+        if (fabs(v.alpha - a) > 0.01 && ![v.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.25 animations:^{ v.alpha = a; }];
         if (on && w.subviews.lastObject != v && v.superview == w) [w bringSubviewToFront:v];
     }
+    if (!show && tf.isFirstResponder) [tf resignFirstResponder];
     // rows can scroll out from under the pill
     if (vc && show) {
         UIScrollView *list = (UIScrollView *)Find(vc.view, ^BOOL(UIView *v) { return [v isKindOfClass:[UIScrollView class]] && v.bounds.size.height > H * 0.5; }, 300);
         CGFloat want = h + 16;
-        if (list && fabs(list.contentInset.bottom - want) > 1 && objc_getAssociatedObject(list, "m26ins") == nil) {
+        if (list && objc_getAssociatedObject(list, "m26ins") == nil) {
             objc_setAssociatedObject(list, "m26ins", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             UIEdgeInsets in = list.contentInset; in.bottom += want; list.contentInset = in;
         }
@@ -1255,7 +1342,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.9.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.9.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
