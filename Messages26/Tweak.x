@@ -1,4 +1,5 @@
-// Messages26 0.13.1 - made by nano
+// Messages26 0.14.0 - made by nano
+// 0.14.0: Bubble Colors per chat (theirs / mine, solid or gradient, presets, live preview)
 // 0.13.1: Shuffle (up to 5 photos, on tap or every open) and Live photo (hold to play) backgrounds
 // 0.13.0: live Sky / Water / Aurora backgrounds (move faster in full-screen peek)
 // 0.12.3: background stays put while scrolling; smoother peek (zoom + shade lift)
@@ -1617,7 +1618,8 @@ static void (*origOpaqueB)(id, SEL, BOOL);
 static void OpaqueB(id self, SEL _cmd, BOOL v) { origOpaqueB(self, _cmd, NO); }
 static BOOL NoOpaque(id self, SEL _cmd) { return NO; }
 static void (*origBalloonLayout)(id, SEL);
-static void BalloonLayout(UIView *self, SEL _cmd) { origBalloonLayout(self, _cmd); @try { BubbleRim(self); } @catch (__unused id e) {} }
+static void BubbleFill(UIView *b);
+static void BalloonLayout(UIView *self, SEL _cmd) { origBalloonLayout(self, _cmd); @try { BubbleFill(self); BubbleRim(self); } @catch (__unused id e) {} }
 static void (*origBalloonFrame)(id, SEL, CGRect);
 static void BalloonFrame(UIView *self, SEL _cmd, CGRect f) { origBalloonFrame(self, _cmd, f); if (objc_getAssociatedObject(self, &kRimKey)) @try { BubbleRim(self); } @catch (__unused id e) {} }
 static void (*origBalloonCenter)(id, SEL, CGPoint);
@@ -2005,6 +2007,7 @@ static void CardGlass(UIView *root) {
 }
 static UIBarButtonItem *GlassTextItem(NSString *t, id target, SEL a) { return [[UIBarButtonItem alloc] initWithTitle:t style:UIBarButtonItemStylePlain target:target action:a]; }
 static void StyleBgTab(UIViewController *vc);
+static void StyleBubblePill(UIViewController *vc);
 static void StyleDetails(UIWindow *w) {
     UIViewController *vc = gTopOn ? DetailsVC(w.rootViewController, 0) : nil;
     if (!vc) { gDetDebug = @"details: -"; gDetTab = @"Info"; gHeadRowSection = gChildRowSection = -1; return; }
@@ -2159,6 +2162,7 @@ static void StyleDetails(UIWindow *w) {
     if (row.subviews.lastObject != tabs) [row bringSubviewToFront:tabs];
     for (UIView *p = row; p && p != root; p = p.superview) if (p.clipsToBounds && p.bounds.size.height < 300) p.clipsToBounds = NO;
     @try { StyleBgTab(vc); } @catch (__unused id e) {}
+    @try { StyleBubblePill(vc); } @catch (__unused id e) {}
     gDetDebug = [NSString stringWithFormat:@"details: %@ tiles=%@ T=%.0f B=%.0f table=%@", NSStringFromClass([vc class]), [tiles.allKeys componentsJoinedByString:@","], T, B, gDetTable ? NSStringFromClass([gDetTable class]) : @"-"];
 }
 
@@ -2482,6 +2486,244 @@ static void StyleBgTab(UIViewController *vc) {
     }
 }
 
+
+#pragma mark - per-chat bubble colors (solid or gradient)
+
+static NSString *gChatKeyNow;   // the open chat (for its bubbles)
+static NSDictionary *BubFor(NSString *key) { return key ? [[NSUserDefaults standardUserDefaults] dictionaryForKey:[@"m26.bub." stringByAppendingString:key]] : nil; }
+static void SetBub(NSString *key, NSDictionary *d) {
+    if (!key) return;
+    if (d.count) [[NSUserDefaults standardUserDefaults] setObject:d forKey:[@"m26.bub." stringByAppendingString:key]];
+    else [[NSUserDefaults standardUserDefaults] removeObjectForKey:[@"m26.bub." stringByAppendingString:key]];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"m26.bub.changed" object:nil];
+}
+static NSArray *BubColors(NSArray *hexes) {
+    NSMutableArray *a = [NSMutableArray array];
+    for (NSString *h in hexes) if ([h isKindOfClass:[NSString class]]) [a addObject:(id)HexColor(h).CGColor];
+    if (a.count == 1) [a addObject:a[0]];
+    return a.count ? a : nil;
+}
+static CGFloat Lum(NSString *hex) { UIColor *c = HexColor(hex); CGFloat r, g, b, a; [c getRed:&r green:&g blue:&b alpha:&a]; return 0.299 * r + 0.587 * g + 0.114 * b; }
+// the iMessage bubble outline (tail bottom-left for theirs, bottom-right for mine)
+static UIBezierPath *BubblePath(CGRect bounds, BOOL right, BOOL tail, CGFloat inset) {
+    CGRect body = bounds; body.origin.x += 5.5; body.size.width -= 5.5;
+    body = CGRectInset(body, inset, inset);
+    CGFloat x0 = CGRectGetMinX(body), x1 = CGRectGetMaxX(body), y0 = CGRectGetMinY(body), y1 = CGRectGetMaxY(body);
+    CGFloat r = MIN(17.5, body.size.height / 2);
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    [p moveToPoint:CGPointMake(x0 + r, y0)];
+    [p addLineToPoint:CGPointMake(x1 - r, y0)];
+    [p addArcWithCenter:CGPointMake(x1 - r, y0 + r) radius:r startAngle:-M_PI_2 endAngle:0 clockwise:YES];
+    [p addLineToPoint:CGPointMake(x1, y1 - r)];
+    [p addArcWithCenter:CGPointMake(x1 - r, y1 - r) radius:r startAngle:0 endAngle:M_PI_2 clockwise:YES];
+    if (tail) {
+        [p addLineToPoint:CGPointMake(x0 + 11, y1)];
+        [p addQuadCurveToPoint:CGPointMake(x0 - 5.5, y1 + 0.5) controlPoint:CGPointMake(x0 + 3, y1 + 1.5)];
+        [p addQuadCurveToPoint:CGPointMake(x0, y1 - 9) controlPoint:CGPointMake(x0 + 0.5, y1 - 2.5)];
+    } else {
+        [p addLineToPoint:CGPointMake(x0 + r, y1)];
+        [p addArcWithCenter:CGPointMake(x0 + r, y1 - r) radius:r startAngle:M_PI_2 endAngle:M_PI clockwise:YES];
+    }
+    [p addLineToPoint:CGPointMake(x0, y0 + r)];
+    [p addArcWithCenter:CGPointMake(x0 + r, y0 + r) radius:r startAngle:M_PI endAngle:M_PI * 1.5 clockwise:YES];
+    [p closePath];
+    if (right) { [p applyTransform:CGAffineTransformMakeScale(-1, 1)]; [p applyTransform:CGAffineTransformMakeTranslation(bounds.size.width, 0)]; }
+    return p;
+}
+static void BubbleFill(UIView *b) {
+    CAGradientLayer *fl = nil;
+    for (CALayer *l in b.layer.sublayers) if ([l.name isEqualToString:@"m26fill"]) fl = (CAGradientLayer *)l;
+    NSDictionary *d = BubFor(gChatKeyNow);
+    BOOL right = NO; @try { right = [[b valueForKey:@"orientation"] intValue] == 1; } @catch (__unused id e) {}
+    BOOL bg = YES; @try { bg = [[b valueForKey:@"hasBackground"] boolValue]; } @catch (__unused id e) {}
+    NSArray *hex = right ? d[@"mine"] : d[@"theirs"];
+    NSArray *cols = (gOn && bg && b.bounds.size.width > 20) ? BubColors(hex) : nil;
+    if (!cols) { [fl removeFromSuperlayer]; return; }
+    if (!fl) {
+        fl = [CAGradientLayer layer]; fl.name = @"m26fill";
+        fl.startPoint = CGPointMake(0, 0); fl.endPoint = CGPointMake(1, 1);
+        fl.mask = [CAShapeLayer layer];
+    }
+    UIView *gv = nil; @try { gv = [b valueForKey:@"gradientView"]; } @catch (__unused id e) {}
+    if (fl.superlayer != b.layer) { if (gv.layer.superlayer == b.layer) [b.layer insertSublayer:fl above:gv.layer]; else [b.layer insertSublayer:fl atIndex:0]; }
+    BOOL tail = NO; @try { tail = [[b valueForKey:@"hasTail"] boolValue]; } @catch (__unused id e) {}
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    fl.frame = b.bounds; fl.colors = cols; fl.mask.frame = b.bounds;
+    ((CAShapeLayer *)fl.mask).path = BubblePath(b.bounds, right, tail, 0).CGPath;
+    [CATransaction commit];
+    // readable text on light colors
+    BOOL light = Lum(hex.firstObject) > 0.62;
+    for (UIView *x in b.subviews) if ([x isKindOfClass:[UITextView class]]) { UIColor *tc = light ? UIColor.blackColor : UIColor.whiteColor; if (![((UITextView *)x).textColor isEqual:tc]) ((UITextView *)x).textColor = tc; }
+}
+
+// ---- the Bubble Colors sheet ----
+@interface M26BubbleVC : UIViewController
+@property (nonatomic, copy) NSString *key;
+@end
+@implementation M26BubbleVC {
+    UISegmentedControl *_side; UISwitch *_grad; UIColorWell *_w1, *_w2; UIView *_preview, *_bTheirs, *_bMine; UIScrollView *_sw; UILabel *_l2;
+}
+static NSArray *Presets(void) {
+    return @[@[@"Classic", @"0A1BB3"], @[@"Ocean", @"0EA5E9", @"2563EB"], @[@"Sunset", @"F97316", @"DB2777"], @[@"Grape", @"7C3AED", @"C026D3"],
+             @[@"Mint", @"10B981", @"06B6D4"], @[@"Rose", @"FB7185", @"E11D48"], @[@"Gold", @"F59E0B", @"EAB308"], @[@"Midnight", @"334155", @"0F172A"],
+             @[@"Lime", @"84CC16", @"16A34A"], @[@"Cherry", @"DC2626", @"9F1239"], @[@"Graphite", @"52525B", @"18181B"], @[@"Cotton", @"F9A8D4", @"A5B4FC"],
+             @[@"Aqua", @"22D3EE", @"0891B2"], @[@"Peach", @"FDBA74", @"FB7185"], @[@"Neon", @"A3E635", @"22D3EE"], @[@"Royal", @"1D4ED8", @"7C3AED"]];
+}
+- (NSString *)sideKey { return _side.selectedSegmentIndex == 1 ? @"mine" : @"theirs"; }
+- (NSArray *)current { return BubFor(self.key)[[self sideKey]]; }
+- (void)save:(NSArray *)hexes {
+    NSMutableDictionary *d = [BubFor(self.key) mutableCopy] ?: [NSMutableDictionary dictionary];
+    if (hexes.count) d[[self sideKey]] = hexes; else [d removeObjectForKey:[self sideKey]];
+    SetBub(self.key, d);
+    [self refresh:YES];
+}
+- (UIView *)bubble:(NSString *)text right:(BOOL)right {
+    UIView *v = [UIView new];
+    UILabel *l = [UILabel new]; l.text = text; l.font = [UIFont systemFontOfSize:17]; l.tag = 1; l.numberOfLines = 1;
+    CGSize ts = [l sizeThatFits:CGSizeMake(220, 40)];
+    v.frame = CGRectMake(0, 0, ts.width + 34 + 5.5, 38);
+    l.frame = CGRectMake(right ? 14 : 19.5, 0, ts.width, 38);
+    CAGradientLayer *g = [CAGradientLayer layer]; g.name = @"g"; g.frame = v.bounds; g.startPoint = CGPointMake(0, 0); g.endPoint = CGPointMake(1, 1);
+    CAShapeLayer *m = [CAShapeLayer layer]; m.path = BubblePath(v.bounds, right, YES, 0).CGPath; g.mask = m;
+    [v.layer addSublayer:g]; [v addSubview:l];
+    return v;
+}
+- (void)paint:(UIView *)bub hex:(NSArray *)hex right:(BOOL)right {
+    CAGradientLayer *g = (CAGradientLayer *)bub.layer.sublayers.firstObject;
+    NSArray *cols = BubColors(hex) ?: (right ? @[(id)DeepBlue().CGColor, (id)DeepBlue().CGColor] : @[(id)[UIColor colorWithWhite:0.17 alpha:1].CGColor, (id)[UIColor colorWithWhite:0.17 alpha:1].CGColor]);
+    g.colors = cols;
+    ((UILabel *)[bub viewWithTag:1]).textColor = (hex.count && Lum(hex.firstObject) > 0.62) ? UIColor.blackColor : UIColor.whiteColor;
+}
+- (void)refresh:(BOOL)animated {
+    NSDictionary *d = BubFor(self.key);
+    void (^go)(void) = ^{ [self paint:self->_bTheirs hex:d[@"theirs"] right:NO]; [self paint:self->_bMine hex:d[@"mine"] right:YES]; };
+    if (animated) { [CATransaction begin]; [CATransaction setAnimationDuration:0.35]; go(); [CATransaction commit]; } else go();
+    NSArray *cur = [self current];
+    _grad.on = cur.count > 1;
+    _w1.selectedColor = cur.count ? HexColor(cur[0]) : (_side.selectedSegmentIndex ? DeepBlue() : [UIColor colorWithWhite:0.17 alpha:1]);
+    _w2.selectedColor = cur.count > 1 ? HexColor(cur[1]) : _w1.selectedColor;
+    _w2.hidden = _l2.hidden = !_grad.on;
+    NSString *joined = [cur componentsJoinedByString:@","];
+    for (UIButton *b in _sw.subviews) if ([b isKindOfClass:[UIButton class]]) {
+        NSArray *p = Presets()[b.tag];
+        BOOL on = [joined isEqualToString:[[p subarrayWithRange:NSMakeRange(1, p.count - 1)] componentsJoinedByString:@","]];
+        b.layer.borderWidth = on ? 3 : 0;
+    }
+}
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    BOOL dark = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight;
+    self.view.backgroundColor = dark ? [UIColor colorWithRed:0.07 green:0.07 blue:0.09 alpha:1] : [UIColor colorWithWhite:0.96 alpha:1];
+    CGFloat W = self.view.bounds.size.width;
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(20, 22, W - 40, 30)]; t.text = @"Bubble Colors"; t.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold]; t.textColor = UIColor.labelColor; t.autoresizingMask = UIViewAutoresizingFlexibleWidth; [self.view addSubview:t];
+    // live preview
+    _preview = [[UIView alloc] initWithFrame:CGRectMake(16, 64, W - 32, 128)]; _preview.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    _preview.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.125 alpha:1] : UIColor.whiteColor; _preview.layer.cornerRadius = 26; _preview.layer.cornerCurve = kCACornerCurveContinuous;
+    [self.view addSubview:_preview];
+    _bTheirs = [self bubble:@"Hey, how do I look? 👀" right:NO]; _bTheirs.frame = CGRectOffset(_bTheirs.bounds, 12, 16); [_preview addSubview:_bTheirs];
+    _bMine = [self bubble:@"Like iOS 26 ✨" right:YES]; _bMine.frame = CGRectOffset(_bMine.bounds, _preview.bounds.size.width - _bMine.bounds.size.width - 12, 72); _bMine.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin; [_preview addSubview:_bMine];
+    RimFit(_preview, dark);
+    _side = [[UISegmentedControl alloc] initWithItems:@[@"Their Messages", @"My Messages"]]; _side.selectedSegmentIndex = 0;
+    _side.frame = CGRectMake(16, 208, W - 32, 36); _side.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [_side addTarget:self action:@selector(sideChanged) forControlEvents:UIControlEventValueChanged]; [self.view addSubview:_side];
+    // presets
+    _sw = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 258, W, 78)]; _sw.showsHorizontalScrollIndicator = NO; _sw.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    NSArray *ps = Presets();
+    for (NSUInteger i = 0; i < ps.count; i++) {
+        NSArray *p = ps[i];
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom]; b.tag = i; b.frame = CGRectMake(16 + i * 60, 4, 50, 50);
+        b.layer.cornerRadius = 25; b.layer.borderColor = UIColor.labelColor.CGColor;
+        CAGradientLayer *g = [CAGradientLayer layer]; g.frame = CGRectInset(b.bounds, 5, 5); g.cornerRadius = 20; g.startPoint = CGPointMake(0, 0); g.endPoint = CGPointMake(1, 1);
+        g.colors = BubColors([p subarrayWithRange:NSMakeRange(1, p.count - 1)]); [b.layer addSublayer:g];
+        [b addTarget:self action:@selector(preset:) forControlEvents:UIControlEventTouchUpInside];
+        [_sw addSubview:b];
+        UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(b.frame.origin.x - 6, 56, 62, 16)]; l.text = p[0]; l.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium]; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.secondaryLabelColor; [_sw addSubview:l];
+    }
+    _sw.contentSize = CGSizeMake(16 + ps.count * 60 + 6, 78);
+    [self.view addSubview:_sw];
+    // custom: color 1, gradient, color 2
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(16, 346, W - 32, 150)]; card.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    card.backgroundColor = _preview.backgroundColor; card.layer.cornerRadius = 26; card.layer.cornerCurve = kCACornerCurveContinuous; [self.view addSubview:card];
+    CGFloat cw = card.bounds.size.width;
+    UILabel *l1 = [[UILabel alloc] initWithFrame:CGRectMake(18, 8, 200, 44)]; l1.text = @"Color"; l1.font = [UIFont systemFontOfSize:17]; l1.textColor = UIColor.labelColor; [card addSubview:l1];
+    _w1 = [[UIColorWell alloc] initWithFrame:CGRectMake(cw - 58, 10, 40, 40)]; _w1.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin; _w1.supportsAlpha = NO;
+    [_w1 addTarget:self action:@selector(wellChanged) forControlEvents:UIControlEventValueChanged]; [card addSubview:_w1];
+    UILabel *lg = [[UILabel alloc] initWithFrame:CGRectMake(18, 54, 200, 44)]; lg.text = @"Gradient"; lg.font = [UIFont systemFontOfSize:17]; lg.textColor = UIColor.labelColor; [card addSubview:lg];
+    _grad = [UISwitch new]; _grad.frame = CGRectMake(cw - 69, 60, 51, 31); _grad.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    [_grad addTarget:self action:@selector(wellChanged) forControlEvents:UIControlEventValueChanged]; [card addSubview:_grad];
+    _l2 = [[UILabel alloc] initWithFrame:CGRectMake(18, 100, 200, 44)]; _l2.text = @"Second Color"; _l2.font = [UIFont systemFontOfSize:17]; _l2.textColor = UIColor.labelColor; [card addSubview:_l2];
+    _w2 = [[UIColorWell alloc] initWithFrame:CGRectMake(cw - 58, 102, 40, 40)]; _w2.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin; _w2.supportsAlpha = NO;
+    [_w2 addTarget:self action:@selector(wellChanged) forControlEvents:UIControlEventValueChanged]; [card addSubview:_w2];
+    UIButton *reset = [UIButton buttonWithType:UIButtonTypeSystem]; reset.frame = CGRectMake(16, 508, W - 32, 50); reset.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [reset setTitle:@"Reset to Default" forState:UIControlStateNormal]; reset.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    reset.tintColor = UIColor.systemRedColor; reset.backgroundColor = card.backgroundColor; reset.layer.cornerRadius = 25;
+    [reset addTarget:self action:@selector(reset) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:reset];
+    [self refresh:NO];
+}
+- (void)sideChanged { [[[UISelectionFeedbackGenerator alloc] init] selectionChanged]; [self refresh:NO]; }
+- (void)preset:(UIButton *)b {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    NSArray *p = Presets()[b.tag];
+    [UIView animateWithDuration:0.12 animations:^{ b.transform = CGAffineTransformMakeScale(0.88, 0.88); } completion:^(__unused BOOL f) { [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.45 initialSpringVelocity:0 options:0 animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil]; }];
+    [self save:[p subarrayWithRange:NSMakeRange(1, p.count - 1)]];
+}
+- (void)wellChanged {
+    NSMutableArray *h = [NSMutableArray arrayWithObject:ColorHex(_w1.selectedColor ?: UIColor.grayColor)];
+    if (_grad.on) [h addObject:ColorHex(_w2.selectedColor ?: _w1.selectedColor ?: UIColor.grayColor)];
+    [self save:h];
+}
+- (void)reset { [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess]; [self save:nil]; }
+@end
+@interface M26BubbleOpen : NSObject
++ (instancetype)shared;
+@property (nonatomic, weak) UIViewController *host;
+@property (nonatomic, copy) NSString *key;
+@end
+@implementation M26BubbleOpen
++ (instancetype)shared { static M26BubbleOpen *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26BubbleOpen new]; }); return t; }
+- (void)open:(UIButton *)b {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    if (!self.key || !self.host) return;
+    M26BubbleVC *vc = [M26BubbleVC new]; vc.key = self.key;
+    vc.modalPresentationStyle = UIModalPresentationPageSheet;
+    if (@available(iOS 15.0, *)) { UISheetPresentationController *sp = vc.sheetPresentationController; sp.detents = @[UISheetPresentationControllerDetent.largeDetent]; sp.prefersGrabberVisible = YES; sp.preferredCornerRadius = 34; }
+    [self.host presentViewController:vc animated:YES completion:nil];
+}
+@end
+// the small "Bubble Colors" glass pill under the Info cards
+#define BUBPILL_TAG 0x4D323659
+static void StyleBubblePill(UIViewController *vc) {
+    UITableView *tb = (UITableView *)gDetTable;
+    if (![tb isKindOfClass:[UITableView class]]) return;
+    UIButton *pill = (UIButton *)[tb viewWithTag:BUBPILL_TAG];
+    NSString *key = ConvKey(vc);
+    M26BubbleOpen *O = [M26BubbleOpen shared]; O.key = key; O.host = vc;
+    BOOL on = [gDetTab isEqualToString:@"Info"] && key;
+    if (!pill) {
+        pill = [UIButton buttonWithType:UIButtonTypeCustom]; pill.tag = BUBPILL_TAG;
+        UIImageSymbolConfiguration *cf = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
+        [pill setImage:[UIImage systemImageNamed:@"paintpalette.fill" withConfiguration:cf] forState:UIControlStateNormal];
+        [pill setTitle:@"  Bubble Colors" forState:UIControlStateNormal];
+        pill.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+        pill.layer.cornerCurve = kCACornerCurveContinuous;
+        [pill addTarget:O action:@selector(open:) forControlEvents:UIControlEventTouchUpInside];
+        [tb addSubview:pill];
+    }
+    pill.hidden = !on;
+    if (!on) return;
+    if (!objc_getAssociatedObject(tb, "m26bubins")) { objc_setAssociatedObject(tb, "m26bubins", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); UIEdgeInsets in = tb.contentInset; in.bottom += 70; tb.contentInset = in; }
+    BOOL dark = IsDark(tb);
+    pill.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.125 alpha:0.94] : UIColor.whiteColor;
+    [pill setTitleColor:Ink(tb) forState:UIControlStateNormal];
+    // the icon shows this chat's colors
+    NSDictionary *d = BubFor(key); NSArray *mine = d[@"mine"] ?: d[@"theirs"];
+    pill.tintColor = mine.count ? HexColor(mine[0]) : Ink(tb);
+    CGSize ts = [pill sizeThatFits:CGSizeMake(300, 44)];
+    CGRect f = CGRectMake((tb.bounds.size.width - ts.width - 36) / 2, tb.contentSize.height + 14, ts.width + 36, 44);
+    if (!CGRectEqualToRect(pill.frame, f)) { pill.frame = f; pill.layer.cornerRadius = 22; RimFit(pill, dark); }
+    if (tb.subviews.lastObject != pill) [tb bringSubviewToFront:pill];
+}
+
 // Pull the chat up past the last message to see the whole background; pull down to bring it back.
 @interface M26Peek : NSObject
 + (instancetype)shared;
@@ -2587,6 +2829,13 @@ static void ApplyChatBg(UIWindow *w) {
     for (UIResponder *r = cv; r && !key; r = r.nextResponder) if ([r respondsToSelector:NSSelectorFromString(@"conversation")]) key = ConvKey(r);
     if (!key) { id d = cv.delegate; for (int i = 0; i < 3 && d && !key; i++) { key = ConvKey(d); @try { d = [d valueForKey:@"delegate"]; } @catch (__unused id ex) { d = nil; } } }
     if (key) objc_setAssociatedObject(cv, "m26key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    { NSString *bstamp = [NSString stringWithFormat:@"%@|%@", key, BubFor(key)];
+      if (![gChatKeyNow isEqualToString:key] || ![objc_getAssociatedObject(cv, "m26bub") isEqual:bstamp]) {
+          gChatKeyNow = key;
+          objc_setAssociatedObject(cv, "m26bub", bstamp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+          Class B = NSClassFromString(@"CKColoredBalloonView");
+          for (UICollectionViewCell *c in cv.visibleCells) { UIView *b = Find(c, ^BOOL(UIView *v) { return B && [v isKindOfClass:B]; }, 60); [b setNeedsLayout]; [b layoutIfNeeded]; }
+      } }
     if (!objc_getAssociatedObject(cv, "m26peekon")) { objc_setAssociatedObject(cv, "m26peekon", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [cv.panGestureRecognizer addTarget:[M26Peek shared] action:@selector(pan:)]; }
     if (!objc_getAssociatedObject(cv, "m26bggest")) {
         objc_setAssociatedObject(cv, "m26bggest", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2726,7 +2975,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.13.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.14.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
