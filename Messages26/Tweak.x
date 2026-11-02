@@ -1,4 +1,5 @@
 // Messages26 0.18.8 - made by nano
+// 0.18.11: contact photo search skips the lower page so it reaches the header
 // 0.18.10: contact photo matched by its avatar view
 // 0.18.9: contact photo found anywhere on the page and moved up with the name
 // 0.18.8: contact page photo + name a little higher
@@ -2238,11 +2239,16 @@ static void StyleDetails(UIWindow *w) {
       // the photo can live outside that cell: biggest centered round/square view above the buttons
       { UIView *pic = nil; CGFloat bw = 0; CGFloat midX = root.bounds.size.width / 2;
         NSMutableArray *st3 = [NSMutableArray arrayWithObject:root]; int g3 = 0;
-        while (st3.count && g3++ < 900) { UIView *v = st3.lastObject; [st3 removeLastObject];
-            if (v.hidden || v.alpha < 0.05 || v == tabs) continue;
+        CGFloat topY = [row convertPoint:CGPointMake(0, T) toView:root].y; NSMutableArray *seen = [NSMutableArray array];
+        while (st3.count && g3++ < 4000) { UIView *v = st3.lastObject; [st3 removeLastObject];
+            if (v.hidden || v.alpha < 0.05 || v == tabs || v == row) continue;
             CGSize sz = v.bounds.size;
             CGRect r = [v convertRect:v.bounds toView:row];
             CGRect rr = [v convertRect:v.bounds toView:root];
+            // nothing up there: skip whole parts of the page below the buttons
+            if (v != root && sz.width > 0 && sz.height > 0 && CGRectGetMinY(rr) > topY + 2) continue;
+            if (v != root && ![v isKindOfClass:[UILabel class]] && CGRectGetMaxY(rr) <= topY + 2 && sz.width >= 30 && sz.width < W - 20 && fabs(CGRectGetMidX(rr) - midX) < 30 && seen.count < 6)
+                [seen addObject:[NSString stringWithFormat:@"%@ %.0fx%.0f@%.0f", [NSStringFromClass([v class]) substringToIndex:MIN(18, NSStringFromClass([v class]).length)], sz.width, sz.height, CGRectGetMinY(rr)]];
             BOOL ok = v != root && ![v isKindOfClass:[UILabel class]] && ![row isDescendantOfView:v] && ![v isDescendantOfView:row]
                 && CGRectGetMaxY(r) <= T + 2 && sz.width >= 40 && sz.width <= 300 && (fabs(sz.width - sz.height) < sz.width * 0.12 || [NSStringFromClass([v class]) containsString:@"Avatar"])
                 && fabs(CGRectGetMidX(rr) - midX) < 30;
@@ -2250,7 +2256,7 @@ static void StyleDetails(UIWindow *w) {
             if (isAv && (!pic || ![NSStringFromClass([pic class]) containsString:@"Avatar"])) { bw = 1e6; pic = v; }
             else if (ok && sz.width > bw) { bw = sz.width; pic = v; }
             if (!ok) [st3 addObjectsFromArray:v.subviews]; }
-        gPicDebug = pic ? [NSString stringWithFormat:@"pic=%@ %.0fx%.0f", NSStringFromClass([pic class]), pic.bounds.size.width, pic.bounds.size.height] : @"pic=none";
+        gPicDebug = pic ? [NSString stringWithFormat:@"pic=%@ %.0fx%.0f", NSStringFromClass([pic class]), pic.bounds.size.width, pic.bounds.size.height] : [NSString stringWithFormat:@"pic=none top=%.0f n=%d [%@]", topY, g3, [seen componentsJoinedByString:@"; "]];
         if (pic) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, -18);
             for (UIView *a = pic.superview; a; a = a.superview) if (CGAffineTransformEqualToTransform(a.transform, t)) { pic = nil; break; }
             if (pic && !CGAffineTransformEqualToTransform(pic.transform, t)) pic.transform = t; } }
@@ -5039,7 +5045,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.10 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.11 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
