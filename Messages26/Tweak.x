@@ -1,4 +1,5 @@
-// Messages26 0.7.7 - made by nano
+// Messages26 0.7.8 - made by nano
+// 0.7.8: taps reach the moved text box from inside the bar too; see-through layers no longer catch taps; the mic's own effect stays
 // 0.7.7: the message field takes taps again and the mic is back; iOS 26 rim on the pill and +
 // 0.7.6: every blur inside the message bar is removed (it covered the text box and blocked taps)
 // 0.7.5: the field row's place is worked out inside the bar itself, so it's the same every time
@@ -559,6 +560,9 @@ static void StyleEntry(UIView *entry) {
         gKbTop = kbUp ? CGRectGetMaxY(ef) : 0;
         CGAffineTransform rt = CGAffineTransformMakeTranslation(0, shift);
         for (UIView *v in row) if (!CGAffineTransformEqualToTransform(v.transform, rt)) v.transform = rt;
+        NSMutableArray *rn = [NSMutableArray array];
+        for (UIView *v in row) if (v != field) [rn addObject:[NSString stringWithFormat:@"%@ a=%.1f h=%d", NSStringFromClass([v class]), v.alpha, v.hidden]];
+        gTextDebug = [gTextDebug stringByAppendingFormat:@"\n row: %@", rn.count ? [rn componentsJoinedByString:@", "] : @"(no mic found)"];
         gRowOut = NO;
     } else if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
     if (container) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift); if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t; }
@@ -657,8 +661,11 @@ static void StyleEntry(UIView *entry) {
             if (v != entry && [v isKindOfClass:[UIVisualEffectView class]]) {
                 UIVisualEffectView *ev = (UIVisualEffectView *)v;
                 if (ev.hidden) ev.hidden = NO;   // (0.7.6 hid these, with the mic inside)
-                if (ev.effect) ev.effect = nil;
+                if ([ev.effect isKindOfClass:[UIBlurEffect class]]) ev.effect = nil;   // vibrancy (the mic's look) stays
                 ev.backgroundColor = UIColor.clearColor;
+                // a see-through layer on top of the text box must not take its taps
+                BOOL hasCtl = Find(ev, ^BOOL(UIView *x) { return [x isKindOfClass:[UIControl class]]; }, 60) != nil;
+                if (!hasCtl && ev.userInteractionEnabled) ev.userInteractionEnabled = NO;
                 [bs addObject:ev.contentView];
                 continue;
             }
@@ -1053,7 +1060,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.7.7 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.7.8 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
@@ -1063,8 +1070,8 @@ static void Tick(void) {
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
     BOOL r = %orig;
     if (r) return r;
-    UIView *en = gEntry;
-    if (!en || (self != en && ![en isDescendantOfView:self])) return r;
+    UIView *en = gEntry, *fld = gField;
+    if (!en || (self != en && ![en isDescendantOfView:self] && !(fld && [fld isDescendantOfView:self]))) return r;
     for (NSNumber *t in @[@(PILL_TAG), @(PLUS_TAG)]) {
         UIView *v = [en viewWithTag:t.integerValue];
         if (!v) { UIView *f = gField; v = [f.superview viewWithTag:t.integerValue]; }
