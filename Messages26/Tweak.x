@@ -1,4 +1,5 @@
-// Messages26 0.12.2 - made by nano
+// Messages26 0.12.3 - made by nano
+// 0.12.3: background stays put while scrolling; smoother peek (zoom + shade lift)
 // 0.12.2: pull up past the last message to see the full background, pull down to come back
 // 0.12.1: no black corners on bubbles over a background
 // 0.12.0: Backgrounds tab (None / Photo / Color), each chat its own background
@@ -2336,19 +2337,32 @@ static void StyleBgTab(UIViewController *vc) {
             [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
             UIEdgeInsets ci = cv.contentInset; ci.bottom += E;
             CGFloat target = maxY + E;
+            UIView *host = objc_getAssociatedObject(cv, "m26bghost");
+            UIView *iv = [host viewWithTag:1], *dim = [host viewWithTag:2];
+            CGFloat v0 = MAX(0, -vy) / MAX(1, target - cv.contentOffset.y);
             dispatch_async(dispatch_get_main_queue(), ^{
                 cv.contentInset = ci;
-                [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ cv.contentOffset = CGPointMake(0, target); } completion:nil];
+                // messages glide away on a soft spring; the photo settles back from a slight zoom and its shade lifts
+                [UIView animateWithDuration:0.75 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:MIN(v0, 3) options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ cv.contentOffset = CGPointMake(0, target); } completion:nil];
+                [UIView animateWithDuration:0.9 delay:0.05 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ iv.transform = CGAffineTransformIdentity; dim.alpha = 0; } completion:nil];
+                for (UICollectionViewCell *c in cv.visibleCells) {
+                    c.alpha = 0.55;
+                    [UIView animateWithDuration:0.6 delay:0.15 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{ c.alpha = 1; } completion:nil];
+                }
             });
         }
     } else if (vy > 120 || cv.contentOffset.y < maxY - 60) {
         objc_setAssociatedObject(cv, "m26peek", @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIEdgeInsets ci = cv.contentInset; ci.bottom = MAX(0, ci.bottom - extra);
         CGFloat target = maxY - extra;
+        UIView *host = objc_getAssociatedObject(cv, "m26bghost");
+        UIView *iv = [host viewWithTag:1], *dim = [host viewWithTag:2];
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
         dispatch_async(dispatch_get_main_queue(), ^{
-            [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.84 initialSpringVelocity:MIN(MAX(vy, 0) / 800.0, 3) options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
                 cv.contentInset = ci; cv.contentOffset = CGPointMake(0, MAX(-cv.adjustedContentInset.top, target));
             } completion:nil];
+            [UIView animateWithDuration:0.8 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ iv.transform = CGAffineTransformMakeScale(1.04, 1.04); dim.alpha = 1; } completion:nil];
         });
     }
 }
@@ -2365,20 +2379,38 @@ static void ApplyChatBg(UIWindow *w) {
     if (key) objc_setAssociatedObject(cv, "m26key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (!objc_getAssociatedObject(cv, "m26peekon")) { objc_setAssociatedObject(cv, "m26peekon", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [cv.panGestureRecognizer addTarget:[M26Peek shared] action:@selector(pan:)]; }
     NSDictionary *bg = gOn ? BgFor(key) : nil;
-    NSString *stamp = bg ? [NSString stringWithFormat:@"%@|%@|%@", key, bg[@"t"], bg[@"hex"]] : @"none";
+    // the background lives behind the chat (not inside it), so scrolling never moves it
+    UIView *sup = cv.superview;
+    UIView *host = objc_getAssociatedObject(cv, "m26bghost");
+    if (cv.backgroundView.tag == CHATBG_TAG) cv.backgroundView = nil;
+    if (!bg) { [host removeFromSuperview]; objc_setAssociatedObject(cv, "m26bghost", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); objc_setAssociatedObject(cv, "m26bg", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); return; }
+    if (!host) {
+        host = [UIView new]; host.tag = CHATBG_TAG; host.clipsToBounds = YES; host.userInteractionEnabled = NO;
+        UIImageView *iv = [UIImageView new]; iv.tag = 1; iv.contentMode = UIViewContentModeScaleAspectFill; [host addSubview:iv];
+        UIView *dim = [UIView new]; dim.tag = 2; dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.28]; [host addSubview:dim];
+        objc_setAssociatedObject(cv, "m26bghost", host, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (host.superview != sup) [sup insertSubview:host belowSubview:cv];
+    else if ([sup.subviews indexOfObject:host] > [sup.subviews indexOfObject:cv]) [sup insertSubview:host belowSubview:cv];
+    CGRect hf = cv.frame;
+    if (!CGRectEqualToRect(host.frame, hf)) {
+        host.frame = hf;
+        UIView *iv = [host viewWithTag:1], *dim = [host viewWithTag:2];
+        CGAffineTransform keep = iv.transform; iv.transform = CGAffineTransformIdentity; iv.frame = host.bounds; iv.transform = keep;
+        dim.frame = host.bounds;
+    }
+    if (cv.backgroundColor && CGColorGetAlpha(cv.backgroundColor.CGColor) > 0) cv.backgroundColor = UIColor.clearColor;
+    NSString *stamp = [NSString stringWithFormat:@"%@|%@|%@", key, bg[@"t"], bg[@"hex"]];
     if ([objc_getAssociatedObject(cv, "m26bg") isEqual:stamp]) return;
     objc_setAssociatedObject(cv, "m26bg", stamp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (!bg) { if ([cv.backgroundView isKindOfClass:[UIView class]] && cv.backgroundView.tag == CHATBG_TAG) cv.backgroundView = nil; return; }
-    UIView *host = [UIView new]; host.tag = CHATBG_TAG; host.clipsToBounds = YES;
-    if ([bg[@"type"] isEqualToString:@"photo"]) {
-        UIImageView *iv = [[UIImageView alloc] initWithImage:BgImage(key)];
-        iv.contentMode = UIViewContentModeScaleAspectFill; iv.frame = host.bounds; iv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [host addSubview:iv];
-        UIView *dim = [UIView new]; dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.28]; dim.frame = host.bounds; dim.autoresizingMask = iv.autoresizingMask;
-        [host addSubview:dim];
-    } else host.backgroundColor = HexColor(bg[@"hex"]);
-    cv.backgroundView = host;
-    cv.backgroundColor = UIColor.clearColor;
+    UIImageView *iv = (UIImageView *)[host viewWithTag:1]; UIView *dim = [host viewWithTag:2];
+    BOOL photo = [bg[@"type"] isEqualToString:@"photo"];
+    iv.image = photo ? BgImage(key) : nil;
+    iv.hidden = !photo; dim.hidden = !photo;
+    host.backgroundColor = photo ? UIColor.blackColor : HexColor(bg[@"hex"]);
+    BOOL peek = [objc_getAssociatedObject(cv, "m26peek") doubleValue] > 0;
+    iv.transform = peek ? CGAffineTransformIdentity : CGAffineTransformMakeScale(1.04, 1.04);
+    dim.alpha = peek ? 0 : 1;
 }
 
 #pragma mark - debug + tick
@@ -2449,7 +2481,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.12.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.12.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
