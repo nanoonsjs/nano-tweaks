@@ -1,4 +1,5 @@
-// Messages26 0.10.13 - made by nano
+// Messages26 0.11.0 - made by nano
+// 0.11.0: iOS 26 contact page: glass back + Edit, three glass icon buttons, Info / Backgrounds / Photos / Links tabs
 // 0.10.13: name capsule drawn over the photo
 // 0.10.12: name + glass measured without the scaling (no double move, no jitter)
 // 0.10.11: name glass moves with the name; name centered
@@ -1723,6 +1724,221 @@ static void InstallSwipe(UIWindow *w) {
     [cv.panGestureRecognizer requireGestureRecognizerToFail:p];
 }
 
+#pragma mark - contact details page (iOS 26 look)
+
+#define DGLASS_TAG 0x4D323654
+#define DTABS_TAG  0x4D323655
+static NSString *gDetDebug = @"details: -";
+static __weak UIView *gInfoTile;
+static __weak UIScrollView *gDetTable;
+static NSString *gDetTab = @"Info";
+static UIViewController *DetailsVC(UIViewController *vc, int depth) {
+    if (!vc || depth > 14) return nil;
+    if ([NSStringFromClass([vc class]) containsString:@"DetailsController"] && vc.viewIfLoaded.window) return vc;
+    UIViewController *r = DetailsVC(vc.presentedViewController, depth + 1); if (r) return r;
+    for (UIViewController *c in vc.childViewControllers) { r = DetailsVC(c, depth + 1); if (r) return r; }
+    return nil;
+}
+// press a view that isn't a button: its control, or its tap gesture's target
+static BOOL ForwardTap(UIView *v) {
+    UIControl *c = (UIControl *)Find(v, ^BOOL(UIView *x) { return [x isKindOfClass:[UIControl class]]; }, 40);
+    if (!c) for (UIView *p = v.superview; p && !c; p = p.superview) if ([p isKindOfClass:[UIControl class]]) c = (UIControl *)p;
+    if (c && [c isDescendantOfView:v.superview ?: v]) { [c sendActionsForControlEvents:UIControlEventTouchUpInside]; return YES; }
+    NSMutableArray *views = [NSMutableArray array];
+    for (UIView *p = v; p && views.count < 4; p = p.superview) [views addObject:p];
+    [views addObjectsFromArray:v.subviews];
+    for (UIView *p in views) for (UIGestureRecognizer *g in p.gestureRecognizers) {
+        if (![g isKindOfClass:[UITapGestureRecognizer class]]) continue;
+        NSArray *ts = nil; @try { ts = [g valueForKey:@"_targets"]; } @catch (__unused id e) {}
+        for (id t in ts) {
+            Ivar ti = class_getInstanceVariable([t class], "_target"), ai = class_getInstanceVariable([t class], "_action");
+            if (!ti || !ai) continue;
+            id target = object_getIvar(t, ti);
+            SEL act = *(SEL *)((uint8_t *)(__bridge void *)t + ivar_getOffset(ai));
+            if (target && act && [target respondsToSelector:act]) { ((void (*)(id, SEL, id))objc_msgSend)(target, act, g); return YES; }
+        }
+    }
+    return NO;
+}
+@interface M26Details : NSObject
++ (instancetype)shared;
+@end
+@implementation M26Details
++ (instancetype)shared { static M26Details *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Details new]; }); return t; }
+- (void)edit:(id)sender { UIView *t = gInfoTile; BOOL ok = t ? ForwardTap(t) : NO; gDetDebug = [gDetDebug stringByAppendingFormat:@" edit=%d", ok]; }
+- (void)tab:(UIButton *)b {
+    [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+    NSString *name = [b titleForState:UIControlStateNormal];
+    gDetTab = name;
+    UIScrollView *sv = gDetTable;
+    if (!sv) return;
+    CGFloat top = -sv.adjustedContentInset.top;
+    if ([name isEqualToString:@"Info"]) { [sv setContentOffset:CGPointMake(0, top) animated:YES]; return; }
+    if ([name isEqualToString:@"Backgrounds"]) return;   // coming next
+    // find the "Photos" / "Links" section and scroll to it
+    if ([sv isKindOfClass:[UITableView class]]) {
+        UITableView *tv = (UITableView *)sv;
+        for (NSInteger sct = 0; sct < tv.numberOfSections; sct++) {
+            BOOL hit = NO;
+            if ([tv.delegate respondsToSelector:@selector(tableView:viewForHeaderInSection:)]) {
+                UIView *h = [tv.delegate tableView:tv viewForHeaderInSection:sct];
+                if (h && Find(h, ^BOOL(UIView *x) { return [x isKindOfClass:[UILabel class]] && [((UILabel *)x).text.lowercaseString hasPrefix:name.lowercaseString]; }, 40)) hit = YES;
+            }
+            if (!hit && [tv.dataSource respondsToSelector:@selector(tableView:titleForHeaderInSection:)]) {
+                NSString *t = [tv.dataSource tableView:tv titleForHeaderInSection:sct];
+                if ([t.lowercaseString hasPrefix:name.lowercaseString]) hit = YES;
+            }
+            if (!hit && [tv numberOfRowsInSection:sct] > 0) {
+                CGRect rr = [tv rectForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:sct]];
+                UITableViewCell *c = [tv cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:sct]];
+                if (!c) { [tv scrollRectToVisible:rr animated:NO]; [tv layoutIfNeeded]; c = [tv cellForRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:sct]]; }
+                if (c && Find(c, ^BOOL(UIView *x) { return [x isKindOfClass:[UILabel class]] && [((UILabel *)x).text.lowercaseString hasPrefix:name.lowercaseString] && ((UILabel *)x).font.pointSize >= 17; }, 300)) hit = YES;
+            }
+            if (hit) {
+                CGRect r = [tv rectForSection:sct];
+                [tv setContentOffset:CGPointMake(0, MAX(top, MIN(r.origin.y - 120, tv.contentSize.height - tv.bounds.size.height + tv.adjustedContentInset.bottom))) animated:YES];
+                gDetDebug = [gDetDebug stringByAppendingFormat:@" %@=s%ld", name, (long)sct];
+                return;
+            }
+        }
+        gDetDebug = [gDetDebug stringByAppendingFormat:@" %@=none", name];
+    }
+}
+@end
+static UIBarButtonItem *GlassTextItem(NSString *t, id target, SEL a) { return [[UIBarButtonItem alloc] initWithTitle:t style:UIBarButtonItemStylePlain target:target action:a]; }
+static void StyleDetails(UIWindow *w) {
+    UIViewController *vc = gTopOn ? DetailsVC(w.rootViewController, 0) : nil;
+    if (!vc) { gDetDebug = @"details: -"; return; }
+    UIView *root = vc.view;
+    CGFloat W = root.bounds.size.width;
+    // the action tiles: call / video / mail / info (found by their labels)
+    NSMutableDictionary *tiles = [NSMutableDictionary dictionary];
+    NSArray *names = @[@"call", @"video", @"mail", @"info", @"message"];
+    NSMutableArray *st = [NSMutableArray arrayWithObject:root]; int g = 0;
+    while (st.count && g++ < 3000) { UIView *v = st.lastObject; [st removeLastObject];
+        if ([v isKindOfClass:[UILabel class]]) {
+            NSString *t = ((UILabel *)v).text.lowercaseString;
+            if (t && [names containsObject:t] && !tiles[t]) {
+                UIView *tile = nil;
+                for (UIView *p = v.superview; p && p != root; p = p.superview) {
+                    CGSize z = p.bounds.size;
+                    if (z.width >= 55 && z.width <= 140 && z.height >= 44 && z.height <= 100) tile = p;
+                    if (z.width > 140) break;
+                }
+                if (tile) tiles[t] = @{@"tile": tile, @"label": v};
+            }
+        }
+        if ([v isKindOfClass:[UIScrollView class]] && v.bounds.size.height > root.bounds.size.height * 0.5) gDetTable = (UIScrollView *)v;
+        [st addObjectsFromArray:v.subviews];
+    }
+    // top bar: Done -> glass back chevron (left), info -> Edit (right)
+    UINavigationItem *ni = vc.navigationItem;
+    if (!objc_getAssociatedObject(ni, "m26det")) {
+        UIBarButtonItem *done = ni.rightBarButtonItem;
+        if (done) {
+            objc_setAssociatedObject(ni, "m26det", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            UIBarButtonItem *back = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"chevron.left" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]] style:UIBarButtonItemStylePlain target:[M26Cancel shared] action:@selector(tap:)];
+            objc_setAssociatedObject(back, "m26orig", done, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            ni.leftBarButtonItem = back;
+            ni.rightBarButtonItem = tiles[@"info"] ? GlassTextItem(@"Edit", [M26Details shared], @selector(edit:)) : nil;
+        }
+    } else if (tiles[@"info"] && ![ni.rightBarButtonItem.title isEqualToString:@"Edit"]) ni.rightBarButtonItem = GlassTextItem(@"Edit", [M26Details shared], @selector(edit:));
+    gInfoTile = tiles[@"info"][@"tile"];
+    NSArray *order = @[@"call", @"video", @"mail"];
+    NSMutableArray *have = [NSMutableArray array];
+    for (NSString *k in order) if (tiles[k]) [have addObject:k];
+    if (!have.count) { gDetDebug = [NSString stringWithFormat:@"details: %@ no tiles", NSStringFromClass([vc class])]; return; }
+    UIView *row = ((NSDictionary *)tiles[have[0]])[@"tile"];
+    row = row.superview;
+    // tile row band (untransformed): top T, bottom B, in row coords
+    CGFloat T = CGFLOAT_MAX, B = 0;
+    for (NSString *k in tiles) { UIView *t = tiles[k][@"tile"]; if (t.superview != row) continue; T = MIN(T, t.center.y - t.bounds.size.height / 2); B = MAX(B, t.center.y + t.bounds.size.height / 2); }
+    CGFloat d = 50, gap = 74;
+    CGPoint rc = [root convertPoint:CGPointMake(W / 2, 0) toView:row];
+    CGFloat cx0 = rc.x - gap * (have.count - 1) / 2.0, cy = T + 4;
+    BOOL dark = IsDark(root);
+    for (NSString *k in tiles) {
+        UIView *t = tiles[k][@"tile"]; UILabel *lb = tiles[k][@"label"];
+        if (t.superview != row) continue;
+        // no gray tile, no label
+        t.backgroundColor = UIColor.clearColor; t.layer.borderWidth = 0;
+        if (lb.alpha > 0) lb.alpha = 0;
+        NSMutableArray *ss = [NSMutableArray arrayWithArray:t.subviews]; int gg = 0;
+        while (ss.count && gg++ < 60) { UIView *x = ss.lastObject; [ss removeLastObject];
+            if (x.tag == DGLASS_TAG) continue;
+            if (![x isKindOfClass:[UILabel class]] && ![x isKindOfClass:[UIImageView class]] && x.bounds.size.width >= t.bounds.size.width * 0.8 && x.bounds.size.height >= t.bounds.size.height * 0.7) {
+                if ([x isKindOfClass:[UIVisualEffectView class]]) { if (x.alpha > 0) x.alpha = 0; }
+                else x.backgroundColor = UIColor.clearColor;
+            }
+            [ss addObjectsFromArray:x.subviews]; }
+        if ([k isEqualToString:@"info"] || [k isEqualToString:@"message"]) {
+            if (t.alpha > 0) t.alpha = 0;
+            t.userInteractionEnabled = [k isEqualToString:@"info"];
+            if (!CGAffineTransformIsIdentity(t.transform)) t.transform = CGAffineTransformIdentity;
+            continue;
+        }
+        UIImageView *icon = (UIImageView *)Find(t, ^BOOL(UIView *x) { return [x isKindOfClass:[UIImageView class]] && x.tag != DGLASS_TAG && ((UIImageView *)x).image && x.bounds.size.width < 50; }, 40);
+        CGPoint ic = icon ? [icon convertPoint:CGPointMake(icon.bounds.size.width / 2, icon.bounds.size.height / 2) toView:t] : CGPointMake(t.bounds.size.width / 2, t.bounds.size.height / 2 - 8);
+        // a glass circle behind the icon
+        UIVisualEffectView *gl = (UIVisualEffectView *)[t viewWithTag:DGLASS_TAG];
+        if (!gl) { gl = GlassView(t); gl.tag = DGLASS_TAG; [t insertSubview:gl atIndex:0]; }
+        CGRect gf = CGRectMake(ic.x - d / 2, ic.y - d / 2, d, d);
+        if (!CGRectEqualToRect(gl.frame, gf)) { gl.frame = gf; gl.layer.cornerRadius = d / 2; RimFit(gl, dark); }
+        BOOL off = [lb.textColor isEqual:UIColor.secondaryLabelColor] || lb.textColor == nil || ({ CGFloat r0, g0, b0, a0; [lb.textColor getRed:&r0 green:&g0 blue:&b0 alpha:&a0]; fabs(r0 - g0) < 0.05 && fabs(g0 - b0) < 0.05; });
+        icon.tintColor = [UIColor colorWithWhite:dark ? 1 : 0 alpha:off ? 0.35 : 1];
+        if (icon.image.renderingMode != UIImageRenderingModeAlwaysTemplate) icon.image = [icon.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        // centered, three in a row, a bit higher
+        NSInteger i = [have indexOfObject:k];
+        CGFloat ox = t.center.x - t.bounds.size.width / 2 + ic.x, oy = t.center.y - t.bounds.size.height / 2 + ic.y;
+        CGAffineTransform want = CGAffineTransformMakeTranslation(cx0 + gap * i - ox, cy - oy);
+        if (!CGAffineTransformEqualToTransform(t.transform, want)) t.transform = want;
+    }
+    // other gray backgrounds behind the tiles in that row
+    for (UIView *x in row.subviews) {
+        BOOL isTile = NO; for (NSString *k in tiles) if (tiles[k][@"tile"] == x) isTile = YES;
+        if (isTile || x.tag == DTABS_TAG) continue;
+        CGFloat top = x.center.y - x.bounds.size.height / 2;
+        if (fabs(top - T) < 4 && x.bounds.size.height <= B - T + 4 && x.bounds.size.width < 160) { if (x.alpha > 0) x.alpha = 0; }
+    }
+    // tabs: Info / Backgrounds / Photos / Links
+    UIView *tabs = [row viewWithTag:DTABS_TAG];
+    NSArray *tn = @[@"Info", @"Backgrounds", @"Photos", @"Links"];
+    if (!tabs) {
+        tabs = [UIView new]; tabs.tag = DTABS_TAG;
+        UIVisualEffectView *sel = GlassView(row); sel.tag = 99; [tabs addSubview:sel];
+        for (NSString *n in tn) {
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+            [b setTitle:n forState:UIControlStateNormal];
+            b.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+            [b addTarget:[M26Details shared] action:@selector(tab:) forControlEvents:UIControlEventTouchUpInside];
+            [tabs addSubview:b];
+        }
+        [row addSubview:tabs];
+    }
+    CGFloat th = 34, x = 0;
+    NSMutableArray *bws = [NSMutableArray array];
+    for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]]) { CGFloat bw = [((UIButton *)b).titleLabel sizeThatFits:CGSizeMake(300, 40)].width + 28; [bws addObject:@(bw)]; }
+    CGFloat total = 0; for (NSNumber *n in bws) total += n.doubleValue;
+    total += 4 * (bws.count - 1);
+    CGRect tf = CGRectMake(rc.x - total / 2, B - 10, total, th);
+    if (!CGRectEqualToRect(tabs.frame, tf)) tabs.frame = tf;
+    int bi = 0;
+    for (UIView *b in tabs.subviews) if ([b isKindOfClass:[UIButton class]]) {
+        CGFloat bw = [bws[bi++] doubleValue];
+        CGRect bf = CGRectMake(x, 0, bw, th); x += bw + 4;
+        if (!CGRectEqualToRect(b.frame, bf)) b.frame = bf;
+        BOOL on = [[(UIButton *)b titleForState:UIControlStateNormal] isEqualToString:gDetTab];
+        [(UIButton *)b setTitleColor:on ? Ink(row) : [UIColor colorWithWhite:dark ? 1 : 0 alpha:0.55] forState:UIControlStateNormal];
+        if (on) {
+            UIView *sel = [tabs viewWithTag:99];
+            if (!CGRectEqualToRect(sel.frame, bf)) { [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0 options:0 animations:^{ sel.frame = bf; } completion:nil]; sel.layer.cornerRadius = th / 2; RimFit(sel, dark); }
+        }
+    }
+    if (row.subviews.lastObject != tabs) [row bringSubviewToFront:tabs];
+    for (UIView *p = row; p && p != root; p = p.superview) if (p.clipsToBounds && p.bounds.size.height < 300) p.clipsToBounds = NO;
+    gDetDebug = [NSString stringWithFormat:@"details: %@ tiles=%@ T=%.0f B=%.0f table=%@", NSStringFromClass([vc class]), [tiles.allKeys componentsJoinedByString:@","], T, B, gDetTable ? NSStringFromClass([gDetTable class]) : @"-"];
+}
+
 #pragma mark - debug + tick
 
 @interface M26Debug : NSObject <UIGestureRecognizerDelegate>
@@ -1762,6 +1978,7 @@ static void Tick(void) {
     @try { StyleNav(w); } @catch (__unused id e) {}
     @try { StyleSearchPill(w); } @catch (__unused id e) {}
     @try { InstallSwipe(w); } @catch (__unused id e) {}
+    @try { StyleDetails(w); } @catch (__unused id e) {}
     if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
     UIView *e = gEntry;
@@ -1789,8 +2006,9 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.13 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.11.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
+    l.text = [l.text stringByAppendingFormat:@"\n %@", gDetDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
         NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
