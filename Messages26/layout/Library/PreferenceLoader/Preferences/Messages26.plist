@@ -61,6 +61,18 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
+			<key>footerText</key><string>A glass Search pill and compose button at the bottom of your conversation list, like iOS 26.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Bottom Search Pill</string>
+			<key>key</key><string>searchpill</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.nano.messages26</string>
+			<key>PostNotification</key><string>com.nano.messages26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
 			<key>footerText</key><string>Shows what Messages26 finds on screen. Made by nano.</string>
 		</dict>
 		<dict>

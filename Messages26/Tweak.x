@@ -1,4 +1,5 @@
-// Messages26 0.8.4 - made by nano
+// Messages26 0.9.0 - made by nano
+// 0.9.0: iOS 26 search pill + compose circle at the bottom of the conversation list
 // 0.8.4: pill always pulled back after reopening a chat; mic tap goes to the visible button
 // 0.8.3: field row placed from where it's drawn now (corrects itself); mic / send found by position and kept in the pill
 // 0.8.2: the bar never gets stuck "waiting" (pill, + and glass are back); no empty glass circles
@@ -54,7 +55,7 @@
 #define PILL_TAG  0x4D323649
 
 #define DOM CFSTR("com.nano.messages26")
-static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gPrefDebug = NO;
+static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gPrefDebug = NO;
 static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
     id v = file[key];
     if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM); if (cf) v = (__bridge_transfer id)cf; }
@@ -74,6 +75,7 @@ static void LoadPrefs(void) {
     gBarOn = gOn && PrefBool(file, @"bar", YES);
     gMenuOn = gOn && PrefBool(file, @"menu", YES);
     gTopOn = gOn && PrefBool(file, @"topbar", YES);
+    gSearchOn = gOn && PrefBool(file, @"searchpill", YES);
     gPrefDebug = PrefBool(file, @"debug", NO);
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
@@ -1067,6 +1069,139 @@ static void StyleNav(UIWindow *w) {
     gNavDebug = [NSString stringWithFormat:@"nav chat=%d bars=%d items: %@", chat, bars, [found componentsJoinedByString:@" "]];
 }
 
+#pragma mark - search pill (conversation list)
+
+#define SEARCH_TAG  0x4D323653
+#define SCOMPOSE_TAG 0x4D323643
+static NSString *gSearchDebug = @"";
+static UIViewController *ListVC(UIViewController *vc, int depth) {
+    if (!vc || depth > 12) return nil;
+    if ([NSStringFromClass([vc class]) containsString:@"ConversationList"] && vc.viewIfLoaded.window) return vc;
+    for (UIViewController *c in vc.childViewControllers) { UIViewController *r = ListVC(c, depth + 1); if (r) return r; }
+    return nil;
+}
+static BOOL IsComposeItem(UIBarButtonItem *it) {
+    NSInteger sys = -1; @try { sys = [[it valueForKey:@"systemItem"] integerValue]; } @catch (__unused id e) {}
+    NSString *a = it.action ? NSStringFromSelector(it.action).lowercaseString : @"";
+    return sys == UIBarButtonSystemItemCompose || [a containsString:@"compose"] || [a containsString:@"newmessage"];
+}
+@interface M26Search : NSObject
++ (instancetype)shared;
+@property (nonatomic, weak) UIViewController *list;
+@property (nonatomic, strong) UIBarButtonItem *compose;   // the top compose button we moved down
+@end
+@implementation M26Search
++ (instancetype)shared { static M26Search *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Search new]; }); return t; }
+- (void)down:(UIView *)b { [UIView animateWithDuration:0.18 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformMakeScale(1.06, 1.06); } completion:nil]; }
+- (void)up:(UIView *)b { [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil]; }
+- (void)search:(UIView *)b {
+    [self up:b];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    UIViewController *vc = self.list;
+    UISearchController *sc = vc.navigationItem.searchController;
+    if (!sc) { gSearchDebug = @"search: no search controller"; return; }
+    sc.active = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [sc.searchBar becomeFirstResponder]; });
+}
+- (void)composeTap:(UIView *)b {
+    [self up:b];
+    UIBarButtonItem *it = self.compose;
+    if (it.target && it.action) ((void (*)(id, SEL, id))objc_msgSend)(it.target, it.action, it);
+    else if (it.action) [UIApplication.sharedApplication sendAction:it.action to:nil from:it forEvent:nil];
+}
+@end
+static UIButton *GlassCapsule(NSInteger tag, SEL action, SEL down) {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.tag = tag; b.layer.cornerCurve = kCACornerCurveContinuous;
+    b.layer.shadowColor = UIColor.blackColor.CGColor; b.layer.shadowOpacity = 0.35; b.layer.shadowRadius = 14; b.layer.shadowOffset = CGSizeMake(0, 6);
+    [b addTarget:[M26Search shared] action:action forControlEvents:UIControlEventTouchUpInside];
+    [b addTarget:[M26Search shared] action:down forControlEvents:UIControlEventTouchDown];
+    [b addTarget:[M26Search shared] action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    return b;
+}
+static void PaintCapsule(UIButton *b, BOOL dark) {
+    b.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.97 alpha:0.97];
+    b.layer.shadowOpacity = dark ? 0.35 : 0.12;
+    b.layer.cornerRadius = b.bounds.size.height / 2;
+    RimFit(b, dark);
+}
+static void StyleSearchPill(UIWindow *w) {
+    UIButton *pill = (UIButton *)[w viewWithTag:SEARCH_TAG], *comp = (UIButton *)[w viewWithTag:SCOMPOSE_TAG];
+    M26Search *S = [M26Search shared];
+    UIViewController *vc = gSearchOn ? ListVC(w.rootViewController, 0) : nil;
+    UINavigationController *nc = vc.navigationController;
+    BOOL show = vc && (!nc || nc.topViewController == vc) && !vc.presentedViewController && !vc.isEditing && !gEntry.window;
+    UISearchController *sc = vc.navigationItem.searchController;
+    if (sc.active) show = NO;
+    // the top compose button moves down next to the pill (and comes back when off)
+    UINavigationItem *ni = vc.navigationItem ?: S.list.navigationItem;
+    if (ni) {
+        NSMutableArray *keep = [NSMutableArray array]; BOOL removed = NO;
+        for (UIBarButtonItem *it in ni.rightBarButtonItems) { if (gSearchOn && IsComposeItem(it)) { S.compose = it; removed = YES; } else [keep addObject:it]; }
+        if (removed) ni.rightBarButtonItems = keep;
+        if (!gSearchOn && S.compose && ![ni.rightBarButtonItems containsObject:S.compose]) { ni.rightBarButtonItems = [@[S.compose] arrayByAddingObjectsFromArray:ni.rightBarButtonItems ?: @[]]; S.compose = nil; }
+    }
+    // glass left behind by a button that's gone
+    for (UIView *v in [gStyled allObjects]) if (!v.window) { [objc_getAssociatedObject(v, &kGlassKey) removeFromSuperview]; objc_setAssociatedObject(v, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [gStyled removeObject:v]; }
+    if (vc) S.list = vc;
+    gSearchDebug = [NSString stringWithFormat:@"search: list=%@ show=%d sc=%d compose=%d", vc ? NSStringFromClass([vc class]) : @"-", show, sc != nil, S.compose != nil];
+    if (!gSearchOn) { [pill removeFromSuperview]; [comp removeFromSuperview]; return; }
+    BOOL dark = IsDark(w);
+    if (!pill) {
+        pill = GlassCapsule(SEARCH_TAG, @selector(search:), @selector(down:));
+        UIImageView *mag = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightMedium]]];
+        mag.tag = 1; mag.contentMode = UIViewContentModeCenter; mag.userInteractionEnabled = NO; [pill addSubview:mag];
+        UILabel *t = [UILabel new]; t.tag = 2; t.text = @"Search"; t.font = [UIFont systemFontOfSize:19]; t.userInteractionEnabled = NO; [pill addSubview:t];
+        UIImageView *mic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"mic" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightRegular]]];
+        mic.tag = 3; mic.contentMode = UIViewContentModeCenter; mic.userInteractionEnabled = NO; [pill addSubview:mic];
+        pill.alpha = 0; [w addSubview:pill];
+    }
+    if (!comp) {
+        comp = GlassCapsule(SCOMPOSE_TAG, @selector(composeTap:), @selector(down:));
+        [comp setImage:[UIImage systemImageNamed:@"square.and.pencil" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:21 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
+        comp.alpha = 0; [w addSubview:comp];
+    }
+    CGFloat W = w.bounds.size.width, H = w.bounds.size.height, h = 53, m = 30, gap = 14;
+    CGFloat y = H - MAX(w.safeAreaInsets.bottom, 0) + 3 - h;
+    if (w.safeAreaInsets.bottom < 10) y = H - 16 - h;
+    CGRect cf = CGRectMake(W - m - h, y, h, h), pf = CGRectMake(m, y, CGRectGetMinX(cf) - gap - m, h);
+    if (!S.compose) pf.size.width = W - 2 * m;
+    if (!CGRectEqualToRect(pill.frame, pf) && CGAffineTransformIsIdentity(pill.transform)) {
+        pill.frame = pf;
+        [pill viewWithTag:1].frame = CGRectMake(14, 0, 28, h);
+        [pill viewWithTag:2].frame = CGRectMake(50, 0, pf.size.width - 100, h);
+        [pill viewWithTag:3].frame = CGRectMake(pf.size.width - 46, 0, 30, h);
+    }
+    if (!CGRectEqualToRect(comp.frame, cf) && CGAffineTransformIsIdentity(comp.transform)) comp.frame = cf;
+    UIColor *ink = Ink(w), *dim = [UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.55 : 0.45];
+    ((UIImageView *)[pill viewWithTag:1]).tintColor = ink;
+    ((UILabel *)[pill viewWithTag:2]).textColor = dim;
+    ((UIImageView *)[pill viewWithTag:3]).tintColor = ink;
+    comp.tintColor = ink;
+    if (objc_getAssociatedObject(pill, "m26dk") == nil || [objc_getAssociatedObject(pill, "m26dk") boolValue] != dark || !CGSizeEqualToSize([objc_getAssociatedObject(pill, "m26sz") CGSizeValue], pill.bounds.size)) {
+        objc_setAssociatedObject(pill, "m26dk", @(dark), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(pill, "m26sz", [NSValue valueWithCGSize:pill.bounds.size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        PaintCapsule(pill, dark); PaintCapsule(comp, dark);
+    }
+    BOOL showComp = show && S.compose != nil;
+    for (UIView *v in @[pill, comp]) {
+        BOOL on = v == pill ? show : showComp;
+        CGFloat a = on ? 1 : 0;
+        v.userInteractionEnabled = on;
+        if (fabs(v.alpha - a) > 0.01 && !v.layer.animationKeys.count) [UIView animateWithDuration:0.25 animations:^{ v.alpha = a; }];
+        if (on && w.subviews.lastObject != v && v.superview == w) [w bringSubviewToFront:v];
+    }
+    // rows can scroll out from under the pill
+    if (vc && show) {
+        UIScrollView *list = (UIScrollView *)Find(vc.view, ^BOOL(UIView *v) { return [v isKindOfClass:[UIScrollView class]] && v.bounds.size.height > H * 0.5; }, 300);
+        CGFloat want = h + 16;
+        if (list && fabs(list.contentInset.bottom - want) > 1 && objc_getAssociatedObject(list, "m26ins") == nil) {
+            objc_setAssociatedObject(list, "m26ins", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            UIEdgeInsets in = list.contentInset; in.bottom += want; list.contentInset = in;
+        }
+    }
+}
+
 #pragma mark - debug + tick
 
 @interface M26Debug : NSObject <UIGestureRecognizerDelegate>
@@ -1093,6 +1228,7 @@ static void Tick(void) {
         [w addGestureRecognizer:lp];
     }
     @try { StyleNav(w); } @catch (__unused id e) {}
+    @try { StyleSearchPill(w); } @catch (__unused id e) {}
     if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
     UIView *e = gEntry;
@@ -1119,7 +1255,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.8.4 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.9.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
