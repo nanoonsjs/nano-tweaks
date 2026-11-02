@@ -1,4 +1,5 @@
-// Messages26 0.7.9 - made by nano
+// Messages26 0.8.0 - made by nano
+// 0.8.0: send / mic always inside the pill (also with the keyboard up), no floating pill after the keyboard closes
 // 0.7.9: taps on the pill go straight to the text box (opens the keyboard); mic / send no longer cut off
 // 0.7.8: taps reach the moved text box from inside the bar too; see-through layers no longer catch taps; the mic's own effect stays
 // 0.7.7: the message field takes taps again and the mic is back; iOS 26 rim on the pill and +
@@ -526,10 +527,10 @@ static void StyleEntry(UIView *entry) {
     BOOL dark = IsDark(entry);
     // app strip hidden (its apps live in the + menu); the field row moves down into its place
     CGFloat shift = 0;
-    if (strip && gMenuOn) {
+    if (gMenuOn) {
         if (strip.alpha > 0) strip.alpha = 0;
         if (strip.userInteractionEnabled) strip.userInteractionEnabled = NO;
-        CGRect sf = [strip convertRect:strip.bounds toView:entry];
+        CGRect sf = strip ? [strip convertRect:strip.bounds toView:entry] : CGRectZero;
         CGRect cf0 = CGRectApplyAffineTransform(container.frame, CGAffineTransformInvert(container.transform));
         (void)sf; (void)cf0;
         container = nil;
@@ -545,6 +546,12 @@ static void StyleEntry(UIView *entry) {
         NSMutableArray *row = [NSMutableArray arrayWithObject:field];
         for (UIView *v in @[field]) v.transform = CGAffineTransformIdentity;
         CGRect fu = [field convertRect:field.bounds toView:entry];
+        // mid-animation (keyboard going away) the text box is somewhere odd: wait
+        if (CGRectGetMinY(fu) < -10 || CGRectGetMaxY(fu) > entry.bounds.size.height + 10) {
+            gDebug = [NSString stringWithFormat:@"waiting: field at %.0f", CGRectGetMinY(fu)];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [entry setNeedsLayout]; });
+            return;
+        }
         NSMutableArray *cs = [NSMutableArray arrayWithArray:entry.subviews]; int gc = 0;
         while (cs.count && gc++ < 300) { UIView *v = cs.lastObject; [cs removeLastObject];
             if (v == field || v.tag == PLUS_TAG || v.tag == PILL_TAG || v == strip || [v isDescendantOfView:field]) continue;
@@ -558,6 +565,7 @@ static void StyleEntry(UIView *entry) {
         // All in the bar's own space (screen math gave wrong numbers while the bar
         // moves between windows): the text box's bottom goes to a fixed place.
         CGFloat wantBottom = kbUp ? entry.bounds.size.height - 10 : entry.bounds.size.height - 43;
+        if (!strip) wantBottom = CGRectGetMaxY(fu);   // no app row: Messages' own place is right
         shift = wantBottom - CGRectGetMaxY(fu);
         if (fabs(shift) > 200) shift = 0;
         gKbTop = kbUp ? CGRectGetMaxY(ef) : 0;
@@ -1073,6 +1081,7 @@ static void Tick(void) {
     if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
     UIView *e = gEntry;
+    if (e.window) { @try { StyleEntry(e); } @catch (__unused id ex) {} }
     if (!e.window) {
         for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
             if (![sc isKindOfClass:[UIWindowScene class]]) continue;
@@ -1091,7 +1100,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.7.9 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.8.0 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
