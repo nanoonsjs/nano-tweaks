@@ -1,4 +1,5 @@
-// Messages26 0.18.0 - made by nano
+// Messages26 0.18.1 - made by nano
+// 0.18.1: 3D tapbacks (glossy emoji that turns) and 3D reaction bursts
 // 0.18.0: animations removed; Spelling Fix, Mood Detection, Reaction Effects (+sounds), Saved Messages, Message Reminders
 // 0.17.1: search + smart badge removed; Message Animations (pick a send and a receive style)
 // 0.17.0: Search in Chat (tap the name on the contact page), Smart Unread Badge
@@ -4083,8 +4084,13 @@ static void ReactBurst(UIView *v, NSString *emoji) {
     CGRect r = [v convertRect:v.bounds toView:w];
     CGPoint c = CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r));
     UIView *host = [[UIView alloc] initWithFrame:w.bounds]; host.userInteractionEnabled = NO; [w addSubview:host];
+    CATransform3D persp = CATransform3DIdentity; persp.m34 = -1.0 / 420; host.layer.sublayerTransform = persp;
     for (int i = 0; i < 9; i++) {
-        CALayer *l = EmojiLayer(emoji, 26 + arc4random_uniform(14), c); [host.layer addSublayer:l];
+        CALayer *l = EmojiLayer(emoji, 28 + arc4random_uniform(16), c); [host.layer addSublayer:l];
+        l.contents = (id)EmojiImage(emoji, 160).CGImage;
+        l.shadowColor = UIColor.blackColor.CGColor; l.shadowOpacity = 0.45; l.shadowRadius = 6; l.shadowOffset = CGSizeMake(0, 6);
+        CABasicAnimation *ry = [CABasicAnimation animationWithKeyPath:@"transform.rotation.y"]; ry.fromValue = @0; ry.toValue = @(M_PI * 2 * (i % 2 ? 1 : -1)); ry.duration = 1.1; ry.beginTime = CACurrentMediaTime() + i * 0.03; ry.fillMode = kCAFillModeBackwards;
+        [l addAnimation:ry forKey:@"ry"];
         CGFloat ang = -M_PI_2 + ((double)arc4random_uniform(1000) / 1000.0 - 0.5) * 1.8, dist = 60 + arc4random_uniform(90);
         CGPoint to = CGPointMake(c.x + cos(ang) * dist, c.y + sin(ang) * dist - 40);
         CAAnimationGroup *g = [CAAnimationGroup animation];
@@ -4100,8 +4106,40 @@ static void ReactBurst(UIView *v, NSString *emoji) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [host removeFromSuperview]; });
 }
 static void (*origAckCfg)(id, SEL, id);
+// the tapback on the bubble: Apple's flat glyph becomes a glossy 3D emoji that gently turns
+static void Ack3D(UIView *b, id item) {
+    CALayer *mine = nil; for (CALayer *x in b.layer.sublayers) if ([x.name isEqualToString:@"m26ack3d"]) mine = x;
+    long long tp = 0; @try { tp = [[item valueForKey:@"latestAcknowledgmentType"] longLongValue]; } @catch (__unused id e) {}
+    UIImageView *glyph = nil; CGFloat best = 0;
+    NSMutableArray *st = [NSMutableArray arrayWithArray:b.subviews]; int g = 0;
+    while (st.count && g++ < 40) { UIView *v = st.lastObject; [st removeLastObject];
+        if ([v isKindOfClass:[UIImageView class]] && v.bounds.size.width < b.bounds.size.width * 0.9 && v.bounds.size.width * v.bounds.size.height > best) { best = v.bounds.size.width * v.bounds.size.height; glyph = (UIImageView *)v; }
+        [st addObjectsFromArray:v.subviews]; }
+    if (!Opt(@"react") || !glyph) { [mine removeFromSuperlayer]; if (glyph) glyph.alpha = 1; return; }
+    glyph.alpha = 0;
+    CGRect gr = [glyph convertRect:glyph.bounds toView:b];
+    CGFloat d = MAX(gr.size.width, gr.size.height) * 1.25;
+    NSString *em = AckEmoji(tp);
+    if (!mine) {
+        mine = [CALayer layer]; mine.name = @"m26ack3d"; mine.contentsGravity = kCAGravityResizeAspect;
+        mine.shadowColor = UIColor.blackColor.CGColor; mine.shadowOpacity = 0.4; mine.shadowRadius = 2.5; mine.shadowOffset = CGSizeMake(0, 2);
+        [b.layer addSublayer:mine];
+        CATransform3D p = CATransform3DIdentity; p.m34 = -1.0 / 120; b.layer.sublayerTransform = p;
+        CAKeyframeAnimation *wob = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.y"]; wob.values = @[@0, @0.55, @0, @-0.55, @0]; wob.duration = 3.2; wob.repeatCount = HUGE_VALF; wob.removedOnCompletion = NO;
+        wob.timingFunctions = @[[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
+        [mine addAnimation:wob forKey:@"wob"];
+    }
+    if (![objc_getAssociatedObject(b, "m26ackem") isEqual:em]) { objc_setAssociatedObject(b, "m26ackem", em, OBJC_ASSOCIATION_RETAIN_NONATOMIC); mine.contents = (id)EmojiImage(em, 120).CGImage; }
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    mine.bounds = CGRectMake(0, 0, d, d); mine.position = CGPointMake(CGRectGetMidX(gr), CGRectGetMidY(gr));
+    [CATransaction commit];
+}
+static void (*origAckLayout)(id, SEL);
+static void AckLayout(UIView *self, SEL _cmd) { origAckLayout(self, _cmd); id it = objc_getAssociatedObject(self, "m26ackitem"); @try { Ack3D(self, it); } @catch (__unused id e) {} }
 static void AckCfg(UIView *self, SEL _cmd, id item) {
     origAckCfg(self, _cmd, item);
+    objc_setAssociatedObject(self, "m26ackitem", item, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    @try { Ack3D(self, item); } @catch (__unused id e) {}
     if (!Opt(@"react")) return;
     @try {
         if (![gAckChat isEqualToString:gChatKeyNow]) { gAckChat = gChatKeyNow; gAckSeen = [NSMutableDictionary dictionary]; gAckReadyAt = [NSDate date].timeIntervalSince1970 + 1.5; }
@@ -4555,7 +4593,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -4654,7 +4692,8 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         { Class CC = NSClassFromString(@"CKChatController"); SEL mm = NSSelectorFromString(@"_menuForChatItem:");
           if (CC && class_getInstanceMethod(CC, mm)) MSHookMessageEx(CC, mm, (IMP)MsgMenu, (IMP *)&origMsgMenu);
           Class AB = NSClassFromString(@"CKAggregateAcknowledgmentBalloonView"); SEL ac = NSSelectorFromString(@"configureForAggregateAcknowledgmentChatItem:");
-          if (AB && class_getInstanceMethod(AB, ac)) MSHookMessageEx(AB, ac, (IMP)AckCfg, (IMP *)&origAckCfg); }
+          if (AB && class_getInstanceMethod(AB, ac)) MSHookMessageEx(AB, ac, (IMP)AckCfg, (IMP *)&origAckCfg);
+          if (AB) MSHookMessageEx(AB, @selector(layoutSubviews), (IMP)AckLayout, (IMP *)&origAckLayout); }
         { Class TC = NSClassFromString(@"CKTranscriptCollectionViewController"); SEL wd = @selector(collectionView:willDisplayCell:forItemAtIndexPath:);
           if (TC && class_getInstanceMethod(TC, wd)) MSHookMessageEx(TC, wd, (IMP)WillDisplay, (IMP *)&origWillDisplay); }
         { SEL cm = @selector(collectionView:contextMenuConfigurationForItemAtIndexPath:point:);
