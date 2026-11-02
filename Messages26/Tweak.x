@@ -1,4 +1,5 @@
-// Messages26 1.0 - made by nano
+// Messages26 1.0.1 - made by nano
+// 1.0.1: contact name always shows in its capsule at the top of a chat; name + capsule a little lower
 // 1.0: first public release - iOS 26 Messages redesign plus custom features (all in the Messages26 settings)
 // 0.18.14: jelly bounce on search / new message / settings / Edit / + pills, iMessage box same glass as search, smoother + menu, iOS 26 settings
 // 0.18.13: tabs centered when there are only a few; moved photo no longer cut off at the top
@@ -960,6 +961,18 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     if (g.layer.animationKeys.count || g.alpha < 1) return;
     if (!CGRectEqualToRect(g.frame, want)) { g.frame = want; g.layer.cornerRadius = MIN(want.size.width, want.size.height) / 2; RimFit(g, IsDark(v)); }
     g.hidden = v.hidden || v.alpha < 0.05 || gDrewNothing;
+    // the glass sits inside a bare label: a label draws its text under its own subviews,
+    // so the capsule hid the name. Draw the name again on top of the glass.
+    if (inside && [v isKindOfClass:[UILabel class]] && [g isKindOfClass:[UIVisualEffectView class]]) {
+        UILabel *src = (UILabel *)v, *m = [((UIVisualEffectView *)g).contentView viewWithTag:0x4D3236AA];
+        if (!m) { m = [UILabel new]; m.tag = 0x4D3236AA; m.userInteractionEnabled = NO; [((UIVisualEffectView *)g).contentView addSubview:m]; }
+        if (src.attributedText.length) { if (![m.attributedText isEqualToAttributedString:src.attributedText]) m.attributedText = src.attributedText; }
+        else { m.text = src.text; m.font = src.font; m.textColor = src.textColor; }
+        m.textAlignment = src.textAlignment; m.lineBreakMode = src.lineBreakMode; m.numberOfLines = src.numberOfLines;
+        CGRect mf = CGRectOffset(src.bounds, -g.frame.origin.x, -g.frame.origin.y);
+        if (!CGRectEqualToRect(m.frame, mf)) m.frame = mf;
+        m.hidden = !src.text.length;
+    }
     for (UIView *p = host; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
 }
 static NSHashTable *gFaded;   // bar backgrounds we hid
@@ -1311,7 +1324,7 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     CGFloat avC = CGRectGetMidY(ar);
     CGFloat circleBottom = avC + s * (circBot - a / 2) + tyA;
     CGFloat nC = CGRectGetMidY(nr);
-    CGFloat tyN = circleBottom - 5 - nC + s * n / 2;
+    CGFloat tyN = circleBottom + 5 - nC + s * n / 2;   // a little below the photo
     CATransform3D ta = CATransform3DScale(CATransform3DMakeTranslation(0, tyA, 0), s, s, 1);
     // keep the name centered on screen
     CGFloat tx = 0;
@@ -5190,7 +5203,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.0.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
