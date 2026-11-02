@@ -1,4 +1,5 @@
-// Messages26 0.11.3 - made by nano
+// Messages26 0.11.4 - made by nano
+// 0.11.4: no gray boxes (header, media, cells); one glass card per Info group; Shared-with-You note gone
 // 0.11.3: tabs switch the whole page; no Shared-with-You note, no iCloud footer; header see-through
 // 0.11.2: tabs no longer crash; tabs clear of the cards; glass cards on a black page
 // 0.11.1: tabs really split the page (Info / Photos / Links / Documents / Collaboration); Edit presses info
@@ -1848,7 +1849,7 @@ static void ReloadDetailSections(void) {
 static BOOL HideRowSection(NSInteger sct) {
     if (!gTopOn || sct == gHeadRowSection) return NO;
     BOOL info = [gDetTab isEqualToString:@"Info"];
-    if (sct == gChildRowSection) return info;
+    if (sct == gChildRowSection) return info || [gDetTab isEqualToString:@"Backgrounds"];
     return !info && gChildRowSection >= 0;
 }
 static BOOL IsSharedFooter(UIView *v) { return v && Find(v, ^BOOL(UIView *y) { return [y isKindOfClass:[UILabel class]] && [((UILabel *)y).text hasPrefix:@"Content shared"]; }, 30) != nil; }
@@ -1866,6 +1867,8 @@ static id (*origHeadV)(id, SEL, id, NSInteger);
 static id DetHeadV(id self, SEL _cmd, UITableView *tv, NSInteger sct) { return HideRowSection(sct) ? nil : origHeadV(self, _cmd, tv, sct); }
 static CGFloat (*origHeadH)(id, SEL, id, NSInteger);
 static CGFloat DetHeadH(id self, SEL _cmd, UITableView *tv, NSInteger sct) { return HideRowSection(sct) ? 0.01 : origHeadH(self, _cmd, tv, sct); }
+static NSString *(*origFootT)(id, SEL, id, NSInteger);
+static NSString *DetFootT(id self, SEL _cmd, UITableView *tv, NSInteger sct) { if (HideRowSection(sct)) return nil; NSString *t = origFootT(self, _cmd, tv, sct); return [t hasPrefix:@"Content shared"] ? nil : t; }
 static void HookDetailsTable(void) {
     Class D = NSClassFromString(@"CKDetailsController");
     if (!D) return;
@@ -1875,6 +1878,7 @@ static void HookDetailsTable(void) {
     DH(@selector(tableView:heightForFooterInSection:), DetFootH, origFootH);
     DH(@selector(tableView:viewForHeaderInSection:), DetHeadV, origHeadV);
     DH(@selector(tableView:heightForHeaderInSection:), DetHeadH, origHeadH);
+    DH(@selector(tableView:titleForFooterInSection:), DetFootT, origFootT);
 }
 @interface M26Details : NSObject
 + (instancetype)shared;
@@ -1933,32 +1937,44 @@ static void CardGlass(UIView *root) {
         }
         if (root.subviews.firstObject != glow) [root sendSubviewToBack:glow];
     }
-    // cards
-    NSMutableArray *rects = [NSMutableArray array];
+    // no gray anywhere (cell backgrounds, card layers, the header box, media boxes)
     NSMutableArray *st = [NSMutableArray arrayWithArray:sc.subviews]; int g = 0;
-    while (st.count && g++ < 4000) { UIView *v = st.lastObject; [st removeLastObject];
-        if (v.tag == DPLATE_TAG || v.hidden || v.alpha < 0.05) continue;
-        CGSize z = v.bounds.size;
-        BOOL marked = objc_getAssociatedObject(v, &kCardKey) != nil;
-        if (z.width >= W - 100 && z.width <= W - 8 && z.height >= 30 && z.height < 900 && (marked || CardColor(v.backgroundColor))) {
-            if (!marked) objc_setAssociatedObject(v, &kCardKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            if (v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) > 0) v.backgroundColor = UIColor.clearColor;
-            UIView *it = gInfoTile;
-            BOOL head = it && [it isDescendantOfView:v];
-            if (v.window && !head) [rects addObject:[NSValue valueWithCGRect:[v convertRect:v.bounds toView:sc]]];
-            [st addObjectsFromArray:v.subviews];
-            continue;
+    while (st.count && g++ < 5000) { UIView *v = st.lastObject; [st removeLastObject];
+        if (v.tag == DPLATE_TAG || [v isKindOfClass:[UIImageView class]] || [v isKindOfClass:[UILabel class]] || [v isKindOfClass:[UIControl class]]) continue;
+        if (@available(iOS 14.0, *)) if ([v isKindOfClass:[UITableViewCell class]]) {
+            UITableViewCell *c = (UITableViewCell *)v;
+            if (!objc_getAssociatedObject(c, &kCardKey)) { objc_setAssociatedObject(c, &kCardKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); c.backgroundConfiguration = [UIBackgroundConfiguration clearConfiguration]; }
+            if (c.backgroundColor && CGColorGetAlpha(c.backgroundColor.CGColor) > 0) c.backgroundColor = UIColor.clearColor;
         }
+        CGSize z = v.bounds.size;
+        if (z.width >= W - 100 && z.height >= 20) {
+            if (CardColor(v.backgroundColor)) v.backgroundColor = UIColor.clearColor;
+            if (v.layer.backgroundColor && CardColor([UIColor colorWithCGColor:v.layer.backgroundColor])) v.layer.backgroundColor = nil;
+        }
+        if ([v isKindOfClass:[UICollectionReusableView class]] && ![v isKindOfClass:[UICollectionViewCell class]] && v.layer.backgroundColor) v.layer.backgroundColor = nil;
         [st addObjectsFromArray:v.subviews];
     }
-    [rects sortUsingComparator:^NSComparisonResult(NSValue *a, NSValue *b) { return CGRectGetMinY(a.CGRectValue) < CGRectGetMinY(b.CGRectValue) ? NSOrderedAscending : NSOrderedDescending; }];
+    // "Content shared in this conversation…" note: hidden
+    { UILabel *n = (UILabel *)Find(sc, ^BOOL(UIView *y) { return [y isKindOfClass:[UILabel class]] && [((UILabel *)y).text hasPrefix:@"Content shared"]; }, 3000);
+      if (n) { UIView *box = n; while (box.superview && box.superview != sc && ![box isKindOfClass:[UITableViewHeaderFooterView class]] && ![box isKindOfClass:[UITableViewCell class]]) box = box.superview; if (!box.hidden) box.hidden = YES; } }
+    // glass plates: one per Info card (a table section's rows), none on the header or the media
+    NSMutableDictionary *bySect = [NSMutableDictionary dictionary];
+    UITableView *tb = [sc isKindOfClass:[UITableView class]] ? (UITableView *)sc : nil;
+    for (UITableViewCell *c in tb.visibleCells) {
+        NSIndexPath *ip = [tb indexPathForCell:c];
+        if (!ip || ip.section == gHeadRowSection || ip.section == gChildRowSection || c.hidden) continue;
+        if (Find(c, ^BOOL(UIView *y) { return [y isKindOfClass:[UILabel class]] && [((UILabel *)y).text hasPrefix:@"Content shared"]; }, 60)) continue;
+        NSValue *old = bySect[@(ip.section)];
+        CGRect r = c.frame;
+        bySect[@(ip.section)] = [NSValue valueWithCGRect:old ? CGRectUnion(old.CGRectValue, r) : r];
+    }
     NSMutableArray *merged = [NSMutableArray array];
-    for (NSValue *v in rects) {
-        CGRect r = v.CGRectValue;
-        CGRect last = merged.count ? [merged.lastObject CGRectValue] : CGRectNull;
-        if (merged.count && CGRectGetMinY(r) - CGRectGetMaxY(last) < 2 && fabs(CGRectGetMinX(r) - CGRectGetMinX(last)) < 3) merged[merged.count - 1] = [NSValue valueWithCGRect:CGRectUnion(last, r)];
-        else if (merged.count && CGRectContainsRect(CGRectInset(last, -2, -2), r)) {}
-        else [merged addObject:[NSValue valueWithCGRect:r]];
+    for (NSNumber *k in [bySect.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        CGRect r = [bySect[k] CGRectValue];
+        // the rows span the table; the card is inset like iOS
+        CGFloat inset = tb.layoutMargins.left > 8 ? tb.layoutMargins.left : 20;
+        r = CGRectMake(MAX(r.origin.x, inset), r.origin.y, MIN(r.size.width, tb.bounds.size.width - 2 * inset), r.size.height);
+        [merged addObject:[NSValue valueWithCGRect:r]];
     }
     NSMutableArray *plates = [NSMutableArray array];
     for (UIView *x in sc.subviews) if (x.tag == DPLATE_TAG) [plates addObject:x];
@@ -2197,7 +2213,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.11.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.11.4 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
