@@ -1,4 +1,5 @@
 // Messages26 0.18.8 - made by nano
+// 0.18.10: contact photo matched by its avatar view
 // 0.18.9: contact photo found anywhere on the page and moved up with the name
 // 0.18.8: contact page photo + name a little higher
 // 0.18.7: any swipe out of the full background view puts the messages back
@@ -1187,6 +1188,7 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
 
 // Bigger contact photo + name in a chat (iOS 26 size), a little lower.
 static __weak UIView *gAvatarV;
+static NSString *gPicDebug = @"";
 static NSString *gTitleDebug = @"title: -";
 static NSString *gTitleNear = @"";
 static void Crisp(UIView *root, CGFloat s) {
@@ -2242,17 +2244,20 @@ static void StyleDetails(UIWindow *w) {
             CGRect r = [v convertRect:v.bounds toView:row];
             CGRect rr = [v convertRect:v.bounds toView:root];
             BOOL ok = v != root && ![v isKindOfClass:[UILabel class]] && ![row isDescendantOfView:v] && ![v isDescendantOfView:row]
-                && CGRectGetMaxY(r) <= T + 2 && sz.width >= 50 && sz.width <= 300 && fabs(sz.width - sz.height) < sz.width * 0.12
+                && CGRectGetMaxY(r) <= T + 2 && sz.width >= 40 && sz.width <= 300 && (fabs(sz.width - sz.height) < sz.width * 0.12 || [NSStringFromClass([v class]) containsString:@"Avatar"])
                 && fabs(CGRectGetMidX(rr) - midX) < 30;
-            if (ok && sz.width > bw) { bw = sz.width; pic = v; }
+            BOOL isAv = ok && [NSStringFromClass([v class]) containsString:@"Avatar"];
+            if (isAv && (!pic || ![NSStringFromClass([pic class]) containsString:@"Avatar"])) { bw = 1e6; pic = v; }
+            else if (ok && sz.width > bw) { bw = sz.width; pic = v; }
             if (!ok) [st3 addObjectsFromArray:v.subviews]; }
+        gPicDebug = pic ? [NSString stringWithFormat:@"pic=%@ %.0fx%.0f", NSStringFromClass([pic class]), pic.bounds.size.width, pic.bounds.size.height] : @"pic=none";
         if (pic) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, -18);
             for (UIView *a = pic.superview; a; a = a.superview) if (CGAffineTransformEqualToTransform(a.transform, t)) { pic = nil; break; }
             if (pic && !CGAffineTransformEqualToTransform(pic.transform, t)) pic.transform = t; } }
     }
     @try { StyleBgTab(vc); } @catch (__unused id e) {}
     @try { StyleBubblePill(vc); } @catch (__unused id e) {}
-    gDetDebug = [NSString stringWithFormat:@"details: %@ tiles=%@ T=%.0f B=%.0f table=%@", NSStringFromClass([vc class]), [tiles.allKeys componentsJoinedByString:@","], T, B, gDetTable ? NSStringFromClass([gDetTable class]) : @"-"];
+    gDetDebug = [NSString stringWithFormat:@"details: %@ %@ tiles=%@ T=%.0f B=%.0f table=%@", NSStringFromClass([vc class]), gPicDebug, [tiles.allKeys componentsJoinedByString:@","], T, B, gDetTable ? NSStringFromClass([gDetTable class]) : @"-"];
 }
 
 #pragma mark - per-conversation backgrounds (None / Photo / Color)
@@ -5034,7 +5039,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.8 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.10 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
