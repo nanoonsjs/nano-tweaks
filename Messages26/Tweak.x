@@ -1,4 +1,5 @@
-// Messages26 0.16.3 - made by nano
+// Messages26 0.17.0 - made by nano
+// 0.17.0: Search in Chat (tap the name on the contact page), Smart Unread Badge
 // 0.16.3: lock screen solid + hides the message bar; Cancel / 2 fails go to the list; Lock Again timer; scheduled send + auto unsend removed
 // 0.16.2: Face ID for locked chats runs in SpringBoard (no more crash)
 // 0.16.1: iOS 26 lock screen for chats (Face ID, Cancel goes back); compact Send Later sheet, keyboard hides first
@@ -2022,6 +2023,7 @@ static void CardGlass(UIView *root) {
 static UIBarButtonItem *GlassTextItem(NSString *t, id target, SEL a) { return [[UIBarButtonItem alloc] initWithTitle:t style:UIBarButtonItemStylePlain target:target action:a]; }
 static void StyleBgTab(UIViewController *vc);
 static void StyleBubblePill(UIViewController *vc);
+static void ChatSearchTitle(UIViewController *vc);
 static void StyleDetails(UIWindow *w) {
     UIViewController *vc = gTopOn ? DetailsVC(w.rootViewController, 0) : nil;
     if (!vc) { gDetDebug = @"details: -"; gDetTab = @"Info"; gHeadRowSection = gChildRowSection = -1; return; }
@@ -2062,6 +2064,7 @@ static void StyleDetails(UIWindow *w) {
         }
     } else if (tiles[@"info"] && ![ni.rightBarButtonItem.title isEqualToString:@"Edit"]) ni.rightBarButtonItem = GlassTextItem(@"Edit", [M26Details shared], @selector(edit:));
     gInfoTile = tiles[@"info"][@"tile"];
+    @try { ChatSearchTitle(vc); } @catch (__unused id e) {}
     { UIView *any = ((NSDictionary *)tiles.allValues.firstObject)[@"tile"];
       UIView *cell = any; while (cell && ![cell isKindOfClass:[UICollectionViewCell class]] && ![cell isKindOfClass:[UICollectionReusableView class]]) cell = cell.superview;
       (void)cell; }
@@ -3493,6 +3496,210 @@ static void IncomingFx(UIWindow *w) {
     if (!seen) return;   // just opened: don't replay old messages
     if (!ItemFromMe(last)) EmojiRain(FxFor(ItemText(last)), w);
 }
+
+// ---- search inside a chat: tap the name in the middle of the contact page's top bar ----
+@interface M26ChatSearch : NSObject <UITextFieldDelegate, UITableViewDataSource, UITableViewDelegate>
++ (instancetype)shared;
+@property (nonatomic, weak) UIViewController *vc;
+@property (nonatomic, weak) UIView *cap;
+@property (nonatomic, strong) UITableView *list;
+@property (nonatomic, strong) NSArray *hits;   // @[@[item, text], ...]
+@property (nonatomic, copy) NSString *name, *query;
+@end
+static void FlashBalloon(UIView *b) {
+    if (!b) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    CAKeyframeAnimation *a = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; a.values = @[@1, @1.12, @0.96, @1.04, @1]; a.duration = 0.7;
+    [b.layer addAnimation:a forKey:@"m26flash"];
+    UIView *g = [[UIView alloc] initWithFrame:CGRectInset(b.frame, -4, -4)]; g.userInteractionEnabled = NO;
+    g.layer.cornerRadius = 22; g.layer.borderWidth = 2.5; g.layer.borderColor = [UIColor colorWithRed:0.35 green:0.6 blue:1 alpha:1].CGColor;
+    g.layer.shadowColor = g.layer.borderColor; g.layer.shadowRadius = 12; g.layer.shadowOpacity = 0.9; g.layer.shadowOffset = CGSizeZero;
+    [b.superview insertSubview:g aboveSubview:b];
+    [UIView animateWithDuration:0.5 delay:1.4 options:0 animations:^{ g.alpha = 0; } completion:^(__unused BOOL f) { [g removeFromSuperview]; }];
+}
+@implementation M26ChatSearch
++ (instancetype)shared { static M26ChatSearch *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26ChatSearch new]; }); return t; }
+- (UITextField *)field { return (UITextField *)[self.cap viewWithTag:2]; }
+- (void)open:(UIButton *)b {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    UIView *cap = self.cap; UIViewController *vc = self.vc;
+    if (!cap || !vc) return;
+    UINavigationBar *nb = vc.navigationController.navigationBar;
+    CGFloat W = MIN(nb.bounds.size.width - 150, 280);
+    UILabel *l = (UILabel *)[cap viewWithTag:1]; UITextField *tf = [self field];
+    tf.hidden = NO; tf.alpha = 0;
+    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{
+        CGRect f = cap.frame; f.size.width = W; cap.frame = f; cap.superview.bounds = CGRectMake(0, 0, W, f.size.height);
+        l.alpha = 0; tf.alpha = 1; tf.frame = CGRectMake(36, 0, W - 44, cap.bounds.size.height);
+        [cap viewWithTag:3].frame = CGRectMake(12, 0, 20, cap.bounds.size.height);
+    } completion:nil];
+    [cap.superview invalidateIntrinsicContentSize];
+    [tf becomeFirstResponder];
+    // results panel under the bar
+    if (!self.list) {
+        UITableView *t = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+        t.dataSource = self; t.delegate = self; t.backgroundColor = UIColor.clearColor; t.separatorInset = UIEdgeInsetsMake(0, 20, 0, 20);
+        t.rowHeight = UITableViewAutomaticDimension; t.estimatedRowHeight = 64; t.keyboardDismissMode = UITableViewKeyboardDismissModeOnDrag;
+        self.list = t;
+    }
+    UIVisualEffectView *panel = (UIVisualEffectView *)[vc.view viewWithTag:0x4D32365D];
+    if (!panel) {
+        panel = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+        panel.tag = 0x4D32365D; panel.clipsToBounds = YES;
+        [panel.contentView addSubview:self.list];
+        [vc.view addSubview:panel];
+    }
+    CGFloat top = CGRectGetMaxY([nb convertRect:nb.bounds toView:vc.view]) + 6;
+    panel.frame = CGRectMake(0, top, vc.view.bounds.size.width, vc.view.bounds.size.height - top);
+    self.list.frame = panel.bounds; self.list.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    panel.alpha = 0; [UIView animateWithDuration:0.25 animations:^{ panel.alpha = 1; }];
+    self.hits = @[]; [self.list reloadData];
+}
+- (void)close {
+    UIView *cap = self.cap; UIViewController *vc = self.vc;
+    UITextField *tf = [self field]; UILabel *l = (UILabel *)[cap viewWithTag:1];
+    [tf resignFirstResponder]; tf.text = @"";
+    CGFloat W = [l sizeThatFits:CGSizeMake(300, 40)].width + 52;
+    [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:0 animations:^{
+        CGRect f = cap.frame; f.size.width = W; cap.frame = f; cap.superview.bounds = CGRectMake(0, 0, W, f.size.height);
+        l.alpha = 1; tf.alpha = 0; [cap viewWithTag:3].frame = CGRectMake(14, 0, 18, cap.bounds.size.height);
+    } completion:^(__unused BOOL d) { tf.hidden = YES; }];
+    UIView *panel = [vc.view viewWithTag:0x4D32365D];
+    [UIView animateWithDuration:0.2 animations:^{ panel.alpha = 0; } completion:^(__unused BOOL d) { [panel removeFromSuperview]; }];
+}
+- (BOOL)textFieldShouldReturn:(UITextField *)tf { [tf resignFirstResponder]; return YES; }
+- (BOOL)textFieldShouldClear:(UITextField *)tf { [self close]; return NO; }
+- (void)changed:(UITextField *)tf {
+    NSString *q = [tf.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    self.query = q;
+    NSMutableArray *h = [NSMutableArray array];
+    if (q.length) {
+        UICollectionView *cv = TranscriptCV(self.vc.view.window ?: [UIApplication sharedApplication].keyWindow);
+        for (id it in [ChatItems(cv) reverseObjectEnumerator]) {
+            NSString *t = ItemText(it);
+            if (t && [t rangeOfString:q options:NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch].location != NSNotFound) [h addObject:@[it, t]];
+            if (h.count >= 60) break;
+        }
+    }
+    self.hits = h; [self.list reloadData];
+}
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return self.query.length ? MAX(1, self.hits.count) : 0; }
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    c.backgroundColor = UIColor.clearColor;
+    if (!self.hits.count) { c.textLabel.text = @"No messages found"; c.textLabel.textColor = UIColor.secondaryLabelColor; c.selectionStyle = UITableViewCellSelectionStyleNone; return c; }
+    NSArray *h = self.hits[ip.row]; NSString *t = h[1];
+    NSMutableAttributedString *as = [[NSMutableAttributedString alloc] initWithString:t attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:16], NSForegroundColorAttributeName: UIColor.whiteColor}];
+    NSRange r = [t rangeOfString:self.query options:NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch];
+    if (r.location != NSNotFound) [as addAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:16 weight:UIFontWeightBold], NSForegroundColorAttributeName: [UIColor colorWithRed:0.45 green:0.7 blue:1 alpha:1]} range:r];
+    c.textLabel.attributedText = as; c.textLabel.numberOfLines = 3;
+    BOOL me = ItemFromMe(h[0]);
+    NSDate *d = nil; @try { d = [h[0] valueForKeyPath:@"time"]; } @catch (__unused id e) {} if (![d isKindOfClass:[NSDate class]]) { @try { d = [h[0] valueForKeyPath:@"IMChatItem.time"]; } @catch (__unused id e) {} }
+    NSDateFormatter *f = [NSDateFormatter new]; f.doesRelativeDateFormatting = YES; f.dateStyle = NSDateFormatterShortStyle; f.timeStyle = NSDateFormatterShortStyle;
+    c.detailTextLabel.text = [NSString stringWithFormat:@"%@%@", me ? @"You" : (self.name ?: @"Them"), [d isKindOfClass:[NSDate class]] ? [@" · " stringByAppendingString:[f stringFromDate:d]] : @""];
+    c.detailTextLabel.textColor = [UIColor colorWithWhite:1 alpha:0.5];
+    c.imageView.image = [UIImage systemImageNamed:me ? @"arrow.up.right.circle.fill" : @"arrow.down.left.circle.fill"]; c.imageView.tintColor = me ? DeepBlue() : [UIColor colorWithWhite:0.6 alpha:1];
+    return c;
+}
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    if (!self.hits.count) return;
+    id item = self.hits[ip.row][0];
+    UIViewController *vc = self.vc; UIWindow *w = vc.view.window;
+    [self close];
+    UIViewController *pres = vc.navigationController.presentingViewController ?: vc.presentingViewController;
+    void (^jump)(void) = ^{
+        UICollectionView *cv = TranscriptCV(w);
+        NSArray *items = ChatItems(cv);
+        NSUInteger i = [items indexOfObject:item];
+        if (!cv || i == NSNotFound) return;
+        NSIndexPath *p = nil;
+        if (cv.numberOfSections == 1 && [cv numberOfItemsInSection:0] == (NSInteger)items.count) p = [NSIndexPath indexPathForItem:i inSection:0];
+        else if (cv.numberOfSections == (NSInteger)items.count) p = [NSIndexPath indexPathForItem:0 inSection:i];
+        if (p) [cv scrollToItemAtIndexPath:p atScrollPosition:UICollectionViewScrollPositionCenteredVertically animated:YES];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIView *b = nil; SEL bs = NSSelectorFromString(@"balloonViewForChatItem:");
+            if ([cv.delegate respondsToSelector:bs]) b = ((id (*)(id, SEL, id))objc_msgSend)(cv.delegate, bs, item);
+            if (!b && p) b = BalloonIn([cv cellForItemAtIndexPath:p]);
+            FlashBalloon(b);
+        });
+    };
+    if (pres) [pres dismissViewControllerAnimated:YES completion:jump]; else jump();
+}
+@end
+static void ChatSearchTitle(UIViewController *vc) {
+    UINavigationItem *ni = vc.navigationItem;
+    if (!Opt(@"search")) { if (objc_getAssociatedObject(ni, "m26srch")) { ni.titleView = nil; objc_setAssociatedObject(ni, "m26srch", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); } return; }
+    if (objc_getAssociatedObject(ni, "m26srch")) return;
+    objc_setAssociatedObject(ni, "m26srch", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    M26ChatSearch *S = [M26ChatSearch shared]; S.vc = vc;
+    S.name = ConvNameForKey(ConvKey(vc));
+    BOOL dark = IsDark(vc.view);
+    UIView *holder = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 160, 40)];
+    UIButton *cap = [UIButton buttonWithType:UIButtonTypeCustom]; cap.frame = holder.bounds; cap.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    cap.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.125 alpha:0.94] : UIColor.whiteColor;
+    cap.layer.cornerRadius = 20; cap.layer.cornerCurve = kCACornerCurveContinuous;
+    UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]]];
+    ic.tag = 3; ic.contentMode = UIViewContentModeCenter; ic.tintColor = Ink(vc.view); [cap addSubview:ic];
+    UILabel *l = [UILabel new]; l.tag = 1; l.text = S.name; l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold]; l.textColor = Ink(vc.view); l.userInteractionEnabled = NO;
+    CGFloat lw = MIN([l sizeThatFits:CGSizeMake(300, 40)].width, 180);
+    holder.bounds = CGRectMake(0, 0, lw + 52, 40); cap.frame = holder.bounds;
+    ic.frame = CGRectMake(14, 0, 18, 40); l.frame = CGRectMake(36, 0, lw, 40); [cap addSubview:l];
+    UITextField *tf = [UITextField new]; tf.tag = 2; tf.hidden = YES; tf.placeholder = @"Search messages"; tf.textColor = Ink(vc.view); tf.font = [UIFont systemFontOfSize:17];
+    tf.clearButtonMode = UITextFieldViewModeAlways; tf.returnKeyType = UIReturnKeySearch; tf.delegate = S; tf.keyboardAppearance = dark ? UIKeyboardAppearanceDark : UIKeyboardAppearanceLight;
+    [tf addTarget:S action:@selector(changed:) forControlEvents:UIControlEventEditingChanged];
+    [cap addSubview:tf];
+    [cap addTarget:S action:@selector(open:) forControlEvents:UIControlEventTouchUpInside];
+    [holder addSubview:cap];
+    RimFit(cap, dark);
+    S.cap = cap;
+    ni.titleView = holder;
+}
+
+// ---- smart unread badge on the chat's back button: "Kamali · 3" ----
+static NSString *gBadgeText; static NSTimeInterval gBadgeAt;
+static NSString *SmartBadgeText(NSString *exceptKey) {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (gBadgeText && now - gBadgeAt < 2) return gBadgeText;
+    gBadgeAt = now;
+    NSString *best = nil; NSDate *bestD = nil; NSInteger total = 0;
+    for (NSArray *c in AllConvs()) {
+        if ([c[1] isEqualToString:exceptKey]) continue;
+        NSInteger n = 0; @try { n = [[c[2] valueForKey:@"unreadCount"] integerValue]; } @catch (__unused id e) {}
+        if (n <= 0) continue;
+        total += n;
+        NSDate *d = nil; @try { d = [c[2] valueForKey:@"date"]; } @catch (__unused id e) {}
+        if (!best || ([d isKindOfClass:[NSDate class]] && [d compare:bestD ?: [NSDate distantPast]] == NSOrderedDescending)) { best = c[0]; bestD = [d isKindOfClass:[NSDate class]] ? d : bestD; }
+    }
+    if (!best) { gBadgeText = @""; return gBadgeText; }
+    NSString *nm = best.length > 10 ? [[best substringToIndex:9] stringByAppendingString:@"…"] : best;
+    gBadgeText = [NSString stringWithFormat:@"%@ · %ld", nm, (long)total];
+    return gBadgeText;
+}
+#define BADGE_TAG 0x4D32365E
+static void SmartBadge(UIWindow *w) {
+    UIView *back = Find(w, ^BOOL(UIView *v) { return [NSStringFromClass([v class]) isEqualToString:@"CKCanvasBackButtonView"] && v.window; }, 3000);
+    if (!back) return;
+    UILabel *mine = (UILabel *)[back viewWithTag:BADGE_TAG];
+    BOOL on = Opt(@"badge") && gEntry.window;
+    // Apple's number badge
+    UILabel *num = (UILabel *)Find(back, ^BOOL(UIView *v) { return [v isKindOfClass:[UILabel class]] && v.tag != BADGE_TAG; }, 40);
+    UIView *numBox = num.superview != back && num.superview.bounds.size.width < 70 ? num.superview : num;
+    NSString *t = on ? SmartBadgeText(gChatKeyNow) : nil;
+    if (!on || !t.length) { numBox.alpha = 1; num.alpha = 1; [mine removeFromSuperview]; return; }
+    numBox.alpha = 0; num.alpha = 0;
+    if (!mine) {
+        mine = [UILabel new]; mine.tag = BADGE_TAG; mine.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]; mine.textAlignment = NSTextAlignmentCenter;
+        mine.layer.cornerRadius = 11; mine.layer.masksToBounds = YES; [back addSubview:mine];
+    }
+    BOOL dark = IsDark(back);
+    mine.backgroundColor = dark ? UIColor.whiteColor : UIColor.blackColor; mine.textColor = dark ? UIColor.blackColor : UIColor.whiteColor;
+    mine.text = t;
+    CGRect nf = [numBox convertRect:numBox.bounds toView:back];
+    CGFloat wd = [mine sizeThatFits:CGSizeMake(200, 22)].width + 16;
+    CGRect f = CGRectMake(CGRectGetMinX(nf), CGRectGetMidY(nf) - 11, wd, 22);
+    if (!CGRectEqualToRect(mine.frame, f)) mine.frame = f;
+}
 static void StyleFeatures(UIWindow *w) {
     @try { CheckScheduled(); } @catch (__unused id e) {}
     @try { ChatLock(w); } @catch (__unused id e) {}
@@ -3500,6 +3707,7 @@ static void StyleFeatures(UIWindow *w) {
     if (!e.window) return;
     @try { ReadTimer(w); } @catch (__unused id ex) {}
     @try { IncomingFx(w); } @catch (__unused id ex) {}
+    @try { SmartBadge(w); } @catch (__unused id ex) {}
 }
 
 // ---- pick which chats are locked ----
@@ -3539,7 +3747,9 @@ static void StyleFeatures(UIWindow *w) {
 static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     return @[@[@"lock", @"Chat Lock", @"lock.fill", UIColor.systemOrangeColor, @"Face ID before chosen chats open; their preview is hidden on the list."],
              @[@"fx", @"Keyword Effects", @"sparkles", UIColor.systemPinkColor, @"Emoji rain for words like \"love you\" ❤️, \"congrats\" 🎉, \"lol\" 😂, \"fire\" 🔥, \"good night\" 🌙."],
-             @[@"readtime", @"Live Read Time", @"eye.fill", UIColor.systemGreenColor, @"\"Read 7:53 PM\" becomes \"Read 2m ago\" and keeps counting."]];
+             @[@"readtime", @"Live Read Time", @"eye.fill", UIColor.systemGreenColor, @"\"Read 7:53 PM\" becomes \"Read 2m ago\" and keeps counting."],
+             @[@"search", @"Search in Chat", @"magnifyingglass.circle.fill", UIColor.systemIndigoColor, @"On a contact's page, tap their name at the top to search that chat and jump to a message."],
+             @[@"badge", @"Smart Unread Badge", @"bubble.left.and.exclamationmark.bubble.right.fill", UIColor.systemTealColor, @"The back button shows who texted last, like \"Kamali · 3\"."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
@@ -3922,7 +4132,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.16.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.17.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
