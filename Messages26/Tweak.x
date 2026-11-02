@@ -3539,7 +3539,7 @@ static void FlashBalloon(UIView *b) {
     if (!self.list) {
         UITableView *t = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
         t.dataSource = self; t.delegate = self; t.backgroundColor = UIColor.clearColor; t.separatorInset = UIEdgeInsetsMake(0, 20, 0, 20);
-        t.rowHeight = UITableViewAutomaticDimension; t.estimatedRowHeight = 64; t.keyboardDismissMode = UITableViewKeyboardDismissModeOnDrag;
+        t.rowHeight = UITableViewAutomaticDimension; t.estimatedRowHeight = 64; t.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
         self.list = t;
     }
     UIVisualEffectView *panel = (UIVisualEffectView *)[vc.view viewWithTag:0x4D32365D];
