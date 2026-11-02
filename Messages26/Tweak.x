@@ -1,4 +1,5 @@
-// Messages26 0.12.0 - made by nano
+// Messages26 0.12.1 - made by nano
+// 0.12.1: no black corners on bubbles over a background
 // 0.12.0: Backgrounds tab (None / Photo / Color), each chat its own background
 // 0.11.4: no gray boxes (header, media, cells); one glass card per Info group; Shared-with-You note gone
 // 0.11.3: tabs switch the whole page; no Shared-with-You note, no iCloud footer; header see-through
@@ -1604,6 +1605,12 @@ static void BubbleRim(UIView *b) {
     [CATransaction commit];
     rim.hidden = b.hidden; rim.alpha = b.alpha; rim.transform = b.transform;
 }
+// bubbles draw their corners see-through (the "opaque mask" painted them black over a background)
+static void (*origOpaqueA)(id, SEL, BOOL);
+static void OpaqueA(id self, SEL _cmd, BOOL v) { origOpaqueA(self, _cmd, NO); }
+static void (*origOpaqueB)(id, SEL, BOOL);
+static void OpaqueB(id self, SEL _cmd, BOOL v) { origOpaqueB(self, _cmd, NO); }
+static BOOL NoOpaque(id self, SEL _cmd) { return NO; }
 static void (*origBalloonLayout)(id, SEL);
 static void BalloonLayout(UIView *self, SEL _cmd) { origBalloonLayout(self, _cmd); @try { BubbleRim(self); } @catch (__unused id e) {} }
 static void (*origBalloonFrame)(id, SEL, CGRect);
@@ -2400,7 +2407,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.12.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.12.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
@@ -2467,6 +2474,12 @@ static void Tick(void) {
           if (SA && class_getInstanceMethod(SA, ls)) MSHookMessageEx(SA, ls, (IMP)LayA, (IMP *)&origLayA);
           if (SB) { unsigned int mc = 0; Method *ms = class_copyMethodList(SB, &mc); BOOL own = NO; for (unsigned int k = 0; k < mc; k++) if (method_getName(ms[k]) == ls) own = YES; free(ms);
                     if (own) MSHookMessageEx(SB, ls, (IMP)LayB, (IMP *)&origLayB); } }
+        { Class B1 = NSClassFromString(@"CKBalloonView"), B2 = NSClassFromString(@"CKColoredBalloonView");
+          SEL so = NSSelectorFromString(@"setCanUseOpaqueMask:"), go = NSSelectorFromString(@"canUseOpaqueMask");
+          if (B1 && class_getInstanceMethod(B1, so)) MSHookMessageEx(B1, so, (IMP)OpaqueA, (IMP *)&origOpaqueA);
+          if (B2 && class_getInstanceMethod(B2, so)) MSHookMessageEx(B2, so, (IMP)OpaqueB, (IMP *)&origOpaqueB);
+          IMP dummy = NULL;
+          if (B1 && class_getInstanceMethod(B1, go)) MSHookMessageEx(B1, go, (IMP)NoOpaque, &dummy); }
         Class CB = NSClassFromString(@"CKColoredBalloonView");
         if (CB) {
             MSHookMessageEx(CB, @selector(layoutSubviews), (IMP)BalloonLayout, (IMP *)&origBalloonLayout);
