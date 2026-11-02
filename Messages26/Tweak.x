@@ -1,4 +1,5 @@
-// Messages26 0.12.3 - made by nano
+// Messages26 0.13.0 - made by nano
+// 0.13.0: live Sky / Water / Aurora backgrounds (move faster in full-screen peek)
 // 0.12.3: background stays put while scrolling; smoother peek (zoom + shade lift)
 // 0.12.2: pull up past the last message to see the full background, pull down to come back
 // 0.12.1: no black corners on bubbles over a background
@@ -2216,8 +2217,10 @@ static UIImage *BgImage(NSString *key) {
 - (void)pick:(UIButton *)b {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     if (!self.key) return;
-    if (b.tag == 0) { SetBg(self.key, nil); return; }
-    if (b.tag == 1) {
+    NSInteger idx = b.tag - 100;
+    if (idx == 0) { SetBg(self.key, nil); return; }
+    if (idx >= 3) { SetBg(self.key, @{@"type": @"dynamic", @"name": @[@"Sky", @"Water", @"Aurora"][idx - 3], @"t": @([NSDate date].timeIntervalSince1970)}); return; }
+    if (idx == 1) {
         PHPickerConfiguration *cfg = [PHPickerConfiguration new];
         cfg.filter = [PHPickerFilter imagesFilter]; cfg.selectionLimit = 1;
         PHPickerViewController *pk = [[PHPickerViewController alloc] initWithConfiguration:cfg];
@@ -2253,6 +2256,82 @@ static UIImage *BgImage(NSString *key) {
 @end
 
 // The Backgrounds tab: None / Photo / Color circles under the tabs.
+
+// ---- dynamic backgrounds (drawn live, always moving) ----
+static CAGradientLayer *Blob(UIColor *c, CGRect f) {
+    CAGradientLayer *g = [CAGradientLayer layer]; g.type = kCAGradientLayerRadial;
+    g.colors = @[(id)c.CGColor, (id)[c colorWithAlphaComponent:0].CGColor];
+    g.startPoint = CGPointMake(0.5, 0.5); g.endPoint = CGPointMake(1, 1); g.frame = f;
+    return g;
+}
+static void Drift(CALayer *l, CGPoint to, CFTimeInterval dur, CFTimeInterval offset) {
+    CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"position"];
+    a.toValue = [NSValue valueWithCGPoint:to]; a.duration = dur; a.autoreverses = YES; a.repeatCount = HUGE_VALF;
+    a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]; a.timeOffset = offset; a.removedOnCompletion = NO;
+    [l addAnimation:a forKey:@"drift"];
+}
+static void Breathe(CALayer *l, CGFloat from, CGFloat to, CFTimeInterval dur, NSString *key) {
+    CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:key];
+    a.fromValue = @(from); a.toValue = @(to); a.duration = dur; a.autoreverses = YES; a.repeatCount = HUGE_VALF; a.removedOnCompletion = NO;
+    a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [l addAnimation:a forKey:key];
+}
+static NSArray *Pal(CGFloat a0, CGFloat a1, CGFloat a2, CGFloat b0, CGFloat b1, CGFloat b2, CGFloat c0, CGFloat c1, CGFloat c2) {
+    return @[(id)[UIColor colorWithRed:a0 green:a1 blue:a2 alpha:1].CGColor, (id)[UIColor colorWithRed:b0 green:b1 blue:b2 alpha:1].CGColor, (id)[UIColor colorWithRed:c0 green:c1 blue:c2 alpha:1].CGColor];
+}
+static UIView *MakeDyn(NSString *name, CGRect bounds) {
+    UIView *v = [[UIView alloc] initWithFrame:bounds]; v.userInteractionEnabled = NO; v.clipsToBounds = YES;
+    CGFloat W = bounds.size.width, H = bounds.size.height, m = MAX(W, H);
+    CAGradientLayer *base = [CAGradientLayer layer]; base.frame = bounds;
+    base.startPoint = CGPointMake(0.5, 0); base.endPoint = CGPointMake(0.5, 1);
+    [v.layer addSublayer:base];
+    CAKeyframeAnimation *cols = [CAKeyframeAnimation animationWithKeyPath:@"colors"];
+    cols.repeatCount = HUGE_VALF; cols.calculationMode = kCAAnimationLinear; cols.removedOnCompletion = NO;
+    if ([name isEqualToString:@"Sky"]) {
+        // night -> dawn -> day -> dusk -> night, starting at the real time of day
+        NSArray *night = Pal(0.04,0.06,0.18, 0.16,0.13,0.33, 0.45,0.28,0.35), *dawn = Pal(0.3,0.42,0.75, 0.93,0.58,0.48, 1,0.8,0.55),
+                *day = Pal(0.2,0.48,0.9, 0.45,0.72,0.97, 0.82,0.91,1), *dusk = Pal(0.12,0.13,0.38, 0.78,0.38,0.45, 1,0.58,0.3);
+        base.colors = night;
+        cols.values = @[night, dawn, day, day, dusk, night]; cols.duration = 60;
+        NSInteger hr = [[NSCalendar currentCalendar] component:NSCalendarUnitHour fromDate:[NSDate date]];
+        cols.timeOffset = (hr < 5 ? 0 : hr < 8 ? 12 : hr < 17 ? 26 : hr < 20 ? 48 : 58);
+        for (int i = 0; i < 3; i++) {
+            CAGradientLayer *c = Blob([UIColor colorWithWhite:1 alpha:0.28 - i * 0.05], CGRectMake(-m * 0.3 + i * W * 0.4, H * (0.15 + i * 0.2), m * 0.9, m * 0.35));
+            [v.layer addSublayer:c]; Drift(c, CGPointMake(c.position.x + W * 0.45, c.position.y + 10), 22 + i * 7, i * 5);
+        }
+    } else if ([name isEqualToString:@"Water"]) {
+        NSArray *a = Pal(0.02,0.18,0.35, 0.05,0.42,0.62, 0.35,0.78,0.85), *b = Pal(0.02,0.24,0.42, 0.1,0.5,0.7, 0.45,0.85,0.88);
+        base.colors = a; cols.values = @[a, b, a]; cols.duration = 14;
+        for (int i = 0; i < 6; i++) {
+            CGFloat sz = m * (0.35 + 0.08 * (i % 3));
+            CAGradientLayer *c = Blob([UIColor colorWithRed:0.75 green:0.95 blue:1 alpha:0.22], CGRectMake((i * 0.37 - floor(i * 0.37)) * W - sz / 2, (i / 6.0) * H, sz, sz * 0.6));
+            [v.layer addSublayer:c];
+            Drift(c, CGPointMake(c.position.x + (i % 2 ? -1 : 1) * W * 0.25, c.position.y + H * 0.08), 7 + i * 1.7, i);
+            Breathe(c, 0.35, 1, 4 + i, @"opacity");
+        }
+    } else {   // Aurora
+        NSArray *a = Pal(0.01,0.02,0.08, 0.03,0.06,0.2, 0.02,0.1,0.18), *b = Pal(0.02,0.02,0.12, 0.05,0.04,0.24, 0.02,0.12,0.2);
+        base.colors = a; cols.values = @[a, b, a]; cols.duration = 18;
+        NSArray *cs = @[[UIColor colorWithRed:0.2 green:1 blue:0.65 alpha:0.55], [UIColor colorWithRed:0.2 green:0.85 blue:1 alpha:0.45], [UIColor colorWithRed:0.6 green:0.35 blue:1 alpha:0.45], [UIColor colorWithRed:0.25 green:1 blue:0.5 alpha:0.4]];
+        for (int i = 0; i < 4; i++) {
+            CAGradientLayer *c = Blob(cs[i], CGRectMake(-W * 0.2 + i * W * 0.25, H * (0.05 + 0.12 * i), W * 0.55, H * 0.75));
+            c.transform = CATransform3DMakeRotation((i % 2 ? -0.35 : 0.3), 0, 0, 1);
+            [v.layer addSublayer:c];
+            Drift(c, CGPointMake(c.position.x + (i % 2 ? -1 : 1) * W * 0.3, c.position.y + H * 0.06), 9 + i * 3, i * 2);
+            Breathe(c, 0.25, 1, 5 + i * 1.5, @"opacity");
+        }
+    }
+    [base addAnimation:cols forKey:@"cols"];
+    return v;
+}
+// speed the live background up (peek) or back to calm, without jumping
+static void DynSpeed(UIView *v, float sp) {
+    CALayer *l = v.layer;
+    if (!l || l.speed == sp) return;
+    CFTimeInterval t = [l convertTime:CACurrentMediaTime() fromLayer:nil];
+    l.timeOffset = t; l.beginTime = CACurrentMediaTime(); l.speed = sp;
+}
+
 static void StyleBgTab(UIViewController *vc) {
     UITableView *tb = (UITableView *)gDetTable;
     if (![tb isKindOfClass:[UITableView class]]) return;
@@ -2262,49 +2341,51 @@ static void StyleBgTab(UIViewController *vc) {
     M26Bg *B = [M26Bg shared]; B.key = key; B.host = vc;
     if (!on || !key || gHeadRowSection < 0) { box.hidden = YES; return; }
     BOOL dark = IsDark(tb);
-    CGFloat W = tb.bounds.size.width, d = 84, lab = 26, gap = (W - 3 * d) / 4;
+    NSArray *names = @[@"None", @"Photo", @"Color", @"Sky", @"Water", @"Aurora"];
+    CGFloat W = tb.bounds.size.width, d = 84, lab = 26, gap = (W - 3 * d) / 4, rowH = d + lab + 34;
     if (!box) {
         box = [UIView new]; box.tag = BGTAB_TAG;
-        NSArray *names = @[@"None", @"Photo", @"Color"];
-        for (int i = 0; i < 3; i++) {
-            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom]; b.tag = i;
+        for (int i = 0; i < 6; i++) {
+            int col = i % 3, row = i / 3;
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom]; b.tag = 100 + i;
             b.layer.cornerRadius = d / 2; b.clipsToBounds = YES; b.imageView.contentMode = UIViewContentModeScaleAspectFill;
             [b addTarget:B action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
-            b.frame = CGRectMake(gap + i * (d + gap), 8, d, d);
+            b.frame = CGRectMake(gap + col * (d + gap), 8 + row * rowH, d, d);
+            if (i >= 3) { UIView *dv = MakeDyn(names[i], b.bounds); [b addSubview:dv]; }
             [box addSubview:b];
-            UIView *ring = [[UIView alloc] initWithFrame:CGRectInset(b.frame, -5, -5)]; ring.tag = 10 + i; ring.userInteractionEnabled = NO;
+            UIView *ring = [[UIView alloc] initWithFrame:CGRectInset(b.frame, -5, -5)]; ring.tag = 200 + i; ring.userInteractionEnabled = NO;
             ring.layer.cornerRadius = ring.bounds.size.width / 2; ring.layer.borderWidth = 3;
             [box addSubview:ring];
             UIImageView *chk = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightBold]]];
-            chk.tag = 20 + i; chk.frame = CGRectMake(CGRectGetMaxX(b.frame) - 26, CGRectGetMaxY(b.frame) - 26, 30, 30); chk.contentMode = UIViewContentModeCenter;
+            chk.tag = 300 + i; chk.frame = CGRectMake(CGRectGetMaxX(b.frame) - 26, CGRectGetMaxY(b.frame) - 26, 30, 30); chk.contentMode = UIViewContentModeCenter;
             chk.layer.cornerRadius = 15; chk.clipsToBounds = YES;
             [box addSubview:chk];
             UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(CGRectGetMidX(b.frame) - 60, CGRectGetMaxY(b.frame) + 10, 120, lab)];
-            l.text = names[i]; l.textAlignment = NSTextAlignmentCenter; l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium]; l.tag = 30 + i;
+            l.text = names[i]; l.textAlignment = NSTextAlignmentCenter; l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium]; l.tag = 400 + i;
             [box addSubview:l];
         }
         [tb addSubview:box];
     }
     box.hidden = NO;
     CGRect hr = [tb rectForSection:gHeadRowSection];
-    CGRect bf = CGRectMake(0, CGRectGetMaxY(hr) + 6, W, d + lab + 30);
+    CGRect bf = CGRectMake(0, CGRectGetMaxY(hr) + 6, W, rowH * 2 + 10);
     if (!CGRectEqualToRect(box.frame, bf)) box.frame = bf;
     if (tb.subviews.lastObject != box) [tb bringSubviewToFront:box];
     NSDictionary *cur = BgFor(key);
-    NSInteger sel = [cur[@"type"] isEqualToString:@"photo"] ? 1 : [cur[@"type"] isEqualToString:@"color"] ? 2 : 0;
-    for (int i = 0; i < 3; i++) {
-        UIButton *b = (UIButton *)[box viewWithTag:i];
-        if (![b isKindOfClass:[UIButton class]]) { for (UIView *x in box.subviews) if ([x isKindOfClass:[UIButton class]] && x.tag == i) b = (UIButton *)x; }
-        UIView *ring = [box viewWithTag:10 + i]; UIImageView *chk = (UIImageView *)[box viewWithTag:20 + i]; UILabel *l = (UILabel *)[box viewWithTag:30 + i];
+    NSString *ty = cur[@"type"];
+    NSInteger sel = [ty isEqualToString:@"photo"] ? 1 : [ty isEqualToString:@"color"] ? 2 : [ty isEqualToString:@"dynamic"] ? (NSInteger)[names indexOfObject:cur[@"name"] ?: @""] : 0;
+    if (sel == NSNotFound) sel = 0;
+    for (int i = 0; i < 6; i++) {
+        UIButton *b = (UIButton *)[box viewWithTag:100 + i];
+        UIView *ring = [box viewWithTag:200 + i]; UIImageView *chk = (UIImageView *)[box viewWithTag:300 + i]; UILabel *l = (UILabel *)[box viewWithTag:400 + i];
         l.textColor = Ink(tb);
         ring.layer.borderColor = (sel == i ? Ink(tb) : UIColor.clearColor).CGColor;
         chk.hidden = sel != i; chk.tintColor = dark ? UIColor.whiteColor : UIColor.blackColor; chk.backgroundColor = dark ? UIColor.blackColor : UIColor.whiteColor;
         if (i == 0) b.backgroundColor = dark ? [UIColor colorWithWhite:0.17 alpha:1] : [UIColor colorWithWhite:0.88 alpha:1];
         if (i == 1) {
             UIImage *im = sel == 1 ? BgImage(key) : nil;
-            if (im) { [b setImage:im forState:UIControlStateNormal]; b.backgroundColor = UIColor.blackColor; }
+            if (im) { [b setImage:im forState:UIControlStateNormal]; b.backgroundColor = UIColor.blackColor; b.imageView.contentMode = UIViewContentModeScaleAspectFill; }
             else { [b setImage:[UIImage systemImageNamed:@"photo" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:28 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal]; b.imageView.contentMode = UIViewContentModeCenter; b.tintColor = Ink(tb); b.backgroundColor = dark ? [UIColor colorWithWhite:0.09 alpha:1] : [UIColor colorWithWhite:0.8 alpha:1]; }
-            if (im) b.imageView.contentMode = UIViewContentModeScaleAspectFill;
         }
         if (i == 2) {
             CAGradientLayer *gl = nil; for (CALayer *x in b.layer.sublayers) if ([x.name isEqualToString:@"g"]) gl = (CAGradientLayer *)x;
@@ -2314,7 +2395,6 @@ static void StyleBgTab(UIViewController *vc) {
         }
     }
 }
-
 
 // Pull the chat up past the last message to see the whole background; pull down to bring it back.
 @interface M26Peek : NSObject
@@ -2344,7 +2424,8 @@ static void StyleBgTab(UIViewController *vc) {
                 cv.contentInset = ci;
                 // messages glide away on a soft spring; the photo settles back from a slight zoom and its shade lifts
                 [UIView animateWithDuration:0.75 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:MIN(v0, 3) options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ cv.contentOffset = CGPointMake(0, target); } completion:nil];
-                [UIView animateWithDuration:0.9 delay:0.05 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ iv.transform = CGAffineTransformIdentity; dim.alpha = 0; } completion:nil];
+                [UIView animateWithDuration:0.9 delay:0.05 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ iv.transform = CGAffineTransformIdentity; dim.alpha = 0; [host viewWithTag:3].transform = CGAffineTransformMakeScale(1.06, 1.06); } completion:nil];
+                DynSpeed([host viewWithTag:3], 3.5);
                 for (UICollectionViewCell *c in cv.visibleCells) {
                     c.alpha = 0.55;
                     [UIView animateWithDuration:0.6 delay:0.15 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{ c.alpha = 1; } completion:nil];
@@ -2362,7 +2443,8 @@ static void StyleBgTab(UIViewController *vc) {
             [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.84 initialSpringVelocity:MIN(MAX(vy, 0) / 800.0, 3) options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
                 cv.contentInset = ci; cv.contentOffset = CGPointMake(0, MAX(-cv.adjustedContentInset.top, target));
             } completion:nil];
-            [UIView animateWithDuration:0.8 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ iv.transform = CGAffineTransformMakeScale(1.04, 1.04); dim.alpha = 1; } completion:nil];
+            [UIView animateWithDuration:0.8 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ iv.transform = CGAffineTransformMakeScale(1.04, 1.04); dim.alpha = 1; [host viewWithTag:3].transform = CGAffineTransformIdentity; } completion:nil];
+            DynSpeed([host viewWithTag:3], 1);
         });
     }
 }
@@ -2400,14 +2482,21 @@ static void ApplyChatBg(UIWindow *w) {
         dim.frame = host.bounds;
     }
     if (cv.backgroundColor && CGColorGetAlpha(cv.backgroundColor.CGColor) > 0) cv.backgroundColor = UIColor.clearColor;
-    NSString *stamp = [NSString stringWithFormat:@"%@|%@|%@", key, bg[@"t"], bg[@"hex"]];
+    NSString *stamp = [NSString stringWithFormat:@"%@|%@|%@|%@|%.0fx%.0f", key, bg[@"t"], bg[@"hex"], bg[@"name"], cv.bounds.size.width, cv.bounds.size.height];
     if ([objc_getAssociatedObject(cv, "m26bg") isEqual:stamp]) return;
     objc_setAssociatedObject(cv, "m26bg", stamp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     UIImageView *iv = (UIImageView *)[host viewWithTag:1]; UIView *dim = [host viewWithTag:2];
-    BOOL photo = [bg[@"type"] isEqualToString:@"photo"];
+    BOOL photo = [bg[@"type"] isEqualToString:@"photo"], dyn = [bg[@"type"] isEqualToString:@"dynamic"];
+    [[host viewWithTag:3] removeFromSuperview];
+    if (dyn) {
+        UIView *dv = MakeDyn(bg[@"name"], host.bounds); dv.tag = 3;
+        dv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [host insertSubview:dv atIndex:0];
+        dim.hidden = NO; dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
+    } else dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.28];
     iv.image = photo ? BgImage(key) : nil;
-    iv.hidden = !photo; dim.hidden = !photo;
-    host.backgroundColor = photo ? UIColor.blackColor : HexColor(bg[@"hex"]);
+    iv.hidden = !photo; dim.hidden = !photo && !dyn;
+    host.backgroundColor = (photo || dyn) ? UIColor.blackColor : HexColor(bg[@"hex"]);
     BOOL peek = [objc_getAssociatedObject(cv, "m26peek") doubleValue] > 0;
     iv.transform = peek ? CGAffineTransformIdentity : CGAffineTransformMakeScale(1.04, 1.04);
     dim.alpha = peek ? 0 : 1;
@@ -2481,7 +2570,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.12.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.13.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
