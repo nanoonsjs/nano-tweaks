@@ -1,4 +1,5 @@
-// Messages26 0.8.0 - made by nano
+// Messages26 0.8.1 - made by nano
+// 0.8.1: text no longer jumps up and down; send works
 // 0.8.0: send / mic always inside the pill (also with the keyboard up), no floating pill after the keyboard closes
 // 0.7.9: taps on the pill go straight to the text box (opens the keyboard); mic / send no longer cut off
 // 0.7.8: taps reach the moved text box from inside the bar too; see-through layers no longer catch taps; the mic's own effect stays
@@ -537,15 +538,16 @@ static void StyleEntry(UIView *entry) {
         // pieces we moved in older builds: back in place
         NSMutableArray *rs = [NSMutableArray arrayWithArray:entry.subviews]; int gr = 0;
         while (rs.count && gr++ < 300) { UIView *v = rs.lastObject; [rs removeLastObject];
-            if (v.tag != PLUS_TAG && v.tag != PILL_TAG && v != field && ![v isKindOfClass:[UIControl class]] && !CGAffineTransformIsIdentity(v.transform)) v.transform = CGAffineTransformIdentity;
+            if (v.tag != PLUS_TAG && v.tag != PILL_TAG && v != field && ![v isKindOfClass:[UIControl class]] && ![gRowCtls containsObject:v] && !CGAffineTransformIsIdentity(v.transform) && ![field isDescendantOfView:v]) v.transform = CGAffineTransformIdentity;
             [rs addObjectsFromArray:v.subviews]; }
         if (!CGAffineTransformIsIdentity(entry.transform)) entry.transform = CGAffineTransformIdentity;
         // The field row (text box + mic / send) moves down: onto the keyboard when it's
         // up (where the hidden app row was), else to just above the home bar.
         UIWindow *ew = entry.window;
         NSMutableArray *row = [NSMutableArray arrayWithObject:field];
-        for (UIView *v in @[field]) v.transform = CGAffineTransformIdentity;
-        CGRect fu = [field convertRect:field.bounds toView:entry];
+        // where the text box is without our move (from its centre and size, so its
+        // transform is never touched: resetting it made the text jump up and down)
+        CGRect fu = [field.superview convertRect:CGRectMake(field.center.x - field.bounds.size.width / 2, field.center.y - field.bounds.size.height / 2, field.bounds.size.width, field.bounds.size.height) toView:entry];
         // mid-animation (keyboard going away) the text box is somewhere odd: wait
         if (CGRectGetMinY(fu) < -10 || CGRectGetMaxY(fu) > entry.bounds.size.height + 10) {
             gDebug = [NSString stringWithFormat:@"waiting: field at %.0f", CGRectGetMinY(fu)];
@@ -565,7 +567,7 @@ static void StyleEntry(UIView *entry) {
         // All in the bar's own space (screen math gave wrong numbers while the bar
         // moves between windows): the text box's bottom goes to a fixed place.
         CGFloat wantBottom = kbUp ? entry.bounds.size.height - 10 : entry.bounds.size.height - 43;
-        if (!strip) wantBottom = CGRectGetMaxY(fu);   // no app row: Messages' own place is right
+        if (!strip) wantBottom = kbUp ? entry.bounds.size.height - 4 : CGRectGetMaxY(fu);
         shift = wantBottom - CGRectGetMaxY(fu);
         if (fabs(shift) > 200) shift = 0;
         gKbTop = kbUp ? CGRectGetMaxY(ef) : 0;
@@ -1081,7 +1083,11 @@ static void Tick(void) {
     if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
     UIView *e = gEntry;
-    if (e.window) { @try { StyleEntry(e); } @catch (__unused id ex) {} }
+    if (e.window) {
+        UIView *f = gField, *pill = [f.superview viewWithTag:PILL_TAG];
+        CGRect fr = [f convertRect:f.bounds toView:e], pr = pill ? [pill convertRect:pill.bounds toView:e] : CGRectNull;
+        if (f && (!pill || fabs(CGRectGetMidY(fr) - CGRectGetMidY(pr)) > 3)) { @try { StyleEntry(e); } @catch (__unused id ex) {} }
+    }
     if (!e.window) {
         for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
             if (![sc isKindOfClass:[UIWindowScene class]]) continue;
@@ -1100,7 +1106,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.8.0 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.8.1 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
