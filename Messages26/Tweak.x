@@ -1,4 +1,5 @@
-// Messages26 0.15.2 - made by nano
+// Messages26 0.16.0 - made by nano
+// 0.16.0: Chat Lock, Scheduled Send, Keyword Effects, Live Read Time, Auto Unsend (all off by default, in Messages26 settings)
 // 0.15.2: frames only on the list (not inside chats)
 // 0.15.1: settings is a glass button (opens for real); frames on up to 3 people; Set Frame in the hold menu
 // 0.15.0: Messages26 settings (gear on the list) with animated Contact Frames
@@ -80,12 +81,15 @@
 #import <substrate.h>
 #import <PhotosUI/PhotosUI.h>
 #import <Photos/Photos.h>
+#import <LocalAuthentication/LocalAuthentication.h>
 
 #define PLUS_TAG  0x4D323650
 #define GLASS_TAG 0x4D323647
 #define DEBUG_TAG 0x4D323644
 #define MENU_TAG  0x4D32364D
 #define PILL_TAG  0x4D323649
+static void HookSendControl(UIView *v);
+static void LockPreview(UIView *avatar, NSString *key);
 
 #define DOM CFSTR("com.nano.messages26")
 static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
@@ -614,7 +618,7 @@ static void StyleEntry(UIView *entry) {
         if (!gRowCtls) gRowCtls = [NSHashTable weakObjectsHashTable];
         [gRowCtls removeAllObjects];
         for (UIView *v in row) {
-            if (v != field) [gRowCtls addObject:v];
+            if (v != field) { [gRowCtls addObject:v]; HookSendControl(v); }
             for (UIView *p = v.superview; p && p != entry; p = p.superview) if (p.clipsToBounds) p.clipsToBounds = NO;
         }
         NSMutableArray *rn = [NSMutableArray array];
@@ -2883,6 +2887,7 @@ static void StyleFrames(UIWindow *w) {
             if ([NSStringFromClass([v class]) containsString:@"Avatar"] && z.width >= 34 && fabs(z.width - z.height) < 12 && z.width < 140) {
                 found++;
                 NSString *k = KeyForView(v); if (k) keyed++;
+                LockPreview(v, k);
                 NSString *fn = FrameFor(k); if (fn) framed++;
                 PutFrame(v, fn);
                 continue;   // outermost avatar only
@@ -3038,6 +3043,311 @@ static id CtxMenu(id self, SEL _cmd, UICollectionView *cv, NSIndexPath *ip, CGPo
     [self.navigationController pushViewController:pk animated:YES];
 }
 @end
+
+#pragma mark - extra features (all off by default, switched in Messages26 settings)
+
+static BOOL Opt(NSString *k) { return gOn && [[NSUserDefaults standardUserDefaults] boolForKey:[@"m26.opt." stringByAppendingString:k]]; }
+static void SetOpt(NSString *k, BOOL v) { [[NSUserDefaults standardUserDefaults] setBool:v forKey:[@"m26.opt." stringByAppendingString:k]]; }
+static NSArray *LockedKeys(void) { return [[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.locked"] ?: @[]; }
+static NSMutableSet *gUnlocked;
+static NSString *gFeatDebug = @"feat: -";
+static NSArray *AllConvs(void) {   // @[@[name, key, conv], ...]
+    NSMutableArray *a = [NSMutableArray array];
+    Class CL = NSClassFromString(@"CKConversationList"); SEL sh = NSSelectorFromString(@"sharedConversationList");
+    id list = [CL respondsToSelector:sh] ? ((id (*)(id, SEL))objc_msgSend)(CL, sh) : nil;
+    NSArray *convs = nil; @try { convs = [list valueForKey:@"conversations"]; } @catch (__unused id e) {}
+    for (id conv in convs) {
+        NSString *key = nil, *name = nil;
+        @try { key = [conv valueForKeyPath:@"chat.guid"]; } @catch (__unused id e) {}
+        for (NSString *nk in @[@"displayName", @"name"]) { @try { name = [conv valueForKey:nk]; } @catch (__unused id e) {} if ([name isKindOfClass:[NSString class]] && name.length) break; }
+        if (key && name) [a addObject:@[name, key, conv]];
+        if (a.count >= 120) break;
+    }
+    return a;
+}
+static id ConvForKey(NSString *key) { for (NSArray *c in AllConvs()) if ([c[1] isEqualToString:key]) return c[2]; return nil; }
+static UITextView *EntryTextView(void) { UIView *f = gField; return (UITextView *)Find(f, ^BOOL(UIView *v) { return [v isKindOfClass:[UITextView class]]; }, 60); }
+static UIViewController *TopVC(UIWindow *w) {
+    UIViewController *top = w.rootViewController;
+    while (top.presentedViewController && !top.presentedViewController.isBeingDismissed && ![top.presentedViewController isKindOfClass:[UISearchController class]]) top = top.presentedViewController;
+    return top;
+}
+
+// ---- keyword effects: emoji rain across the screen ----
+static NSDictionary *FxWords(void) {
+    return @{@"love you": @"❤️", @"ily": @"💕", @"miss you": @"🥺", @"congrats": @"🎉", @"congratulations": @"🎉", @"lol": @"😂", @"lmao": @"😂",
+             @"fire": @"🔥", @"good night": @"🌙", @"goodnight": @"🌙", @"happy new year": @"🎆", @"good morning": @"☀️", @"bae": @"💖", @"money": @"💸", @"party": @"🥳"};
+}
+static NSString *FxFor(NSString *text) {
+    NSString *t = [NSString stringWithFormat:@" %@ ", text.lowercaseString];
+    for (NSString *w in FxWords()) {
+        NSRange r = [t rangeOfString:w];
+        if (r.location == NSNotFound) continue;
+        unichar b = [t characterAtIndex:r.location - 1], a = [t characterAtIndex:NSMaxRange(r)];
+        if (!isalnum(b) && !isalnum(a)) return FxWords()[w];
+    }
+    return nil;
+}
+static void EmojiRain(NSString *emoji, UIWindow *w) {
+    if (!emoji || !w) return;
+    CGFloat W = w.bounds.size.width;
+    UIView *v = [[UIView alloc] initWithFrame:w.bounds]; v.userInteractionEnabled = NO;
+    CAEmitterLayer *em = [CAEmitterLayer layer];
+    em.emitterPosition = CGPointMake(W / 2, -30); em.emitterSize = CGSizeMake(W * 1.2, 1); em.emitterShape = kCAEmitterLayerLine;
+    CAEmitterCell *c = [CAEmitterCell emitterCell];
+    c.contents = (id)EmojiImage(emoji, 96).CGImage;
+    c.birthRate = 16; c.lifetime = 4.5; c.velocity = 220; c.velocityRange = 90; c.yAcceleration = 160; c.emissionLongitude = M_PI; c.emissionRange = 0.35;
+    c.scale = 0.42; c.scaleRange = 0.18; c.spin = 0; c.spinRange = 2.5;
+    em.emitterCells = @[c]; em.frame = v.bounds;
+    [v.layer addSublayer:em];
+    [w addSubview:v];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ em.birthRate = 0; });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [UIView animateWithDuration:0.4 animations:^{ v.alpha = 0; } completion:^(__unused BOOL f) { [v removeFromSuperview]; }]; });
+}
+
+// ---- the open chat's transcript (chat items) ----
+static UICollectionView *TranscriptCV(UIWindow *w) { return (UICollectionView *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UICollectionView class]] && [NSStringFromClass([v class]) containsString:@"Transcript"]; }, 3000); }
+static NSArray *ChatItems(UICollectionView *cv) { NSArray *a = nil; @try { a = [cv.delegate valueForKey:@"chatItems"]; } @catch (__unused id e) {} return [a isKindOfClass:[NSArray class]] ? a : nil; }
+static NSString *ItemText(id it) { id t = nil; @try { t = [it valueForKey:@"text"]; } @catch (__unused id e) {} return [t isKindOfClass:[NSAttributedString class]] ? [t string] : [t isKindOfClass:[NSString class]] ? t : nil; }
+static BOOL ItemFromMe(id it) { @try { return [[it valueForKey:@"isFromMe"] boolValue]; } @catch (__unused id e) { return NO; } }
+
+// ---- auto unsend ----
+static void UnsendLater(NSString *text, NSString *key, UIWindow *w) {
+    NSInteger secs = [[NSUserDefaults standardUserDefaults] integerForKey:@"m26.unsendSecs"]; if (secs <= 0) secs = 60;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(secs * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!Opt(@"unsend")) return;
+        UICollectionView *cv = TranscriptCV(w);
+        id found = nil;
+        for (id it in [ChatItems(cv) reverseObjectEnumerator]) if (ItemFromMe(it) && [ItemText(it) isEqualToString:text]) { found = it; break; }
+        id conv = ConvForKey(key), chat = nil; @try { chat = [conv valueForKey:@"chat"]; } @catch (__unused id e) {}
+        id imItem = nil; @try { imItem = [found valueForKey:@"IMChatItem"]; } @catch (__unused id e) {}
+        SEL rs = NSSelectorFromString(@"retractMessagePart:");
+        if (chat && imItem && [chat respondsToSelector:rs]) { ((void (*)(id, SEL, id))objc_msgSend)(chat, rs, imItem); gFeatDebug = @"feat: unsent"; }
+        else gFeatDebug = [NSString stringWithFormat:@"feat: unsend failed item=%d chat=%d", found != nil, chat != nil];
+    });
+}
+
+// ---- scheduled send ----
+static NSMutableArray *Scheduled(void) { return [[[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.sched"] ?: @[] mutableCopy]; }
+static void SaveScheduled(NSArray *a) { [[NSUserDefaults standardUserDefaults] setObject:a forKey:@"m26.sched"]; }
+static BOOL SendNow(NSString *text, NSString *key) {
+    id conv = ConvForKey(key);
+    Class CC = NSClassFromString(@"CKComposition");
+    SEL ini = NSSelectorFromString(@"initWithText:subject:"), mk = NSSelectorFromString(@"messageWithComposition:"), snd = NSSelectorFromString(@"sendMessage:newComposition:");
+    if (!conv || !CC || ![conv respondsToSelector:mk] || ![conv respondsToSelector:snd]) return NO;
+    id comp = ((id (*)(id, SEL, id, id))objc_msgSend)([CC alloc], ini, [[NSAttributedString alloc] initWithString:text], nil);
+    id msg = ((id (*)(id, SEL, id))objc_msgSend)(conv, mk, comp);
+    if (!msg) return NO;
+    ((void (*)(id, SEL, id, BOOL))objc_msgSend)(conv, snd, msg, YES);
+    return YES;
+}
+static void CheckScheduled(void) {
+    NSMutableArray *a = Scheduled(); if (!a.count) return;
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970; BOOL changed = NO;
+    for (NSDictionary *d in [a copy]) if ([d[@"at"] doubleValue] <= now) {
+        BOOL ok = Opt(@"sched") ? SendNow(d[@"text"], d[@"key"]) : NO;
+        gFeatDebug = [NSString stringWithFormat:@"feat: scheduled send %@", ok ? @"sent" : @"failed"];
+        [a removeObject:d]; changed = YES;
+    }
+    if (changed) SaveScheduled(a);
+}
+@interface M26SchedVC : UIViewController
+@property (nonatomic, copy) NSString *text, *key;
+@end
+@implementation M26SchedVC { UIDatePicker *_dp; }
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = UIColor.systemBackgroundColor;
+    CGFloat W = self.view.bounds.size.width;
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(20, 24, W - 40, 30)]; t.text = @"Send Later"; t.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold]; [self.view addSubview:t];
+    UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(20, 58, W - 40, 40)]; m.text = self.text; m.numberOfLines = 2; m.textColor = UIColor.secondaryLabelColor; m.autoresizingMask = UIViewAutoresizingFlexibleWidth; [self.view addSubview:m];
+    _dp = [[UIDatePicker alloc] initWithFrame:CGRectMake(0, 100, W, 216)]; _dp.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    _dp.datePickerMode = UIDatePickerModeDateAndTime; _dp.preferredDatePickerStyle = UIDatePickerStyleWheels;
+    _dp.minimumDate = [NSDate dateWithTimeIntervalSinceNow:60]; _dp.date = [NSDate dateWithTimeIntervalSinceNow:3600];
+    [self.view addSubview:_dp];
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem]; b.frame = CGRectMake(20, 330, W - 40, 52); b.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [b setTitle:@"Schedule" forState:UIControlStateNormal]; b.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
+    b.backgroundColor = UIColor.systemBlueColor; [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal]; b.layer.cornerRadius = 26;
+    [b addTarget:self action:@selector(go) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:b];
+}
+- (void)go {
+    NSMutableArray *a = Scheduled();
+    [a addObject:@{@"text": self.text, @"key": self.key, @"at": @(_dp.date.timeIntervalSince1970)}];
+    SaveScheduled(a);
+    [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
+    // clear the message box
+    UITextView *tv = EntryTextView();
+    UIView *e = gEntry; Class CC = NSClassFromString(@"CKComposition"); SEL sc = NSSelectorFromString(@"setComposition:");
+    if (e && CC && [e respondsToSelector:sc]) ((void (*)(id, SEL, id))objc_msgSend)(e, sc, [CC new]); else tv.text = @"";
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+@end
+
+// ---- send button: capture text (effects / unsend) and hold to schedule ----
+@interface M26Send : NSObject
++ (instancetype)shared;
+@end
+@implementation M26Send
++ (instancetype)shared { static M26Send *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Send new]; }); return t; }
+- (void)down:(UIControl *)c {
+    NSString *text = [EntryTextView().text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *key = gChatKeyNow; UIWindow *w = c.window ?: gEntry.window;
+    if (!text.length || !key) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (EntryTextView().text.length) return;   // not sent
+        if (Opt(@"fx")) EmojiRain(FxFor(text), [UIApplication sharedApplication].keyWindow ?: w);
+        if (Opt(@"unsend")) UnsendLater(text, key, w);
+    });
+}
+- (void)hold:(UILongPressGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateBegan || !Opt(@"sched")) return;
+    NSString *text = [EntryTextView().text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!text.length || !gChatKeyNow) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    M26SchedVC *vc = [M26SchedVC new]; vc.text = text; vc.key = gChatKeyNow;
+    if (@available(iOS 15.0, *)) { vc.sheetPresentationController.detents = @[UISheetPresentationControllerDetent.mediumDetent]; vc.sheetPresentationController.prefersGrabberVisible = YES; }
+    [TopVC(g.view.window) presentViewController:vc animated:YES completion:nil];
+}
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g { return Opt(@"sched") && EntryTextView().text.length > 0; }
+@end
+static void HookSendControl(UIView *v) {
+    if (![v isKindOfClass:[UIControl class]] || objc_getAssociatedObject(v, "m26send")) return;
+    objc_setAssociatedObject(v, "m26send", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [(UIControl *)v addTarget:[M26Send shared] action:@selector(down:) forControlEvents:UIControlEventTouchDown];
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[M26Send shared] action:@selector(hold:)];
+    lp.minimumPressDuration = 0.5; lp.delegate = (id<UIGestureRecognizerDelegate>)[M26Send shared];
+    [v addGestureRecognizer:lp];
+}
+
+// ---- chat lock ----
+#define LOCK_TAG 0x4D32365C
+static BOOL gLockAsking = NO;
+static void LockPreview(UIView *avatar, NSString *key) {
+    UIView *cell = avatar; while (cell && ![cell isKindOfClass:[UICollectionViewCell class]]) cell = cell.superview;
+    if (!cell) return;
+    BOOL locked = key && Opt(@"lock") && [LockedKeys() containsObject:key];
+    CGRect ar = [avatar convertRect:avatar.bounds toView:cell];
+    if (ar.size.width > 80) return;   // pinned circles have no preview text
+    NSMutableArray *st = [NSMutableArray arrayWithObject:cell]; int g = 0;
+    while (st.count && g++ < 80) { UIView *x = st.lastObject; [st removeLastObject];
+        if ([x isKindOfClass:[UILabel class]] && x.tag != LOCK_TAG) {
+            CGRect r = [x convertRect:x.bounds toView:cell];
+            if (CGRectGetMinX(r) > CGRectGetMaxX(ar) && CGRectGetMinY(r) > CGRectGetMidY(ar) - 8) { CGFloat a = locked ? 0 : 1; if (x.alpha != a) x.alpha = a; }
+        }
+        [st addObjectsFromArray:x.subviews]; }
+    UILabel *l = (UILabel *)[cell viewWithTag:LOCK_TAG];
+    if (locked && !l) { l = [UILabel new]; l.tag = LOCK_TAG; l.text = @"🔒 Locked"; l.font = [UIFont systemFontOfSize:16]; l.textColor = UIColor.secondaryLabelColor; [cell addSubview:l]; }
+    if (l) { l.hidden = !locked; l.frame = CGRectMake(CGRectGetMaxX(ar) + 16, CGRectGetMidY(ar) + 2, 200, 22); }
+}
+static void ChatLock(UIWindow *w) {
+    UIView *ov = [w viewWithTag:LOCK_TAG + 1];
+    NSString *key = gChatKeyNow; UIView *e = gEntry;
+    BOOL need = e.window && key && Opt(@"lock") && [LockedKeys() containsObject:key] && ![gUnlocked containsObject:key];
+    if (!need) { if (ov && !gLockAsking) [ov removeFromSuperview]; return; }
+    if (!ov) {
+        UIVisualEffectView *b = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterialDark]];
+        b.frame = w.bounds; b.tag = LOCK_TAG + 1;
+        UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"lock.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:44 weight:UIImageSymbolWeightSemibold]]];
+        ic.tintColor = UIColor.whiteColor; ic.center = CGPointMake(w.bounds.size.width / 2, w.bounds.size.height / 2 - 20); [b.contentView addSubview:ic];
+        [w addSubview:b]; ov = b;
+    }
+    [w bringSubviewToFront:ov];
+    if (gLockAsking) return;
+    gLockAsking = YES;
+    LAContext *ctx = [LAContext new];
+    [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:@"Unlock this chat" reply:^(BOOL ok, NSError *err) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            gLockAsking = NO;
+            if (ok) { if (!gUnlocked) gUnlocked = [NSMutableSet set]; [gUnlocked addObject:key]; [UIView animateWithDuration:0.3 animations:^{ ov.alpha = 0; } completion:^(__unused BOOL f) { [ov removeFromSuperview]; }]; }
+            else {
+                UICollectionView *cv = TranscriptCV(w);
+                UIResponder *r = cv; while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
+                UINavigationController *nc = ((UIViewController *)r).navigationController;
+                if (!nc) for (UIViewController *p = (UIViewController *)r; p && !nc; p = p.parentViewController) nc = p.navigationController;
+                [nc popToRootViewControllerAnimated:YES];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [ov removeFromSuperview]; });
+            }
+        });
+    }];
+}
+
+// ---- live "Read 2m ago" ----
+static void ReadTimer(UIWindow *w) {
+    if (!Opt(@"readtime")) return;
+    UICollectionView *cv = TranscriptCV(w);
+    if (!cv) return;
+    NSDateFormatter *df = [NSDateFormatter new]; df.dateFormat = @"h:mm a"; df.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    NSMutableArray *st = [NSMutableArray arrayWithArray:cv.subviews]; int g = 0;
+    while (st.count && g++ < 3000) { UIView *x = st.lastObject; [st removeLastObject];
+        if ([x isKindOfClass:[UILabel class]]) {
+            UILabel *l = (UILabel *)x;
+            NSString *orig = objc_getAssociatedObject(l, "m26read");
+            NSString *t = l.text;
+            if ([t hasPrefix:@"Read "] && ![t hasSuffix:@" ago"] && ![t hasSuffix:@"now"]) { orig = t; objc_setAssociatedObject(l, "m26read", orig, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+            else if (![t hasPrefix:@"Read "]) orig = nil;
+            if (orig) {
+                NSDate *tm = [df dateFromString:[orig substringFromIndex:5]];
+                if (!tm) continue;
+                NSCalendar *cal = NSCalendar.currentCalendar;
+                NSDateComponents *hc = [cal components:NSCalendarUnitHour | NSCalendarUnitMinute fromDate:tm];
+                NSDate *at = [cal dateBySettingHour:hc.hour minute:hc.minute second:0 ofDate:[NSDate date] options:0];
+                NSTimeInterval ago = [[NSDate date] timeIntervalSinceDate:at];
+                if (ago < 0) continue;
+                NSString *nt = ago < 60 ? @"Read just now" : ago < 3600 ? [NSString stringWithFormat:@"Read %dm ago", (int)(ago / 60)] : [NSString stringWithFormat:@"Read %dh %dm ago", (int)(ago / 3600), (int)fmod(ago, 3600) / 60];
+                if (![l.text isEqualToString:nt]) l.text = nt;
+            }
+            continue;
+        }
+        [st addObjectsFromArray:x.subviews]; }
+}
+
+// ---- incoming keyword effects ----
+static void IncomingFx(UIWindow *w) {
+    if (!Opt(@"fx")) return;
+    UICollectionView *cv = TranscriptCV(w);
+    id last = ChatItems(cv).lastObject;
+    if (!last) return;
+    NSString *guid = nil; @try { guid = [last valueForKey:@"guid"]; } @catch (__unused id e) {}
+    NSString *seen = objc_getAssociatedObject(cv, "m26fxseen");
+    if (!guid || [seen isEqualToString:guid]) return;
+    objc_setAssociatedObject(cv, "m26fxseen", guid, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!seen) return;   // just opened: don't replay old messages
+    if (!ItemFromMe(last)) EmojiRain(FxFor(ItemText(last)), w);
+}
+static void StyleFeatures(UIWindow *w) {
+    @try { CheckScheduled(); } @catch (__unused id e) {}
+    @try { ChatLock(w); } @catch (__unused id e) {}
+    UIView *e = gEntry;
+    if (!e.window) return;
+    @try { ReadTimer(w); } @catch (__unused id ex) {}
+    @try { IncomingFx(w); } @catch (__unused id ex) {}
+}
+
+// ---- pick which chats are locked ----
+@interface M26LockListVC : UITableViewController
+@property (nonatomic, strong) NSArray *convs;
+@end
+@implementation M26LockListVC
+- (void)viewDidLoad { [super viewDidLoad]; self.title = @"Locked Chats"; self.convs = AllConvs(); }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return self.convs.count; }
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *c = [tv dequeueReusableCellWithIdentifier:@"c"] ?: [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"c"];
+    c.textLabel.text = self.convs[ip.row][0];
+    BOOL on = [LockedKeys() containsObject:self.convs[ip.row][1]];
+    c.accessoryType = on ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+    c.imageView.image = [UIImage systemImageNamed:on ? @"lock.fill" : @"lock.open"]; c.imageView.tintColor = on ? UIColor.systemOrangeColor : UIColor.tertiaryLabelColor;
+    return c;
+}
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    NSMutableArray *a = [LockedKeys() mutableCopy]; NSString *k = self.convs[ip.row][1];
+    if ([a containsObject:k]) [a removeObject:k]; else [a addObject:k];
+    [[NSUserDefaults standardUserDefaults] setObject:a forKey:@"m26.locked"];
+    [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+    [tv reloadRowsAtIndexPaths:@[ip] withRowAnimation:UITableViewRowAnimationNone];
+}
+@end
 @interface M26SettingsVC : UITableViewController
 @end
 @implementation M26SettingsVC
@@ -3046,21 +3356,73 @@ static id CtxMenu(id self, SEL _cmd, UICollectionView *cv, NSIndexPath *ip, CGPo
     self.title = @"Messages26";
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(done)];
 }
+- (void)viewWillAppear:(BOOL)an { [super viewWillAppear:an]; [self.tableView reloadData]; }
 - (void)done { [self dismissViewControllerAnimated:YES completion:nil]; }
-- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return 1; }
-- (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s { return @"Animated frames around up to 3 people's photos. You can also hold a conversation and tap Set Frame. More settings come here as new features are added."; }
+static NSArray *FeatRows(void) {   // key, title, icon, color, footer
+    return @[@[@"lock", @"Chat Lock", @"lock.fill", UIColor.systemOrangeColor, @"Face ID before chosen chats open; their preview is hidden on the list."],
+             @[@"sched", @"Scheduled Send", @"clock.fill", UIColor.systemBlueColor, @"Hold the send button to pick a time. Messages must stay running (in the background is fine) to send it."],
+             @[@"fx", @"Keyword Effects", @"sparkles", UIColor.systemPinkColor, @"Emoji rain for words like \"love you\" ❤️, \"congrats\" 🎉, \"lol\" 😂, \"fire\" 🔥, \"good night\" 🌙."],
+             @[@"readtime", @"Live Read Time", @"eye.fill", UIColor.systemGreenColor, @"\"Read 7:53 PM\" becomes \"Read 2m ago\" and keeps counting."],
+             @[@"unsend", @"Auto Unsend", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"Your messages unsend themselves after the time below (iOS allows up to 2 minutes)."]];
+}
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
+    if (s == 0) return 1;
+    NSString *k = FeatRows()[s - 1][0];
+    if ([k isEqualToString:@"lock"] && Opt(@"lock")) return 2;
+    if ([k isEqualToString:@"unsend"] && Opt(@"unsend")) return 2;
+    if ([k isEqualToString:@"sched"] && Opt(@"sched") && Scheduled().count) return 2;
+    return 1;
+}
+- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 1 ? @"Custom Features" : nil; }
+- (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
+    if (s == 0) return @"Animated frames around up to 3 people's photos. You can also hold a conversation and tap Set Frame.";
+    return FeatRows()[s - 1][4];
+}
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
-    UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
-    c.textLabel.text = @"Contact Frames";
-    c.imageView.image = [UIImage systemImageNamed:@"person.crop.circle.badge.plus"]; c.imageView.tintColor = UIColor.systemPinkColor;
-    c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+    if (ip.section == 0) {
+        c.textLabel.text = @"Contact Frames";
+        c.imageView.image = [UIImage systemImageNamed:@"person.crop.circle.badge.plus"]; c.imageView.tintColor = UIColor.systemPinkColor;
+        c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        return c;
+    }
+    NSArray *r = FeatRows()[ip.section - 1];
+    if (ip.row == 0) {
+        c.textLabel.text = r[1];
+        c.imageView.image = [UIImage systemImageNamed:r[2]]; c.imageView.tintColor = r[3];
+        UISwitch *sw = [UISwitch new]; sw.on = Opt(r[0]); sw.tag = ip.section;
+        [sw addTarget:self action:@selector(toggle:) forControlEvents:UIControlEventValueChanged];
+        c.accessoryView = sw; c.selectionStyle = UITableViewCellSelectionStyleNone;
+        return c;
+    }
+    if ([r[0] isEqualToString:@"lock"]) { c.textLabel.text = @"Locked Chats"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)LockedKeys().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; }
+    if ([r[0] isEqualToString:@"sched"]) { c.textLabel.text = [NSString stringWithFormat:@"%lu waiting - tap to cancel all", (unsigned long)Scheduled().count]; c.textLabel.textColor = UIColor.systemRedColor; }
+    if ([r[0] isEqualToString:@"unsend"]) {
+        c.textLabel.text = @"Unsend After"; c.selectionStyle = UITableViewCellSelectionStyleNone;
+        UISegmentedControl *sg = [[UISegmentedControl alloc] initWithItems:@[@"30s", @"60s", @"90s", @"110s"]];
+        NSInteger secs = [[NSUserDefaults standardUserDefaults] integerForKey:@"m26.unsendSecs"]; if (secs <= 0) secs = 60;
+        sg.selectedSegmentIndex = secs <= 30 ? 0 : secs <= 60 ? 1 : secs <= 90 ? 2 : 3;
+        [sg addTarget:self action:@selector(secs:) forControlEvents:UIControlEventValueChanged];
+        [sg sizeToFit]; c.accessoryView = sg;
+    }
     return c;
 }
+- (void)toggle:(UISwitch *)sw {
+    [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+    SetOpt(FeatRows()[sw.tag - 1][0], sw.on);
+    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:sw.tag] withRowAnimation:UITableViewRowAnimationFade];
+}
+- (void)secs:(UISegmentedControl *)sg { [[NSUserDefaults standardUserDefaults] setInteger:@[@30, @60, @90, @110][sg.selectedSegmentIndex].integerValue forKey:@"m26.unsendSecs"]; }
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
-    [self.navigationController pushViewController:[[M26FramesVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+    if (ip.section == 0) { [self.navigationController pushViewController:[[M26FramesVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES]; return; }
+    NSString *k = FeatRows()[ip.section - 1][0];
+    if (ip.row == 1 && [k isEqualToString:@"lock"]) [self.navigationController pushViewController:[[M26LockListVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+    if (ip.row == 1 && [k isEqualToString:@"sched"]) { SaveScheduled(@[]); [tv reloadSections:[NSIndexSet indexSetWithIndex:ip.section] withRowAnimation:UITableViewRowAnimationFade]; }
 }
 @end
+
 @interface M26Gear : NSObject
 + (instancetype)shared;
 @end
@@ -3344,6 +3706,7 @@ static void Tick(void) {
     @try { ApplyChatBg(w); } @catch (__unused id e) {}
     @try { StyleFrames(w); } @catch (__unused id e) {}
     @try { StyleGear(w); } @catch (__unused id e) {}
+    @try { StyleFeatures(w); } @catch (__unused id e) {}
     { UIView *ce = gEntry; if (!ce.window) gChatShown = NO; }
     if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
@@ -3372,9 +3735,9 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.15.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.16.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
-    l.text = [l.text stringByAppendingFormat:@"\n %@", gFrameDebug];
+    l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
@@ -3421,6 +3784,7 @@ static void Tick(void) {
         UIView *e = gEntry; [e setNeedsLayout];
     }];
     [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillHideNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) { gKbTop = 0; UIView *e = gEntry; [e setNeedsLayout]; }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) { [gUnlocked removeAllObjects]; }];
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, CFSTR("com.nano.messages26/prefschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_async(dispatch_get_main_queue(), ^{
         Class E = NSClassFromString(@"CKMessageEntryView");
