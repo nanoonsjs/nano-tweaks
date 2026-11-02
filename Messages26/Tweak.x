@@ -94,7 +94,7 @@ static UIVisualEffectView *GlassView(UIView *forTrait) {
 }
 // Extra-glassy (iOS 26): clear blur, a light sheen on top and a bright rim.
 static UIColor *Ink(UIView *v);
-static UIVisualEffectView *ClearGlass(UIView *forTrait) {
+__attribute__((unused)) static UIVisualEffectView *ClearGlass(UIView *forTrait) {
     UIVisualEffectView *g = GlassView(forTrait);
     BOOL dark = IsDark(forTrait);
     g.contentView.backgroundColor = dark ? [UIColor colorWithWhite:1 alpha:0.06] : [UIColor colorWithWhite:1 alpha:0.3];
