@@ -1,4 +1,5 @@
-// Messages26 0.12.1 - made by nano
+// Messages26 0.12.2 - made by nano
+// 0.12.2: pull up past the last message to see the full background, pull down to come back
 // 0.12.1: no black corners on bubbles over a background
 // 0.12.0: Backgrounds tab (None / Photo / Color), each chat its own background
 // 0.11.4: no gray boxes (header, media, cells); one glass card per Info group; Shared-with-You note gone
@@ -2313,6 +2314,45 @@ static void StyleBgTab(UIViewController *vc) {
     }
 }
 
+
+// Pull the chat up past the last message to see the whole background; pull down to bring it back.
+@interface M26Peek : NSObject
++ (instancetype)shared;
+@end
+@implementation M26Peek
++ (instancetype)shared { static M26Peek *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Peek new]; }); return t; }
+- (void)pan:(UIPanGestureRecognizer *)g {
+    UICollectionView *cv = (UICollectionView *)g.view;
+    if (![cv isKindOfClass:[UICollectionView class]] || !BgFor(objc_getAssociatedObject(cv, "m26key"))) return;
+    if (g.state != UIGestureRecognizerStateEnded) return;
+    CGFloat extra = [objc_getAssociatedObject(cv, "m26peek") doubleValue];
+    UIEdgeInsets in = cv.adjustedContentInset;
+    CGFloat maxY = cv.contentSize.height + in.bottom - cv.bounds.size.height;
+    CGFloat vy = [g velocityInView:cv].y;
+    if (extra <= 0) {
+        if (cv.contentOffset.y - maxY > 70) {
+            CGFloat E = MAX(0, cv.bounds.size.height - in.top - 160);
+            objc_setAssociatedObject(cv, "m26peek", @(E), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+            UIEdgeInsets ci = cv.contentInset; ci.bottom += E;
+            CGFloat target = maxY + E;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                cv.contentInset = ci;
+                [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ cv.contentOffset = CGPointMake(0, target); } completion:nil];
+            });
+        }
+    } else if (vy > 120 || cv.contentOffset.y < maxY - 60) {
+        objc_setAssociatedObject(cv, "m26peek", @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIEdgeInsets ci = cv.contentInset; ci.bottom = MAX(0, ci.bottom - extra);
+        CGFloat target = maxY - extra;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+                cv.contentInset = ci; cv.contentOffset = CGPointMake(0, MAX(-cv.adjustedContentInset.top, target));
+            } completion:nil];
+        });
+    }
+}
+@end
 // In the chat: that conversation's background behind the messages.
 static void ApplyChatBg(UIWindow *w) {
     UIView *e = gEntry;
@@ -2322,6 +2362,8 @@ static void ApplyChatBg(UIWindow *w) {
     NSString *key = nil;
     for (UIResponder *r = cv; r && !key; r = r.nextResponder) if ([r respondsToSelector:NSSelectorFromString(@"conversation")]) key = ConvKey(r);
     if (!key) { id d = cv.delegate; for (int i = 0; i < 3 && d && !key; i++) { key = ConvKey(d); @try { d = [d valueForKey:@"delegate"]; } @catch (__unused id ex) { d = nil; } } }
+    if (key) objc_setAssociatedObject(cv, "m26key", key, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!objc_getAssociatedObject(cv, "m26peekon")) { objc_setAssociatedObject(cv, "m26peekon", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); [cv.panGestureRecognizer addTarget:[M26Peek shared] action:@selector(pan:)]; }
     NSDictionary *bg = gOn ? BgFor(key) : nil;
     NSString *stamp = bg ? [NSString stringWithFormat:@"%@|%@|%@", key, bg[@"t"], bg[@"hex"]] : @"none";
     if ([objc_getAssociatedObject(cv, "m26bg") isEqual:stamp]) return;
@@ -2407,7 +2449,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.12.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.12.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
