@@ -1,4 +1,5 @@
-// Messages26 0.10.9 - made by nano
+// Messages26 0.10.10 - made by nano
+// 0.10.10: photo + name scaled without fighting Messages' layout; name hangs right under the photo
 // 0.10.9: photo is the 51x60 avatar container
 // 0.10.8: photo found anywhere on screen above the name
 // 0.10.7: photo + name scaled one by one (bigger for real); drag the debug box anywhere
@@ -825,6 +826,10 @@ static CGRect DrawnRect(UIView *v) {
     gDrewNothing = CGRectIsNull(u);
     return CGRectIsNull(u) ? v.frame : u;
 }
+static __weak UIView *gNameNow;
+static CGFloat gNameTy = 0;
+#define TITLE_SCALE 1.3
+static CGRect NameDrawn(UIView *name, CGRect r, UIView *host);
 static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     UIView *host = v.superview;
     if (!host) return;
@@ -838,7 +843,8 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
         objc_setAssociatedObject(v, &kGlassKey, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     CGRect f = DrawnRect(v);
-    CGRect want = CGRectInset(f, -padX, -padY);
+    f = NameDrawn(v, f, host);
+    CGRect want = CGRectInset(f, -padX * (v == gNameNow && !CATransform3DIsIdentity(v.layer.sublayerTransform) ? TITLE_SCALE : 1), -padY * (v == gNameNow && !CATransform3DIsIdentity(v.layer.sublayerTransform) ? TITLE_SCALE : 1));
     if (circle) { CGFloat d = MAX(want.size.width, want.size.height); want = CGRectMake(CGRectGetMidX(f) - d / 2, CGRectGetMidY(f) - d / 2, d, d); }
     want = CGRectIntegral(want);
     if (g.layer.animationKeys.count || g.alpha < 1) return;
@@ -883,7 +889,6 @@ static void UndoNav(void) {
 @end
 static UIViewController *SearchList(void);
 static NSHashTable *gNameGlass;
-static __weak UIView *gNameNow;
 // A soft blur fading down from the top (behind the status bar and the buttons).
 static __weak UINavigationBar *gChatBar;
 static void TopBlur(UINavigationBar *nb) {
@@ -901,7 +906,7 @@ static void TopBlur(UINavigationBar *nb) {
     if (b.superview != host || [host.subviews indexOfObject:b] > [host.subviews indexOfObject:nb]) [host insertSubview:b belowSubview:nb];
     CGFloat bot = CGRectGetMaxY([nb convertRect:nb.bounds toView:host]) + 6;
     UIView *tb = gNameNow;
-    if (tb.window && [tb isDescendantOfView:nb]) bot = MAX(bot, CGRectGetMaxY([tb convertRect:tb.bounds toView:host]) + 14);
+    if (tb.window && [tb isDescendantOfView:nb]) bot = MAX(bot, CGRectGetMaxY(NameDrawn(tb, [tb convertRect:tb.bounds toView:host], host)) + 14);
     CGRect f = CGRectMake(0, 0, host.bounds.size.width, bot);
     if (!CGRectEqualToRect(b.frame, f)) { b.frame = f; [CATransaction begin]; [CATransaction setDisableActions:YES]; b.layer.mask.frame = b.bounds; [CATransaction commit]; }
 }
@@ -1133,7 +1138,6 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
 static __weak UIView *gAvatarV;
 static NSString *gTitleDebug = @"title: -";
 static NSString *gTitleNear = @"";
-#define TITLE_SCALE 1.3
 static void Crisp(UIView *root, CGFloat s) {
     CGFloat cs = UIScreen.mainScreen.scale * s;
     NSMutableArray *st = [NSMutableArray arrayWithObject:root]; int g = 0;
@@ -1165,25 +1169,48 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
         // the outermost view of that size
         while (av.superview && ![av.superview isKindOfClass:[UINavigationBar class]] && fabs(av.superview.bounds.size.width - av.bounds.size.width) < 1 && fabs(av.superview.bounds.size.height - av.bounds.size.height) < 1) av = av.superview;
     }
-    if (oldA && oldA != av) oldA.transform = CGAffineTransformIdentity;
+    // Scale with the layers' sublayerTransform: Messages lays these views out by frame
+    // (a view transform got baked into their size and the photo jumped up).
+    if (oldA && oldA != av) oldA.layer.sublayerTransform = CATransform3DIdentity;
+    if (!CGAffineTransformIsIdentity(oldA.transform)) oldA.transform = CGAffineTransformIdentity;
     gAvatarV = av;
     CGFloat s = TITLE_SCALE;
     if (!av) {
-        if (name && !CGAffineTransformIsIdentity(name.transform) && !(chat && gTopOn)) name.transform = CGAffineTransformIdentity;
+        if (name && !(chat && gTopOn)) { name.layer.sublayerTransform = CATransform3DIdentity; gNameTy = 0; }
         gTitleDebug = [NSString stringWithFormat:@"title: no photo; near: %@", gTitleNear];
         return;
     }
-    CGFloat a = av.bounds.size.height, n = name.bounds.size.height;
-    CGFloat tyA = 14 + (s - 1) * a / 2;
-    CGFloat tyN = tyA + (s - 1) * a / 2 + (s - 1) * n / 2 + 2;
-    CGAffineTransform ta = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, tyA), s, s);
-    CGAffineTransform tn = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, tyN), s, s);
-    if (!CGAffineTransformEqualToTransform(av.transform, ta)) av.transform = ta;
-    if (!CGAffineTransformEqualToTransform(name.transform, tn)) name.transform = tn;
+    if (!CGAffineTransformIsIdentity(av.transform)) av.transform = CGAffineTransformIdentity;
+    if (!CGAffineTransformIsIdentity(name.transform)) name.transform = CGAffineTransformIdentity;
+    CGRect ar = [av convertRect:av.bounds toView:nil], nr = [name convertRect:name.bounds toView:nil];
+    CGFloat a = ar.size.height, n = nr.size.height;
+    // the round photo inside the box (its bottom is where the name should hang)
+    CGFloat circBot = ar.size.width;   // local
+    UIView *circ = Find(av, ^BOOL(UIView *v) { return v != av && v.bounds.size.width >= 30 && fabs(v.bounds.size.width - v.bounds.size.height) < 2; }, 40);
+    if (circ) circBot = CGRectGetMaxY([circ convertRect:circ.bounds toView:av]);
+    CGFloat tyA = 10 + (s - 1) * a / 2;
+    CGFloat avC = CGRectGetMidY(ar);
+    CGFloat circleBottom = avC + s * (circBot - a / 2) + tyA;
+    CGFloat nC = CGRectGetMidY(nr);
+    CGFloat tyN = circleBottom - 5 - nC + s * n / 2;
+    CATransform3D ta = CATransform3DScale(CATransform3DMakeTranslation(0, tyA, 0), s, s, 1);
+    CATransform3D tn = CATransform3DScale(CATransform3DMakeTranslation(0, tyN, 0), s, s, 1);
+    if (!CATransform3DEqualToTransform(av.layer.sublayerTransform, ta)) av.layer.sublayerTransform = ta;
+    if (!CATransform3DEqualToTransform(name.layer.sublayerTransform, tn)) name.layer.sublayerTransform = tn;
+    gNameTy = tyN;
     Crisp(name, s);
-    for (UIView *p = av.superview; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
-    for (UIView *p = name.superview; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
-    gTitleDebug = [NSString stringWithFormat:@"title: photo=%@ %.0f name=%@ %.0f", NSStringFromClass([av class]), a, NSStringFromClass([name class]), n];
+    for (UIView *p = av; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
+    for (UIView *p = name; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
+    gTitleDebug = [NSString stringWithFormat:@"title: photo=%@ %.0fx%.0f circ=%.0f name=%@ %.0f tyN=%.0f", NSStringFromClass([av class]), ar.size.width, a, circBot, NSStringFromClass([name class]), n, tyN];
+}
+// where the scaled name is actually drawn (in host's space)
+static CGRect NameDrawn(UIView *name, CGRect r, UIView *host) {
+    if (name != gNameNow || CATransform3DIsIdentity(name.layer.sublayerTransform)) return r;
+    CGPoint c = [name convertPoint:CGPointMake(name.bounds.size.width / 2, name.bounds.size.height / 2) toView:host];
+    CGFloat s = TITLE_SCALE;
+    CGPoint rc = CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r));
+    CGPoint nc = CGPointMake(c.x + (rc.x - c.x) * s, c.y + (rc.y - c.y) * s + gNameTy);
+    return CGRectMake(nc.x - r.size.width * s / 2, nc.y - r.size.height * s / 2, r.size.width * s, r.size.height * s);
 }
 static void StyleNav(UIWindow *w) {
     UIView *e = gEntry;
@@ -1731,7 +1758,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.9 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.10 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
@@ -1755,7 +1782,7 @@ static void Tick(void) {
     BOOL r = %orig;
     if (r) return r;
     UIView *tb = gNameNow;
-    if (tb && tb.window && !CGAffineTransformIsIdentity(tb.transform) && (self == tb || [tb isDescendantOfView:self]) && CGRectContainsPoint([tb convertRect:tb.bounds toView:self], p)) return YES;
+    if (tb && tb.window && !CATransform3DIsIdentity(tb.layer.sublayerTransform) && (self == tb || [tb isDescendantOfView:self]) && CGRectContainsPoint(NameDrawn(tb, [tb convertRect:tb.bounds toView:self], self), p)) return YES;
     UIView *en = gEntry, *fld = gField;
     if (!en || (self != en && ![en isDescendantOfView:self] && !(fld && [fld isDescendantOfView:self]))) return r;
     for (NSNumber *t in @[@(PILL_TAG), @(PLUS_TAG)]) {
