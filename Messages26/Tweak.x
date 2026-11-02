@@ -1,4 +1,5 @@
-// Messages26 0.8.1 - made by nano
+// Messages26 0.8.2 - made by nano
+// 0.8.2: the bar never gets stuck "waiting" (pill, + and glass are back); no empty glass circles
 // 0.8.1: text no longer jumps up and down; send works
 // 0.8.0: send / mic always inside the pill (also with the keyboard up), no floating pill after the keyboard closes
 // 0.7.9: taps on the pill go straight to the text box (opens the keyboard); mic / send no longer cut off
@@ -547,13 +548,9 @@ static void StyleEntry(UIView *entry) {
         NSMutableArray *row = [NSMutableArray arrayWithObject:field];
         // where the text box is without our move (from its centre and size, so its
         // transform is never touched: resetting it made the text jump up and down)
-        CGRect fu = [field.superview convertRect:CGRectMake(field.center.x - field.bounds.size.width / 2, field.center.y - field.bounds.size.height / 2, field.bounds.size.width, field.bounds.size.height) toView:entry];
+        CGRect fu = CGRectOffset([field convertRect:field.bounds toView:entry], 0, -field.transform.ty);
         // mid-animation (keyboard going away) the text box is somewhere odd: wait
-        if (CGRectGetMinY(fu) < -10 || CGRectGetMaxY(fu) > entry.bounds.size.height + 10) {
-            gDebug = [NSString stringWithFormat:@"waiting: field at %.0f", CGRectGetMinY(fu)];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [entry setNeedsLayout]; });
-            return;
-        }
+        BOOL odd = CGRectGetMinY(fu) < -10 || CGRectGetMaxY(fu) > entry.bounds.size.height + 10;   // mid-animation: don't move this pass
         NSMutableArray *cs = [NSMutableArray arrayWithArray:entry.subviews]; int gc = 0;
         while (cs.count && gc++ < 300) { UIView *v = cs.lastObject; [cs removeLastObject];
             if (v == field || v.tag == PLUS_TAG || v.tag == PILL_TAG || v == strip || [v isDescendantOfView:field]) continue;
@@ -569,7 +566,7 @@ static void StyleEntry(UIView *entry) {
         CGFloat wantBottom = kbUp ? entry.bounds.size.height - 10 : entry.bounds.size.height - 43;
         if (!strip) wantBottom = kbUp ? entry.bounds.size.height - 4 : CGRectGetMaxY(fu);
         shift = wantBottom - CGRectGetMaxY(fu);
-        if (fabs(shift) > 200) shift = 0;
+        if (fabs(shift) > 200 || odd) shift = field.transform.ty;   // keep what it has
         gKbTop = kbUp ? CGRectGetMaxY(ef) : 0;
         CGAffineTransform rt = CGAffineTransformMakeTranslation(0, shift);
         for (UIView *v in row) if (!CGAffineTransformEqualToTransform(v.transform, rt)) v.transform = rt;
@@ -773,8 +770,10 @@ static void EntryLayout(UIView *self, SEL _cmd) {
 static NSHashTable *gStyled;   // nav things we put glass behind / changed
 static char kGlassKey;
 // What a view actually draws (its icons / text), not its whole tap area.
+static BOOL gDrewNothing;
 static CGRect DrawnRect(UIView *v) {
     CGRect u = CGRectNull;
+    gDrewNothing = NO;
     NSMutableArray *st = [NSMutableArray arrayWithObject:v];
     int g = 0;
     while (st.count && g++ < 40) {
@@ -791,6 +790,7 @@ static CGRect DrawnRect(UIView *v) {
         }
         [st addObjectsFromArray:x.subviews];
     }
+    gDrewNothing = CGRectIsNull(u);
     return CGRectIsNull(u) ? v.frame : u;
 }
 static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
@@ -811,7 +811,7 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     want = CGRectIntegral(want);
     if (g.layer.animationKeys.count || g.alpha < 1) return;
     if (!CGRectEqualToRect(g.frame, want)) { g.frame = want; g.layer.cornerRadius = MIN(want.size.width, want.size.height) / 2; }
-    g.hidden = v.hidden || v.alpha < 0.05;
+    g.hidden = v.hidden || v.alpha < 0.05 || gDrewNothing;
     for (UIView *p = host; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
 }
 static NSHashTable *gFaded;   // bar backgrounds we hid
@@ -1106,7 +1106,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.8.1 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.8.2 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
