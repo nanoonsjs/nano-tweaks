@@ -1,4 +1,5 @@
-// Messages26 0.18.8 - made by nano
+// Messages26 1.0 - made by nano
+// 1.0: first public release - iOS 26 Messages redesign plus custom features (all in the Messages26 settings)
 // 0.18.14: jelly bounce on search / new message / settings / Edit / + pills, iMessage box same glass as search, smoother + menu, iOS 26 settings
 // 0.18.13: tabs centered when there are only a few; moved photo no longer cut off at the top
 // 0.18.12: contact photo moves up (its full-width avatar box); Links / Documents / Collaboration tabs only when the chat has some
@@ -5189,7 +5190,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.14 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
