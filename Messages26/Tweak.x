@@ -1,4 +1,5 @@
-// Messages26 0.16.2 - made by nano
+// Messages26 0.16.3 - made by nano
+// 0.16.3: lock screen solid + hides the message bar; Cancel / 2 fails go to the list; Lock Again timer; scheduled send + auto unsend removed
 // 0.16.2: Face ID for locked chats runs in SpringBoard (no more crash)
 // 0.16.1: iOS 26 lock screen for chats (Face ID, Cancel goes back); compact Send Later sheet, keyboard hides first
 // 0.16.0: Chat Lock, Scheduled Send, Keyword Effects, Live Read Time, Auto Unsend (all off by default, in Messages26 settings)
@@ -3048,10 +3049,20 @@ static id CtxMenu(id self, SEL _cmd, UICollectionView *cv, NSIndexPath *ip, CGPo
 
 #pragma mark - extra features (all off by default, switched in Messages26 settings)
 
-static BOOL Opt(NSString *k) { return gOn && [[NSUserDefaults standardUserDefaults] boolForKey:[@"m26.opt." stringByAppendingString:k]]; }
+static BOOL Opt(NSString *k) { if ([k isEqualToString:@"sched"] || [k isEqualToString:@"unsend"]) return NO; return gOn && [[NSUserDefaults standardUserDefaults] boolForKey:[@"m26.opt." stringByAppendingString:k]]; }
 static void SetOpt(NSString *k, BOOL v) { [[NSUserDefaults standardUserDefaults] setBool:v forKey:[@"m26.opt." stringByAppendingString:k]]; }
 static NSArray *LockedKeys(void) { return [[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.locked"] ?: @[]; }
-static NSMutableSet *gUnlocked;
+__attribute__((unused)) static NSMutableSet *gUnlocked;
+static NSMutableDictionary *gUnlockedAt;   // key -> unlock time
+// 0 instant, 180, 300, -1 until Messages closes
+static NSInteger LockSecs(void) { id v = [[NSUserDefaults standardUserDefaults] objectForKey:@"m26.lockSecs"]; return v ? [v integerValue] : -1; }
+static BOOL StillUnlocked(NSString *key) {
+    NSNumber *t = gUnlockedAt[key]; if (!t) return NO;
+    NSInteger d = LockSecs();
+    if (d < 0) return YES;
+    if (d == 0) return YES;   // cleared when you leave the chat
+    return [NSDate date].timeIntervalSince1970 - t.doubleValue < d;
+}
 static NSString *gFeatDebug = @"feat: -";
 static NSArray *AllConvs(void) {   // @[@[name, key, conv], ...]
     NSMutableArray *a = [NSMutableArray array];
@@ -3269,7 +3280,9 @@ static void HookSendControl(UIView *v) {
 // ---- chat lock ----
 #define LOCK_TAG 0x4D32365C
 static BOOL gLockAsking = NO;
-static void (^gAuthReply)(BOOL);
+static void (^gAuthReply)(NSInteger);
+static NSInteger gLockFails = 0;
+static BOOL gLockAutoAsked = NO;
 static void LockPreview(UIView *avatar, NSString *key) {
     UIView *cell = avatar; while (cell && ![cell isKindOfClass:[UICollectionViewCell class]]) cell = cell.superview;
     if (!cell) return;
@@ -3294,19 +3307,34 @@ static NSString *ConvNameForKey(NSString *key);
 @property (nonatomic, weak) UIView *overlay;
 @end
 static void LockLeave(UIWindow *w) {
+    UIViewController *lv = ListVC(w.rootViewController, 0);
+    // Messages' own "show the list"
+    for (UIViewController *p = w.rootViewController; p; p = p.childViewControllers.firstObject) {
+        for (NSString *sn in @[@"showConversationListWithAnimation:", @"showConversationList:"]) {
+            SEL sel = NSSelectorFromString(sn);
+            if ([p respondsToSelector:sel]) { ((void (*)(id, SEL, BOOL))objc_msgSend)(p, sel, YES); return; }
+        }
+        if (p.childViewControllers.count == 0) break;
+    }
+    // else pop whichever stack holds the list back to it
+    NSMutableArray *st = [NSMutableArray arrayWithObject:w.rootViewController];
+    while (st.count) {
+        UIViewController *v = st.lastObject; [st removeLastObject];
+        if ([v isKindOfClass:[UINavigationController class]] && lv && [((UINavigationController *)v).viewControllers containsObject:lv]) { [(UINavigationController *)v popToViewController:lv animated:YES]; return; }
+        [st addObjectsFromArray:v.childViewControllers];
+    }
     UICollectionView *cv = TranscriptCV(w);
     UIResponder *r = cv; while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
     UINavigationController *nc = nil;
     for (UIViewController *p = (UIViewController *)r; p && !nc; p = p.parentViewController) nc = p.navigationController;
-    if (!nc) { UIViewController *lv = ListVC(w.rootViewController, 0); nc = lv.navigationController; }
     [nc popToRootViewControllerAnimated:YES];
 }
 @implementation M26Lock
 + (instancetype)shared { static M26Lock *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Lock new]; }); return t; }
 - (void)unlocked {
     UIView *ov = self.overlay;
-    if (!gUnlocked) gUnlocked = [NSMutableSet set];
-    if (self.key) [gUnlocked addObject:self.key];
+    if (!gUnlockedAt) gUnlockedAt = [NSMutableDictionary dictionary];
+    if (self.key) gUnlockedAt[self.key] = @([NSDate date].timeIntervalSince1970);
     [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
     UIImageView *ic = (UIImageView *)[ov viewWithTag:7];
     [UIView transitionWithView:ic duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ ic.image = [UIImage systemImageNamed:@"lock.open.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:38 weight:UIImageSymbolWeightSemibold]]; } completion:nil];
@@ -3322,10 +3350,16 @@ static void LockLeave(UIWindow *w) {
     UIView *disc = [ov viewWithTag:6];
     [UIView animateWithDuration:0.6 delay:0 options:UIViewAnimationOptionAutoreverse | UIViewAnimationOptionRepeat | UIViewAnimationOptionAllowUserInteraction animations:^{ disc.transform = CGAffineTransformMakeScale(1.06, 1.06); } completion:nil];
     __block BOOL answered = NO;
-    gAuthReply = ^(BOOL ok) {
+    gAuthReply = ^(NSInteger r) {
         answered = YES;
         [disc.layer removeAllAnimations]; disc.transform = CGAffineTransformIdentity;
-        if (ok) [self unlocked]; else { gLockAsking = NO; [self cancel]; }
+        gLockAsking = NO;
+        if (r == 1) { gLockFails = 0; [self unlocked]; return; }
+        if (r == -1) { [self cancel]; return; }   // cancelled: back to the list
+        gLockFails++;
+        [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeError];
+        CAKeyframeAnimation *sh = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"]; sh.values = @[@0, @-14, @12, @-8, @5, @0]; sh.duration = 0.45; [disc.layer addAnimation:sh forKey:@"shake"];
+        if (gLockFails >= 2) { gLockFails = 0; [self cancel]; }   // failed twice: back to the list
     };
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.nano.messages26/auth.req"), NULL, NULL, YES);
     // no answer at all: let the Unlock button be tapped again
@@ -3340,8 +3374,11 @@ static void LockLeave(UIWindow *w) {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     gLockAsking = YES;   // keep it covered while leaving
     LockLeave(w);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [UIView animateWithDuration:0.25 animations:^{ ov.alpha = 0; } completion:^(__unused BOOL f) { [ov removeFromSuperview]; gLockAsking = NO; }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        gLockAsking = NO;
+        UIView *e = gEntry;
+        if (e.window) return;   // still in the chat: stay locked (no new Face ID until the button)
+        [UIView animateWithDuration:0.25 animations:^{ ov.alpha = 0; } completion:^(__unused BOOL f) { [ov removeFromSuperview]; }];
     });
 }
 - (void)press:(UIView *)b { [UIView animateWithDuration:0.15 animations:^{ b.transform = CGAffineTransformMakeScale(0.95, 0.95); }]; }
@@ -3366,15 +3403,25 @@ static UIButton *LockGlassButton(NSString *title, NSString *icon, CGRect f, BOOL
 static void ChatLock(UIWindow *w) {
     UIView *ov = [w viewWithTag:LOCK_TAG + 1];
     NSString *key = gChatKeyNow; UIView *e = gEntry;
-    BOOL need = e.window && key && Opt(@"lock") && [LockedKeys() containsObject:key] && ![gUnlocked containsObject:key];
-    if (!need) { if (ov && !gLockAsking) [ov removeFromSuperview]; return; }
+    // "Instantly": leaving the chat locks it again
+    if (!e.window && LockSecs() == 0 && gUnlockedAt.count) [gUnlockedAt removeAllObjects];
+    BOOL need = e.window && key && Opt(@"lock") && [LockedKeys() containsObject:key] && !StillUnlocked(key);
+    if (!need) {
+        if (ov && !gLockAsking) [ov removeFromSuperview];
+        if (!ov && e.alpha < 0.01 && objc_getAssociatedObject(e, "m26lockhid")) { e.alpha = 1; objc_setAssociatedObject(e, "m26lockhid", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+        if (!e.window) gLockAutoAsked = NO;
+        return;
+    }
+    // the message bar (it floats in the keyboard's window) hides while locked
+    if (e.alpha > 0) { e.alpha = 0; objc_setAssociatedObject(e, "m26lockhid", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
     M26Lock *L = [M26Lock shared];
     if (!ov) {
         [w endEditing:YES];
         CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
         UIVisualEffectView *bv = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
         bv.frame = w.bounds; bv.tag = LOCK_TAG + 1;
-        UIView *shade = [[UIView alloc] initWithFrame:w.bounds]; shade.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; [bv.contentView addSubview:shade];
+        bv.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark];
+        UIView *shade = [[UIView alloc] initWithFrame:w.bounds]; shade.backgroundColor = [UIColor colorWithWhite:0 alpha:0.72]; [bv.contentView addSubview:shade];
         // glass disc with the lock
         UIView *disc = [[UIView alloc] initWithFrame:CGRectMake((W - 104) / 2, H * 0.3, 104, 104)]; disc.tag = 6;
         disc.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; disc.layer.cornerRadius = 52; RimFit(disc, YES);
@@ -3396,8 +3443,9 @@ static void ChatLock(UIWindow *w) {
         [w addSubview:bv]; ov = bv;
         [UIView animateWithDuration:0.25 animations:^{ bv.alpha = 1; }];
         [UIView animateWithDuration:0.6 delay:0.05 usingSpringWithDamping:0.62 initialSpringVelocity:0 options:0 animations:^{ disc.transform = CGAffineTransformIdentity; } completion:nil];
-        L.key = key; L.overlay = ov;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [L ask]; });
+        L.key = key; L.overlay = ov; gLockFails = 0;
+        // Face ID comes up by itself once when the chat opens; after that only from the button
+        if (!gLockAutoAsked) { gLockAutoAsked = YES; dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [L ask]; }); }
     }
     [w bringSubviewToFront:ov];
 }
@@ -3490,16 +3538,14 @@ static void StyleFeatures(UIWindow *w) {
 - (void)done { [self dismissViewControllerAnimated:YES completion:nil]; }
 static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     return @[@[@"lock", @"Chat Lock", @"lock.fill", UIColor.systemOrangeColor, @"Face ID before chosen chats open; their preview is hidden on the list."],
-             @[@"sched", @"Scheduled Send", @"clock.fill", UIColor.systemBlueColor, @"Hold the send button to pick a time. Messages must stay running (in the background is fine) to send it."],
              @[@"fx", @"Keyword Effects", @"sparkles", UIColor.systemPinkColor, @"Emoji rain for words like \"love you\" ❤️, \"congrats\" 🎉, \"lol\" 😂, \"fire\" 🔥, \"good night\" 🌙."],
-             @[@"readtime", @"Live Read Time", @"eye.fill", UIColor.systemGreenColor, @"\"Read 7:53 PM\" becomes \"Read 2m ago\" and keeps counting."],
-             @[@"unsend", @"Auto Unsend", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"Your messages unsend themselves after the time below (iOS allows up to 2 minutes)."]];
+             @[@"readtime", @"Live Read Time", @"eye.fill", UIColor.systemGreenColor, @"\"Read 7:53 PM\" becomes \"Read 2m ago\" and keeps counting."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     if (s == 0) return 1;
     NSString *k = FeatRows()[s - 1][0];
-    if ([k isEqualToString:@"lock"] && Opt(@"lock")) return 2;
+    if ([k isEqualToString:@"lock"] && Opt(@"lock")) return 3;
     if ([k isEqualToString:@"unsend"] && Opt(@"unsend")) return 2;
     if ([k isEqualToString:@"sched"] && Opt(@"sched") && Scheduled().count) return 2;
     return 1;
@@ -3507,7 +3553,9 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
 - (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 1 ? @"Custom Features" : nil; }
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
     if (s == 0) return @"Animated frames around up to 3 people's photos. You can also hold a conversation and tap Set Frame.";
-    return FeatRows()[s - 1][4];
+    NSString *f = FeatRows()[s - 1][4];
+    if ([FeatRows()[s - 1][0] isEqualToString:@"lock"]) f = [f stringByAppendingString:@" Lock Again: how long a chat stays open after you unlock it."];
+    return f;
 }
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
     UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
@@ -3524,6 +3572,14 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
         UISwitch *sw = [UISwitch new]; sw.on = Opt(r[0]); sw.tag = ip.section;
         [sw addTarget:self action:@selector(toggle:) forControlEvents:UIControlEventValueChanged];
         c.accessoryView = sw; c.selectionStyle = UITableViewCellSelectionStyleNone;
+        return c;
+    }
+    if ([r[0] isEqualToString:@"lock"] && ip.row == 2) {
+        c.textLabel.text = @"Lock Again"; c.selectionStyle = UITableViewCellSelectionStyleNone;
+        UISegmentedControl *sg = [[UISegmentedControl alloc] initWithItems:@[@"Instantly", @"3 min", @"5 min", @"On Close"]];
+        NSInteger d = LockSecs(); sg.selectedSegmentIndex = d == 0 ? 0 : d == 180 ? 1 : d == 300 ? 2 : 3;
+        [sg addTarget:self action:@selector(lockSecs:) forControlEvents:UIControlEventValueChanged];
+        [sg sizeToFit]; c.accessoryView = sg;
         return c;
     }
     if ([r[0] isEqualToString:@"lock"]) { c.textLabel.text = @"Locked Chats"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)LockedKeys().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; }
@@ -3543,6 +3599,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     SetOpt(FeatRows()[sw.tag - 1][0], sw.on);
     [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:sw.tag] withRowAnimation:UITableViewRowAnimationFade];
 }
+- (void)lockSecs:(UISegmentedControl *)sg { [[NSUserDefaults standardUserDefaults] setInteger:[(NSNumber *)@[@0, @180, @300, @-1][sg.selectedSegmentIndex] integerValue] forKey:@"m26.lockSecs"]; [gUnlockedAt removeAllObjects]; }
 - (void)secs:(UISegmentedControl *)sg { [[NSUserDefaults standardUserDefaults] setInteger:[(NSNumber *)@[@30, @60, @90, @110][sg.selectedSegmentIndex] integerValue] forKey:@"m26.unsendSecs"]; }
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
@@ -3865,7 +3922,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.16.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.16.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -3914,23 +3971,25 @@ static void SBAuthRequest(CFNotificationCenterRef c, void *o, CFNotificationName
         busy = YES;
         LAContext *ctx = [LAContext new];
         ctx.localizedFallbackTitle = @"Use Passcode";
-        void (^done)(BOOL) = ^(BOOL ok) {
+        void (^done)(NSInteger) = ^(NSInteger r) {   // 1 ok, 0 failed, -1 cancelled
             busy = NO;
-            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), ok ? CFSTR("com.nano.messages26/auth.ok") : CFSTR("com.nano.messages26/auth.fail"), NULL, NULL, YES);
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), r == 1 ? CFSTR("com.nano.messages26/auth.ok") : r == 0 ? CFSTR("com.nano.messages26/auth.fail") : CFSTR("com.nano.messages26/auth.cancel"), NULL, NULL, YES);
         };
         NSError *err = nil;
         LAPolicy pol = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&err] ? LAPolicyDeviceOwnerAuthenticationWithBiometrics : LAPolicyDeviceOwnerAuthentication;
+        NSInteger (^code)(BOOL, NSError *) = ^NSInteger(BOOL ok, NSError *e) { if (ok) return 1; return (e.code == LAErrorUserCancel || e.code == LAErrorSystemCancel || e.code == LAErrorAppCancel) ? -1 : 0; };
         [ctx evaluatePolicy:pol localizedReason:@"Unlock this chat" reply:^(BOOL ok, NSError *e) {
             if (!ok && e.code == LAErrorUserFallback) {
-                [[LAContext new] evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:@"Unlock this chat" reply:^(BOOL ok2, __unused NSError *e2) { dispatch_async(dispatch_get_main_queue(), ^{ done(ok2); }); }];
+                [[LAContext new] evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:@"Unlock this chat" reply:^(BOOL ok2, NSError *e2) { dispatch_async(dispatch_get_main_queue(), ^{ done(code(ok2, e2)); }); }];
                 return;
             }
-            dispatch_async(dispatch_get_main_queue(), ^{ done(ok); });
+            dispatch_async(dispatch_get_main_queue(), ^{ done(code(ok, e)); });
         }];
     });
 }
-static void MsgAuthOK(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(BOOL) = gAuthReply; gAuthReply = nil; if (r) r(YES); }); }
-static void MsgAuthFail(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(BOOL) = gAuthReply; gAuthReply = nil; if (r) r(NO); }); }
+static void MsgAuthOK(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(1); }); }
+static void MsgAuthFail(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(0); }); }
+static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(-1); }); }
 %ctor {
     if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, SBAuthRequest, CFSTR("com.nano.messages26/auth.req"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
@@ -3939,6 +3998,7 @@ static void MsgAuthFail(CFNotificationCenterRef c, void *o, CFNotificationName n
     if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.MobileSMS"]) return;
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, MsgAuthOK, CFSTR("com.nano.messages26/auth.ok"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, MsgAuthFail, CFSTR("com.nano.messages26/auth.fail"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, MsgAuthCancel, CFSTR("com.nano.messages26/auth.cancel"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     LoadPrefs();
     [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillChangeFrameNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
         CGRect f = [n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
@@ -3947,7 +4007,7 @@ static void MsgAuthFail(CFNotificationCenterRef c, void *o, CFNotificationName n
         UIView *e = gEntry; [e setNeedsLayout];
     }];
     [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillHideNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) { gKbTop = 0; UIView *e = gEntry; [e setNeedsLayout]; }];
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) { [gUnlocked removeAllObjects]; }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) { if (LockSecs() <= 0) [gUnlockedAt removeAllObjects]; }];
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, CFSTR("com.nano.messages26/prefschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_async(dispatch_get_main_queue(), ^{
         Class E = NSClassFromString(@"CKMessageEntryView");
