@@ -1,4 +1,5 @@
-// Messages26 0.10.4 - made by nano
+// Messages26 0.10.5 - made by nano
+// 0.10.5: To: typing spot stays after the label (Messages' resets are undone right away)
 // 0.10.4: typing in To: starts after the label; + is white
 // 0.10.3: To: row fits the capsule (no overlap), white + right under the X
 // 0.10.2: rim sits on the bubble edge, none on big emoji; reply arrow no longer grows huge
@@ -931,6 +932,16 @@ static void CancelToX(UINavigationItem *ni) {
 @end
 // New message "To:" row: a glass capsule, with a white glass + inside.
 static NSString *gToDebug = @"to: -";
+static char kToExtra, kToBase;
+static void (*origTVInset)(id, SEL, UIEdgeInsets);
+static void TVInset(UITextView *self, SEL _cmd, UIEdgeInsets in) {
+    NSNumber *ex = objc_getAssociatedObject(self, &kToExtra);
+    if (ex && ex.doubleValue > 0) {
+        objc_setAssociatedObject(self, &kToBase, [NSValue valueWithUIEdgeInsets:in], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        in.left += ex.doubleValue;
+    }
+    origTVInset(self, _cmd, in);
+}
 static void StyleToField(UIWindow *w) {
     UILabel *to = (UILabel *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UILabel class]] && [[((UILabel *)v).text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] hasPrefix:@"To:"] && v.window && !v.hidden && v.alpha > 0.05; }, 6000);
     if (!to) return;
@@ -1012,10 +1023,17 @@ static void StyleToField(UIWindow *w) {
         CGFloat caretX = [tv convertPoint:cr.origin toView:nil].x;
         CGFloat need = CGRectGetMaxX(lw) + 6 - caretX;
         if ([tv isDescendantOfView:to]) need = 0;
-        if (need > 0.5 && need < 80) {
-            UIEdgeInsets in = tv.textContainerInset; in.left += need; tv.textContainerInset = in;
+        // Messages keeps resetting the spacing: remember our extra and add it back every time
+        CGFloat extra = [objc_getAssociatedObject(tv, &kToExtra) doubleValue];
+        if (fabs(need) > 0.5 && (need > 0 || extra > 0) && need < 80) {
+            NSValue *bv = objc_getAssociatedObject(tv, &kToBase);
+            UIEdgeInsets base = bv ? bv.UIEdgeInsetsValue : tv.textContainerInset;
+            if (!bv) objc_setAssociatedObject(tv, &kToBase, [NSValue valueWithUIEdgeInsets:base], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            extra = MAX(0, extra + need);
+            objc_setAssociatedObject(tv, &kToExtra, @(extra), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            tv.textContainerInset = base;   // (the hook adds the extra)
         }
-        gToDebug = [NSString stringWithFormat:@"to: label=%.0f caret=%.0f add=%@ a=%.2f", CGRectGetMaxX(lw), caretX, add ? NSStringFromClass([add class]) : @"-", add.alpha];
+        gToDebug = [NSString stringWithFormat:@"to: label=%.0f caret=%.0f extra=%.0f add=%@ a=%.2f", CGRectGetMaxX(lw), caretX, [objc_getAssociatedObject(tv, &kToExtra) doubleValue], add ? NSStringFromClass([add class]) : @"-", add.alpha];
     }
 }
 
@@ -1635,7 +1653,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.4 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.5 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@", gBubbleDebug, gReplyDebug, gToDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
@@ -1675,6 +1693,7 @@ static void Tick(void) {
             MSHookMessageEx(E, @selector(layoutSubviews), (IMP)EntryLayout, (IMP *)&origEntryLayout);
             MSHookMessageEx(E, @selector(hitTest:withEvent:), (IMP)EntryHit, (IMP *)&origEntryHit);
         }
+        MSHookMessageEx([UITextView class], @selector(setTextContainerInset:), (IMP)TVInset, (IMP *)&origTVInset);
         @try { HookThemes(); } @catch (__unused id ex) {}
         Class CB = NSClassFromString(@"CKColoredBalloonView");
         if (CB) {
