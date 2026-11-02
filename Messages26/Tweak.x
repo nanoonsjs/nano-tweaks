@@ -1,4 +1,5 @@
-// Messages26 0.10.0 - made by nano
+// Messages26 0.10.1 - made by nano
+// 0.10.1: bubble rim follows the bubble shape; swipe reply opens the reply view
 // 0.10.0: glass rim on received bubbles, deeper blue iMessages, swipe right to reply
 // 0.9.2: search pill mic starts dictation; no FaceTime tap animation
 // 0.9.1: search moves above the keyboard with an X; all glass matches the search pill; top compose gone
@@ -1313,6 +1314,7 @@ static void StyleSearchPill(UIWindow *w) {
 #pragma mark - glass bubbles + swipe to reply
 
 static NSString *gBubbleDebug = @"bubbles: -";
+static NSString *gReplyDebug = @"reply=-";
 static UIColor *DeepBlue(void) { return [UIColor colorWithRed:0.04 green:0.10 blue:0.70 alpha:1]; }
 // darker blue for my iMessages: the theme's blue (and reply blue) colors
 static NSMapTable *gThemeOrig;   // "Class.sel" -> IMP
@@ -1355,31 +1357,52 @@ static void BubbleRim(UIView *b) {
     if (!gray) { @try { gray = [[b valueForKey:@"orientation"] intValue] == 0; } @catch (__unused id e) {} }
     UIView *host = b.superview;
     if (!gBubblesOn || !gray || !host || b.bounds.size.width < 10) { [rim removeFromSuperview]; return; }
-    // the bubble's own shape (stretchable image)
-    CALayer *src = nil;
-    UIView *mk = nil; @try { mk = [b valueForKey:@"mask"]; } @catch (__unused id e) {}
-    for (CALayer *l in @[b.maskView.layer ?: NSNull.null, mk.layer ?: NSNull.null, b.layer]) if ((id)l != NSNull.null && l.contents) { src = l; break; }
-    if (!src) { [rim removeFromSuperview]; return; }
     BOOL dark = IsDark(b);
     if (!rim) {
         rim = [UIView new]; rim.userInteractionEnabled = NO;
         CAGradientLayer *gl = [CAGradientLayer layer]; gl.name = @"g";
         gl.startPoint = CGPointMake(0.5, 0); gl.endPoint = CGPointMake(0.5, 1);
+        CAShapeLayer *m = [CAShapeLayer layer]; m.fillColor = UIColor.clearColor.CGColor; m.strokeColor = UIColor.blackColor.CGColor; m.lineWidth = 1.3;
+        gl.mask = m;
         [rim.layer addSublayer:gl];
-        rim.maskView = [UIView new];
         objc_setAssociatedObject(b, &kRimKey, rim, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    if (rim.superview != host) [host insertSubview:rim belowSubview:b];
-    else if ([host.subviews indexOfObject:rim] > [host.subviews indexOfObject:b]) [host insertSubview:rim belowSubview:b];
-    CGRect f = CGRectInset(b.frame, -1.1, -1.1);
+    // on top of the bubble (only the outline is drawn, so the text stays clear)
+    if (rim.superview != host || [host.subviews indexOfObject:rim] < [host.subviews indexOfObject:b]) [host insertSubview:rim aboveSubview:b];
+    BOOL tail = NO; @try { tail = [[b valueForKey:@"hasTail"] boolValue]; } @catch (__unused id e) {}
+    UIEdgeInsets ins = b.alignmentRectInsets;
+    CGRect body = UIEdgeInsetsInsetRect(b.bounds, ins);
+    if (body.size.width < 10 || body.size.height < 10) body = b.bounds;
+    body = CGRectInset(body, 0.65, 0.65);
+    CGFloat x0 = CGRectGetMinX(body), x1 = CGRectGetMaxX(body), y0 = CGRectGetMinY(body), y1 = CGRectGetMaxY(body);
+    CGFloat r = MIN(17.5, body.size.height / 2);
+    UIBezierPath *pth = [UIBezierPath bezierPath];
+    [pth moveToPoint:CGPointMake(x0 + r, y0)];
+    [pth addLineToPoint:CGPointMake(x1 - r, y0)];
+    [pth addArcWithCenter:CGPointMake(x1 - r, y0 + r) radius:r startAngle:-M_PI_2 endAngle:0 clockwise:YES];
+    [pth addLineToPoint:CGPointMake(x1, y1 - r)];
+    [pth addArcWithCenter:CGPointMake(x1 - r, y1 - r) radius:r startAngle:0 endAngle:M_PI_2 clockwise:YES];
+    if (tail) {
+        // iMessage tail curling out of the bottom-left corner
+        [pth addLineToPoint:CGPointMake(x0 + 11, y1)];
+        [pth addQuadCurveToPoint:CGPointMake(x0 - 5.5, y1 + 0.5) controlPoint:CGPointMake(x0 + 3, y1 + 1.5)];
+        [pth addQuadCurveToPoint:CGPointMake(x0, y1 - 9) controlPoint:CGPointMake(x0 + 0.5, y1 - 2.5)];
+    } else {
+        [pth addLineToPoint:CGPointMake(x0 + r, y1)];
+        [pth addArcWithCenter:CGPointMake(x0 + r, y1 - r) radius:r startAngle:M_PI_2 endAngle:M_PI clockwise:YES];
+    }
+    [pth addLineToPoint:CGPointMake(x0, y0 + r)];
+    [pth addArcWithCenter:CGPointMake(x0 + r, y0 + r) radius:r startAngle:M_PI endAngle:M_PI * 1.5 clockwise:YES];
+    [pth closePath];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
-    if (!CGRectEqualToRect(rim.frame, f)) rim.frame = f;
-    CALayer *m = rim.maskView.layer;
-    rim.maskView.frame = rim.bounds;
-    m.contents = src.contents; m.contentsCenter = src.contentsCenter; m.contentsScale = src.contentsScale; m.contentsGravity = src.contentsGravity; m.contentsRect = src.contentsRect;
+    if (!CGRectEqualToRect(rim.frame, b.frame)) rim.frame = b.frame;
     CAGradientLayer *gl = (CAGradientLayer *)rim.layer.sublayers.firstObject;
-    gl.frame = rim.bounds;
-    gl.colors = @[(id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.42 : 0.16].CGColor, (id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.16 : 0.08].CGColor, (id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.24 : 0.10].CGColor];
+    gl.frame = CGRectInset(rim.bounds, -8, -8);
+    CAShapeLayer *m = (CAShapeLayer *)gl.mask;
+    m.frame = gl.bounds;
+    [pth applyTransform:CGAffineTransformMakeTranslation(8, 8)];
+    m.path = pth.CGPath;
+    gl.colors = @[(id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.42 : 0.16].CGColor, (id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.16 : 0.08].CGColor, (id)[UIColor colorWithWhite:dark ? 1 : 0 alpha:dark ? 0.26 : 0.10].CGColor];
     gl.locations = @[@0, @0.5, @1];
     [CATransaction commit];
     rim.hidden = b.hidden; rim.alpha = b.alpha; rim.transform = b.transform;
@@ -1465,23 +1488,35 @@ static UIView *BalloonIn(UIView *root) {
         c.transform = CGAffineTransformIdentity;
         ar.alpha = 0; ar.transform = go ? CGAffineTransformMakeScale(1.5, 1.5) : CGAffineTransformMakeScale(0.3, 0.3);
     } completion:^(__unused BOOL d) { [ar removeFromSuperview]; }];
-    if (go) [self replyTo:b inCollection:(UICollectionView *)g.view cell:c];
+    if (go) {
+        UICollectionView *cv = (UICollectionView *)g.view;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self replyTo:b inCollection:cv cell:c]; });
+    }
 }
 - (void)replyTo:(UIView *)b inCollection:(UICollectionView *)cv cell:(UICollectionViewCell *)c {
-    // the transcript's own "reply" (the same as long-press -> Reply)
     NSMutableArray *cands = [NSMutableArray array];
-    if (cv.delegate) [cands addObject:cv.delegate];
+    id tvc = cv.delegate;
+    if (tvc) { [cands addObject:tvc]; @try { id d = [tvc valueForKey:@"delegate"]; if (d) [cands addObject:d]; } @catch (__unused id e) {} }
     for (UIResponder *r = cv; r; r = r.nextResponder) [cands addObject:r];
-    SEL s1 = NSSelectorFromString(@"balloonViewShowInlineReply:");
-    for (id o in cands) if ([o respondsToSelector:s1]) { ((void (*)(id, SEL, id))objc_msgSend)(o, s1, b); gBubbleDebug = [gBubbleDebug stringByAppendingString:@" reply=balloon"]; return; }
-    SEL s2 = NSSelectorFromString(@"showInlineReplyControllerForChatItem:presentKeyboard:");
-    NSIndexPath *ip = [cv indexPathForCell:c];
-    for (id o in cands) if ([o respondsToSelector:s2]) {
-        id item = nil;
-        for (id d in cands) { @try { NSArray *items = [d valueForKey:@"chatItems"]; if ([items isKindOfClass:[NSArray class]] && ip.item < (NSInteger)items.count) { item = items[ip.item]; break; } } @catch (__unused id e) {} }
-        if (item) { ((void (*)(id, SEL, id, BOOL))objc_msgSend)(o, s2, item, YES); gBubbleDebug = [gBubbleDebug stringByAppendingString:@" reply=item"]; return; }
+    // the message's chat item, then the chat's own "Reply" (same as hold -> Reply)
+    id item = nil;
+    SEL ci = NSSelectorFromString(@"chatItemForCell:");
+    for (id o in cands) if ([o respondsToSelector:ci]) { item = ((id (*)(id, SEL, id))objc_msgSend)(o, ci, c); if (item) break; }
+    if (!item) {
+        NSIndexPath *ip = [cv indexPathForCell:c];
+        for (id d in cands) { @try { NSArray *items = [d valueForKey:@"chatItems"]; if ([items isKindOfClass:[NSArray class]] && ip && ip.item < (NSInteger)items.count) { item = items[ip.item]; break; } } @catch (__unused id e) {} }
     }
-    gBubbleDebug = [gBubbleDebug stringByAppendingString:@" reply=none"];
+    SEL s2 = NSSelectorFromString(@"showInlineReplyControllerForChatItem:presentKeyboard:");
+    NSString *how = @"none";
+    if (item) for (id o in cands) if ([o respondsToSelector:s2]) {
+        @try { ((void (*)(id, SEL, id, BOOL))objc_msgSend)(o, s2, item, YES); how = [NSString stringWithFormat:@"item(%@)", NSStringFromClass([item class])]; } @catch (__unused id e) { how = @"item-error"; }
+        break;
+    }
+    if ([how isEqualToString:@"none"]) {
+        SEL s1 = NSSelectorFromString(@"balloonViewShowInlineReply:");
+        for (id o in cands) if ([o respondsToSelector:s1]) { ((void (*)(id, SEL, id))objc_msgSend)(o, s1, b); how = @"balloon"; break; }
+    }
+    gReplyDebug = [NSString stringWithFormat:@"reply=%@ item=%d", how, item != nil];
 }
 @end
 static void InstallSwipe(UIWindow *w) {
@@ -1551,8 +1586,8 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
-    l.text = [l.text stringByAppendingFormat:@"\n %@", gBubbleDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [l.text stringByAppendingFormat:@"\n %@ %@", gBubbleDebug, gReplyDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
