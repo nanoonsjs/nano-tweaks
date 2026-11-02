@@ -1,4 +1,6 @@
-// Messages26 0.7.1 - made by nano
+// Messages26 0.7.2 - made by nano
+// 0.7.2: row sits right on the keyboard / just above the home bar, liquid glass pill again,
+//        no blur behind it, To: glass stays when you tap the message field
 // 0.7.1: the whole row (text + mic) sits right above the keyboard, text lined up for real,
 //        Cancel button is an X, glassier To: pill with a white glass +
 // 0.7.0: field sits at the bottom (no gap above the keyboard), solid crisp pill, text lined up by the caret;
@@ -68,7 +70,9 @@ static NSString *gDebug = @"-", *gNavDebug = @"-";
 static BOOL gShowDebug = NO;
 static __weak UIView *gEntry, *gStrip, *gPhotoBtn, *gAppsBtn;
 static NSArray *gAppsCache;
-static NSString *gTextDebug = @"-";   // the last app list seen (names + icons)
+static NSString *gTextDebug = @"-";
+static CGFloat gKbTop = 0;   // top of the keyboard on screen (0 = no keyboard)
+static BOOL gRowOut = NO;    // our row sits below the bar's own edge   // the last app list seen (names + icons)
 static __weak UICollectionView *gStripCV;
 
 static BOOL IsDark(UIView *v) { return v.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight; }
@@ -501,7 +505,11 @@ static void StyleEntry(UIView *entry) {
         for (UIView *p = field; p && p != entry; p = p.superview) if (p != field && !CGAffineTransformIsIdentity(p.transform) && ![p.subviews containsObject:strip]) p.transform = CGAffineTransformIdentity;
         if (!CGAffineTransformIsIdentity(field.transform)) field.transform = CGAffineTransformIdentity;
         CGRect ff0 = [field convertRect:field.bounds toView:entry];
-        shift = MAX(0, entry.bounds.size.height - 6 - CGRectGetMaxY(ff0));
+        UIWindow *ew = entry.window;
+        CGFloat rowBottomOnScreen = CGRectGetMaxY([entry convertRect:ff0 toView:nil]);
+        CGFloat target = (gKbTop > 0 && gKbTop < ew.bounds.size.height - 10) ? gKbTop - 10 : ew.bounds.size.height - ew.safeAreaInsets.bottom + 2;
+        shift = MAX(0, target - rowBottomOnScreen - 6);   // 6pt: the pill reaches past the text box
+        gRowOut = CGRectGetMaxY(ff0) + shift + 6 > entry.bounds.size.height;
         container = nil;
         // every piece of that row: views at the field's height that don't hold the app row
         NSMutableArray *rowViews = [NSMutableArray array];
@@ -584,16 +592,28 @@ static void StyleEntry(UIView *entry) {
     UIView *pHost = field.superview ?: entry;
     if (!pill || pill.superview != pHost) {
         [pill removeFromSuperview];
-        pill = [UIView new]; pill.tag = PILL_TAG; pill.userInteractionEnabled = NO;
-        pill.layer.cornerCurve = kCACornerCurveContinuous; pill.layer.borderWidth = 0.8;
+        pill = ClearGlass(entry); pill.tag = PILL_TAG; pill.userInteractionEnabled = NO;
         [pHost insertSubview:pill belowSubview:field];
     }
     if ([pHost.subviews indexOfObject:pill] > [pHost.subviews indexOfObject:field]) [pHost insertSubview:pill belowSubview:field];
-    pill.backgroundColor = dark ? [UIColor colorWithRed:0.13 green:0.13 blue:0.14 alpha:1] : [UIColor colorWithWhite:0.96 alpha:1];
+    (void)dark;
     CGRect pillIn = [entry convertRect:pillF toView:pHost];
     // in the field's space the move down is already in field's transform: follow it
     pillIn = CGRectOffset(pillIn, 0, 0);
-    if (!CGRectEqualToRect(pill.frame, pillIn)) { pill.frame = pillIn; pill.layer.cornerRadius = MIN(pillIn.size.height / 2, 26); }
+    if (!CGRectEqualToRect(pill.frame, pillIn)) { pill.frame = pillIn; pill.layer.cornerRadius = MIN(pillIn.size.height / 2, 26); SheenFit(pill); }
+    // no blurred bar behind the field row
+    for (UIView *v in entry.subviews) {
+        if (v == strip || v.tag == PLUS_TAG || v.tag == PILL_TAG || [field isDescendantOfView:v] || [strip isDescendantOfView:v]) continue;
+        NSString *n = NSStringFromClass([v class]);
+        if (v.bounds.size.width >= entry.bounds.size.width * 0.95 && ([v isKindOfClass:[UIVisualEffectView class]] || [n containsString:@"Background"] || [n containsString:@"Backdrop"] || [n containsString:@"Blur"]) && v.alpha > 0) v.alpha = 0;
+    }
+    if (entry.backgroundColor && CGColorGetAlpha(entry.backgroundColor.CGColor) > 0) entry.backgroundColor = UIColor.clearColor;
+    for (UIView *p = entry.superview; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) {
+        if (p.clipsToBounds && gRowOut) p.clipsToBounds = NO;
+        if (p.bounds.size.width >= entry.bounds.size.width * 0.95 && p.bounds.size.height < 220) {
+            for (UIView *v in p.subviews) if (!([entry isDescendantOfView:v]) && ([v isKindOfClass:[UIVisualEffectView class]] || [NSStringFromClass([v class]) containsString:@"Backdrop"]) && v.bounds.size.width >= entry.bounds.size.width * 0.95 && v.alpha > 0) v.alpha = 0;
+        }
+    }
     pill.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.17] : [UIColor colorWithWhite:0 alpha:0.08]).CGColor;
     UIButton *plus = (UIButton *)[entry viewWithTag:PLUS_TAG];
     if (!plus) {
@@ -617,8 +637,8 @@ static void StyleEntry(UIView *entry) {
     [plus bringSubviewToFront:plus.imageView];
     if (entry.subviews.lastObject != plus) [entry bringSubviewToFront:plus];
     if (entry.clipsToBounds) entry.clipsToBounds = NO;
-    gDebug = [NSString stringWithFormat:@"%@\n entry=%@ %.0f field=%@ %.0fx%.0f@%.0f shift=%.0f\n box=%@ left=%lu photo=%@\n strip=%@ %.0f cv=%d apps=%lu",
-              gTextDebug, NSStringFromClass([entry class]), entry.bounds.size.height, NSStringFromClass([field class]), ff.size.width, ff.size.height, ff.origin.y, shift,
+    gDebug = [NSString stringWithFormat:@"%@ kb=%.0f out=%d\n entry=%@ %.0f field=%@ %.0fx%.0f@%.0f shift=%.0f\n box=%@ left=%lu photo=%@\n strip=%@ %.0f cv=%d apps=%lu",
+              gTextDebug, gKbTop, gRowOut, NSStringFromClass([entry class]), entry.bounds.size.height, NSStringFromClass([field class]), ff.size.width, ff.size.height, ff.origin.y, shift,
               NSStringFromClass([container class]), (unsigned long)left.count, NSStringFromClass([gPhotoBtn class]),
               strip ? NSStringFromClass([strip class]) : @"none", strip.bounds.size.height, gStripCV != nil, (unsigned long)(gStripCV.numberOfSections ? [gStripCV numberOfItemsInSection:0] : 0)];
 }
@@ -758,11 +778,12 @@ static void CancelToX(UINavigationItem *ni) {
 }
 // New message "To:" row: a glass capsule, with a white glass + inside.
 static void StyleToField(UIWindow *w) {
-    UILabel *to = (UILabel *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UILabel class]] && [((UILabel *)v).text isEqualToString:@"To:"] && v.window; }, 5000);
+    UILabel *to = (UILabel *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UILabel class]] && [[((UILabel *)v).text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] hasPrefix:@"To:"] && v.window && !v.hidden && v.alpha > 0.05; }, 6000);
     if (!to) return;
     UIView *row = to;
     while (row.superview && row.bounds.size.width < w.bounds.size.width * 0.9) row = row.superview;
-    if (!row.superview || row.bounds.size.height > 120) return;
+    if (!row.superview || row.bounds.size.height > 200) return;
+    for (UIView *o in [[w viewWithTag:GLASS_TAG + 9].superview subviews]) if (o.tag == GLASS_TAG + 9 && o.superview != row) [o removeFromSuperview];
     for (UIView *s in row.superview.subviews) if (s != row && s.bounds.size.height <= 1.5 && s.bounds.size.width >= w.bounds.size.width * 0.8) s.hidden = YES;
     for (UIView *s in row.subviews) if (s.bounds.size.height <= 1.5 && s.bounds.size.width >= w.bounds.size.width * 0.8) s.hidden = YES;
     UIView *g = [row viewWithTag:GLASS_TAG + 9];
@@ -945,15 +966,35 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.7.1 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.7.2 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
 }
 
+%hook UIView
+- (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
+    BOOL r = %orig;
+    if (r || !gRowOut) return r;
+    UIView *en = gEntry;
+    if (!en || (self != en && ![en isDescendantOfView:self])) return r;
+    for (NSNumber *t in @[@(PILL_TAG), @(PLUS_TAG)]) {
+        UIView *v = [en viewWithTag:t.integerValue];
+        if (v && !v.hidden && CGRectContainsPoint(CGRectInset([v convertRect:v.bounds toView:self], -4, -4), p)) return YES;
+    }
+    return r;
+}
+%end
 %ctor {
     if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.MobileSMS"]) return;
     LoadPrefs();
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillChangeFrameNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+        CGRect f = [n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+        CGFloat H = UIScreen.mainScreen.bounds.size.height;
+        gKbTop = (CGRectGetMinY(f) < H - 60 && f.size.height > 100) ? CGRectGetMinY(f) : 0;
+        UIView *e = gEntry; [e setNeedsLayout];
+    }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillHideNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) { gKbTop = 0; UIView *e = gEntry; [e setNeedsLayout]; }];
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, CFSTR("com.nano.messages26/prefschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     dispatch_async(dispatch_get_main_queue(), ^{
         Class E = NSClassFromString(@"CKMessageEntryView");
