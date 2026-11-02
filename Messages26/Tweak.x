@@ -1,4 +1,5 @@
-// Messages26 0.8.2 - made by nano
+// Messages26 0.8.3 - made by nano
+// 0.8.3: field row placed from where it's drawn now (corrects itself); mic / send found by position and kept in the pill
 // 0.8.2: the bar never gets stuck "waiting" (pill, + and glass are back); no empty glass circles
 // 0.8.1: text no longer jumps up and down; send works
 // 0.8.0: send / mic always inside the pill (also with the keyboard up), no floating pill after the keyboard closes
@@ -542,34 +543,35 @@ static void StyleEntry(UIView *entry) {
             if (v.tag != PLUS_TAG && v.tag != PILL_TAG && v != field && ![v isKindOfClass:[UIControl class]] && ![gRowCtls containsObject:v] && !CGAffineTransformIsIdentity(v.transform) && ![field isDescendantOfView:v]) v.transform = CGAffineTransformIdentity;
             [rs addObjectsFromArray:v.subviews]; }
         if (!CGAffineTransformIsIdentity(entry.transform)) entry.transform = CGAffineTransformIdentity;
-        // The field row (text box + mic / send) moves down: onto the keyboard when it's
-        // up (where the hidden app row was), else to just above the home bar.
+        // The field row moves down: onto the keyboard when it's up (where the hidden app
+        // row was), else to just above the home bar. Worked out from where things are
+        // drawn right now and corrected from there, so nothing else can throw it off.
         UIWindow *ew = entry.window;
         NSMutableArray *row = [NSMutableArray arrayWithObject:field];
-        // where the text box is without our move (from its centre and size, so its
-        // transform is never touched: resetting it made the text jump up and down)
-        CGRect fu = CGRectOffset([field convertRect:field.bounds toView:entry], 0, -field.transform.ty);
-        // mid-animation (keyboard going away) the text box is somewhere odd: wait
-        BOOL odd = CGRectGetMinY(fu) < -10 || CGRectGetMaxY(fu) > entry.bounds.size.height + 10;   // mid-animation: don't move this pass
+        CGRect ffNow = [field convertRect:field.bounds toView:entry];
+        // mic / send: small buttons to the right of the text box (wherever they are now)
         NSMutableArray *cs = [NSMutableArray arrayWithArray:entry.subviews]; int gc = 0;
         while (cs.count && gc++ < 300) { UIView *v = cs.lastObject; [cs removeLastObject];
-            if (v == field || v.tag == PLUS_TAG || v.tag == PILL_TAG || v == strip || [v isDescendantOfView:field]) continue;
-            if ([v isKindOfClass:[UIControl class]] && v.alpha > 0.05 && !v.hidden && v.bounds.size.width < 60) {
-                CGRect vf = [v.superview convertRect:CGRectMake(v.center.x - v.bounds.size.width / 2, v.center.y - v.bounds.size.height / 2, v.bounds.size.width, v.bounds.size.height) toView:entry];
-                if (CGRectGetMidX(vf) > CGRectGetMidX(fu) && fabs(CGRectGetMidY(vf) - CGRectGetMidY(fu)) < 26) { [row addObject:v]; continue; }
+            if (v == field || v.tag == PLUS_TAG || v.tag == PILL_TAG || v == strip || [v isDescendantOfView:field] || (strip && [v isDescendantOfView:strip])) continue;
+            if ([v isKindOfClass:[UIControl class]] && !v.hidden && v.bounds.size.width < 60 && v.bounds.size.height < 60) {
+                CGRect vf = [v convertRect:v.bounds toView:entry];
+                if (CGRectGetMidX(vf) > CGRectGetMinX(ffNow) + ffNow.size.width * 0.6) { [row addObject:v]; continue; }
             }
             [cs addObjectsFromArray:v.subviews]; }
         CGRect ef = [entry convertRect:entry.bounds toView:nil];
         BOOL kbUp = CGRectGetMaxY(ef) < ew.bounds.size.height - 120;   // the bar rides on the keyboard
-        // All in the bar's own space (screen math gave wrong numbers while the bar
-        // moves between windows): the text box's bottom goes to a fixed place.
-        CGFloat wantBottom = kbUp ? entry.bounds.size.height - 10 : entry.bounds.size.height - 43;
-        if (!strip) wantBottom = kbUp ? entry.bounds.size.height - 4 : CGRectGetMaxY(fu);
-        shift = wantBottom - CGRectGetMaxY(fu);
-        if (fabs(shift) > 200 || odd) shift = field.transform.ty;   // keep what it has
+        CGFloat wantBottom = kbUp ? entry.bounds.size.height - (strip ? 10 : 4) : entry.bounds.size.height - 43;
+        CGFloat t0 = field.transform.ty, t1 = t0 + (wantBottom - CGRectGetMaxY(ffNow));
+        if (fabs(t1) > 250) t1 = 0;
+        shift = t1;
         gKbTop = kbUp ? CGRectGetMaxY(ef) : 0;
-        CGAffineTransform rt = CGAffineTransformMakeTranslation(0, shift);
-        for (UIView *v in row) if (!CGAffineTransformEqualToTransform(v.transform, rt)) v.transform = rt;
+        if (fabs(t1 - t0) > 0.5) field.transform = CGAffineTransformMakeTranslation(0, t1);
+        CGFloat midY = CGRectGetMidY(ffNow) + (t1 - t0);
+        for (UIView *v in row) if (v != field) {
+            CGRect vf = [v convertRect:v.bounds toView:entry];
+            CGFloat d = midY - CGRectGetMidY(vf);
+            if (fabs(d) > 0.5 && fabs(v.transform.ty + d) < 250) v.transform = CGAffineTransformMakeTranslation(0, v.transform.ty + d);
+        }
         // their boxes must not cut them off (the mic was drawn outside its box, so it vanished)
         if (!gRowCtls) gRowCtls = [NSHashTable weakObjectsHashTable];
         [gRowCtls removeAllObjects];
@@ -1106,7 +1108,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.8.2 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.8.3 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
