@@ -4328,6 +4328,7 @@ static void ReactBurst(UIView *v, NSString *emoji) {
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"m26.reactSound"]) AudioServicesPlaySystemSound(1407);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [host removeFromSuperview]; });
 }
+static void (*origAckCfg)(id, SEL, id);
 // the tapback on the bubble: Apple's flat glyph becomes a glossy 3D emoji that gently turns
 static void Ack3D(UIView *b, id item) {
     CALayer *mine = nil; for (CALayer *x in b.layer.sublayers) if ([x.name isEqualToString:@"m26ack3d"]) mine = x;
