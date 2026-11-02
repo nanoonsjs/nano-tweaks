@@ -1,4 +1,5 @@
-// Messages26 0.7.8 - made by nano
+// Messages26 0.7.9 - made by nano
+// 0.7.9: taps on the pill go straight to the text box (opens the keyboard); mic / send no longer cut off
 // 0.7.8: taps reach the moved text box from inside the bar too; see-through layers no longer catch taps; the mic's own effect stays
 // 0.7.7: the message field takes taps again and the mic is back; iOS 26 rim on the pill and +
 // 0.7.6: every blur inside the message bar is removed (it covered the text box and blocked taps)
@@ -81,6 +82,7 @@ static NSArray *gAppsCache;
 static NSString *gTextDebug = @"-";
 static __weak UIView *gField;
 static NSString *gRowDebug = @"-";
+static NSHashTable *gRowCtls;   // mic / send, moved down with the text box
 static CGFloat gKbTop = 0;   // top of the keyboard on screen (0 = no keyboard)
 static BOOL gRowOut = NO;    // our row sits below the bar's own edge   // the last app list seen (names + icons)
 static __weak UICollectionView *gStripCV;
@@ -561,6 +563,13 @@ static void StyleEntry(UIView *entry) {
         gKbTop = kbUp ? CGRectGetMaxY(ef) : 0;
         CGAffineTransform rt = CGAffineTransformMakeTranslation(0, shift);
         for (UIView *v in row) if (!CGAffineTransformEqualToTransform(v.transform, rt)) v.transform = rt;
+        // their boxes must not cut them off (the mic was drawn outside its box, so it vanished)
+        if (!gRowCtls) gRowCtls = [NSHashTable weakObjectsHashTable];
+        [gRowCtls removeAllObjects];
+        for (UIView *v in row) {
+            if (v != field) [gRowCtls addObject:v];
+            for (UIView *p = v.superview; p && p != entry; p = p.superview) if (p.clipsToBounds) p.clipsToBounds = NO;
+        }
         NSMutableArray *rn = [NSMutableArray array];
         for (UIView *v in row) if (v != field) [rn addObject:[NSString stringWithFormat:@"%@ a=%.1f h=%d", NSStringFromClass([v class]), v.alpha, v.hidden]];
         gRowDebug = rn.count ? [rn componentsJoinedByString:@", "] : @"(no mic found)";
@@ -721,6 +730,27 @@ static void StyleEntry(UIView *entry) {
               strip ? NSStringFromClass([strip class]) : @"none", strip.bounds.size.height, gStripCV != nil, (unsigned long)(gStripCV.numberOfSections ? [gStripCV numberOfItemsInSection:0] : 0)];
 }
 
+static UIView *(*origEntryHit)(id, SEL, CGPoint, UIEvent *);
+static UIView *EntryHit(UIView *self, SEL _cmd, CGPoint p, UIEvent *e) {
+    if (gBarOn && !self.hidden && self.alpha > 0.05) {
+        UIView *plus = [self viewWithTag:PLUS_TAG];
+        if (plus && !plus.hidden && CGRectContainsPoint(CGRectInset([plus convertRect:plus.bounds toView:self], -4, -4), p)) return plus;
+        for (UIView *c in [gRowCtls allObjects])
+            if (c.window && !c.hidden && c.alpha > 0.05 && c.userInteractionEnabled && [c isDescendantOfView:self] && CGRectContainsPoint(CGRectInset([c convertRect:c.bounds toView:self], -4, -4), p)) return c;
+        UIView *f = gField;
+        if (f.window && [f isDescendantOfView:self]) {
+            UIView *pill = [f.superview viewWithTag:PILL_TAG];
+            CGRect area = pill ? [pill convertRect:pill.bounds toView:self] : [f convertRect:f.bounds toView:self];
+            if (CGRectContainsPoint(area, p)) {
+                CGPoint q = [self convertPoint:p toView:f];
+                q.x = MIN(MAX(q.x, 1), f.bounds.size.width - 1); q.y = MIN(MAX(q.y, 1), f.bounds.size.height - 1);
+                UIView *h = [f hitTest:q withEvent:e];
+                return h ?: f;
+            }
+        }
+    }
+    return origEntryHit(self, _cmd, p, e);
+}
 static void (*origEntryLayout)(id, SEL);
 static void EntryLayout(UIView *self, SEL _cmd) {
     origEntryLayout(self, _cmd);
@@ -1061,7 +1091,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.7.8 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.7.9 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
@@ -1098,6 +1128,7 @@ static void Tick(void) {
         Class E = NSClassFromString(@"CKMessageEntryView");
         if (E) {
             MSHookMessageEx(E, @selector(layoutSubviews), (IMP)EntryLayout, (IMP *)&origEntryLayout);
+            MSHookMessageEx(E, @selector(hitTest:withEvent:), (IMP)EntryHit, (IMP *)&origEntryHit);
         }
         [NSTimer scheduledTimerWithTimeInterval:0.3 repeats:YES block:^(__unused NSTimer *t) { @try { Tick(); } @catch (__unused id ex) {} }];
     });
