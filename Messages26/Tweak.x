@@ -1,4 +1,5 @@
-// Messages26 0.10.8 - made by nano
+// Messages26 0.10.9 - made by nano
+// 0.10.9: photo is the 51x60 avatar container
 // 0.10.8: photo found anywhere on screen above the name
 // 0.10.7: photo + name scaled one by one (bigger for real); drag the debug box anywhere
 // 0.10.6: bigger contact photo + name at the top of a chat
@@ -1157,7 +1158,7 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
             CGSize sz = r.size;
             BOOL mid = fabs(CGRectGetMidX(r) - Wd / 2) < 30, above = CGRectGetMidY(r) < CGRectGetMinY(nw) + 4 && CGRectGetMaxY(r) > CGRectGetMinY(nw) - 40;
             if (mid && above && sz.width < 120 && near.count < 6) [near addObject:[NSString stringWithFormat:@"%@ %.0fx%.0f", NSStringFromClass([v class]), sz.width, sz.height]];
-            if (mid && above && ![v isKindOfClass:[UILabel class]] && ![name isDescendantOfView:v] && sz.width >= 28 && sz.width <= 100 && fabs(sz.width - sz.height) < 8 && sz.width > bestW) { bestW = sz.width; av = v; }
+            if (mid && above && ![v isKindOfClass:[UILabel class]] && ![name isDescendantOfView:v] && sz.width >= 28 && sz.width <= 100 && (fabs(sz.width - sz.height) < 12 || [NSStringFromClass([v class]) containsString:@"Avatar"]) && sz.width > bestW) { bestW = sz.width; av = v; }
             [st addObjectsFromArray:v.subviews];
         }
         gTitleNear = [near componentsJoinedByString:@", "];
@@ -1730,7 +1731,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.8 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.9 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     {
