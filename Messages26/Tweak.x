@@ -1889,7 +1889,7 @@ static id FilterSnap(id self, id snap) {
         NSString *kind = ctl ? SectionKind(ctl) : @"Info";
         NSUInteger si = i; @try { if (ctl) si = [[ctl valueForKey:@"sectionIndex"] unsignedIntegerValue]; } @catch (__unused id e) {}
         BOOL keep = [kind isEqualToString:gDetTab] || (NSInteger)si == gHeaderSection;
-        if ([snap numberOfItemsInSection:sid] > 0) [has addObject:kind];
+        if ([(NSDiffableDataSourceSnapshot *)snap numberOfItemsInSection:sid] > 0) [has addObject:kind];
         [log addObject:[NSString stringWithFormat:@"%@:%@%@", ctl ? [NSStringFromClass([ctl class]) stringByReplacingOccurrencesOfString:@"SearchController" withString:@""] : [sid description], kind, keep ? @"" : @"-"]];
         if (!keep) [drop addObject:sid];
     }
