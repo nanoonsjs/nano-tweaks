@@ -49,7 +49,7 @@ open(os.path.join(out, 'Packages.gz'), 'wb').write(gzip.compress(pk))
 open(os.path.join(out, 'Packages.bz2'), 'wb').write(bz2.compress(pk))
 open(os.path.join(out, 'Packages.xz'), 'wb').write(lzma.compress(pk))
 rel = ['Origin: nano', 'Label: nano', 'Suite: stable', 'Version: 1.0', 'Codename: ios',
-       'Architectures: iphoneos-arm iphoneos-arm64', 'Components: main', 'Description: Tweaks by nano']
+       'Architectures: iphoneos-arm iphoneos-arm64 iphoneos-arm64e', 'Components: main', 'Description: Tweaks by nano']
 for algo, key in (('md5', 'MD5Sum'), ('sha256', 'SHA256')):
     rel.append(key + ':')
     for f in ('Packages', 'Packages.gz', 'Packages.bz2', 'Packages.xz'):

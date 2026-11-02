@@ -56,7 +56,7 @@ for b in blocks:
 pk = ('\n\n'.join(new) + '\n').encode()
 open('Packages', 'wb').write(pk)
 open('Packages.gz', 'wb').write(gzip.compress(pk)); open('Packages.bz2', 'wb').write(bz2.compress(pk)); open('Packages.xz', 'wb').write(lzma.compress(pk))
-rel = ['Origin: nano test', 'Label: nano (test)', 'Suite: stable', 'Version: 1.0', 'Codename: ios', 'Architectures: iphoneos-arm iphoneos-arm64', 'Components: main', 'Description: Test builds by nano']
+rel = ['Origin: nano test', 'Label: nano (test)', 'Suite: stable', 'Version: 1.0', 'Codename: ios', 'Architectures: iphoneos-arm iphoneos-arm64 iphoneos-arm64e', 'Components: main', 'Description: Test builds by nano']
 for algo, key in (('md5', 'MD5Sum'), ('sha256', 'SHA256')):
     rel.append(key + ':')
     for fn in ('Packages', 'Packages.gz', 'Packages.bz2', 'Packages.xz'):
