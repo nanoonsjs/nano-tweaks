@@ -1,4 +1,5 @@
-// Messages26 0.11.4 - made by nano
+// Messages26 0.12.0 - made by nano
+// 0.12.0: Backgrounds tab (None / Photo / Color), each chat its own background
 // 0.11.4: no gray boxes (header, media, cells); one glass card per Info group; Shared-with-You note gone
 // 0.11.3: tabs switch the whole page; no Shared-with-You note, no iCloud footer; header see-through
 // 0.11.2: tabs no longer crash; tabs clear of the cards; glass cards on a black page
@@ -68,6 +69,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <substrate.h>
+#import <PhotosUI/PhotosUI.h>
 
 #define PLUS_TAG  0x4D323650
 #define GLASS_TAG 0x4D323647
@@ -1990,6 +1992,7 @@ static void CardGlass(UIView *root) {
     for (NSUInteger i = merged.count; i < plates.count; i++) ((UIView *)plates[i]).hidden = YES;
 }
 static UIBarButtonItem *GlassTextItem(NSString *t, id target, SEL a) { return [[UIBarButtonItem alloc] initWithTitle:t style:UIBarButtonItemStylePlain target:target action:a]; }
+static void StyleBgTab(UIViewController *vc);
 static void StyleDetails(UIWindow *w) {
     UIViewController *vc = gTopOn ? DetailsVC(w.rootViewController, 0) : nil;
     if (!vc) { gDetDebug = @"details: -"; gDetTab = @"Info"; gHeadRowSection = gChildRowSection = -1; return; }
@@ -2143,7 +2146,190 @@ static void StyleDetails(UIWindow *w) {
     }
     if (row.subviews.lastObject != tabs) [row bringSubviewToFront:tabs];
     for (UIView *p = row; p && p != root; p = p.superview) if (p.clipsToBounds && p.bounds.size.height < 300) p.clipsToBounds = NO;
+    @try { StyleBgTab(vc); } @catch (__unused id e) {}
     gDetDebug = [NSString stringWithFormat:@"details: %@ tiles=%@ T=%.0f B=%.0f table=%@", NSStringFromClass([vc class]), [tiles.allKeys componentsJoinedByString:@","], T, B, gDetTable ? NSStringFromClass([gDetTable class]) : @"-"];
+}
+
+#pragma mark - per-conversation backgrounds (None / Photo / Color)
+
+#define BGTAB_TAG 0x4D323657
+#define CHATBG_TAG 0x4D323658
+static NSString *ConvKey(id owner) {
+    id conv = nil; @try { conv = [owner valueForKey:@"conversation"]; } @catch (__unused id e) {}
+    if (!conv) return nil;
+    for (NSString *kp in @[@"chat.guid", @"chat.chatIdentifier", @"groupID", @"name"]) {
+        id v = nil; @try { v = [conv valueForKeyPath:kp]; } @catch (__unused id e) {}
+        if ([v isKindOfClass:[NSString class]] && [v length]) return v;
+    }
+    return nil;
+}
+static NSString *BgDir(void) {
+    NSString *d = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Messages26"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:d withIntermediateDirectories:YES attributes:nil error:nil];
+    return d;
+}
+static NSString *BgFile(NSString *key) {
+    NSMutableString *safe = [NSMutableString string];
+    for (NSUInteger i = 0; i < key.length; i++) { unichar c = [key characterAtIndex:i]; [safe appendFormat:(isalnum(c) ? @"%C" : @"_"), c]; }
+    return [BgDir() stringByAppendingPathComponent:[NSString stringWithFormat:@"bg_%@.jpg", safe]];
+}
+static NSDictionary *BgFor(NSString *key) { return key ? [[NSUserDefaults standardUserDefaults] dictionaryForKey:[@"m26.bg." stringByAppendingString:key]] : nil; }
+static void SetBg(NSString *key, NSDictionary *d) {
+    if (!key) return;
+    if (d) [[NSUserDefaults standardUserDefaults] setObject:d forKey:[@"m26.bg." stringByAppendingString:key]];
+    else [[NSUserDefaults standardUserDefaults] removeObjectForKey:[@"m26.bg." stringByAppendingString:key]];
+}
+static UIColor *HexColor(NSString *h) {
+    unsigned int v = 0; [[NSScanner scannerWithString:h ?: @"000000"] scanHexInt:&v];
+    return [UIColor colorWithRed:((v >> 16) & 255) / 255.0 green:((v >> 8) & 255) / 255.0 blue:(v & 255) / 255.0 alpha:1];
+}
+static NSString *ColorHex(UIColor *c) {
+    CGFloat r = 0, g = 0, b = 0, a = 0; [c getRed:&r green:&g blue:&b alpha:&a];
+    return [NSString stringWithFormat:@"%02X%02X%02X", (int)lround(MAX(0, MIN(1, r)) * 255), (int)lround(MAX(0, MIN(1, g)) * 255), (int)lround(MAX(0, MIN(1, b)) * 255)];
+}
+static NSMutableDictionary *gBgImages;   // key -> UIImage (loaded once)
+static UIImage *BgImage(NSString *key) {
+    if (!gBgImages) gBgImages = [NSMutableDictionary dictionary];
+    NSDictionary *d = BgFor(key);
+    NSString *stamp = [NSString stringWithFormat:@"%@|%@", key, d[@"t"]];
+    UIImage *im = gBgImages[stamp];
+    if (!im) { im = [UIImage imageWithContentsOfFile:BgFile(key)]; if (im) gBgImages[stamp] = im; }
+    return im;
+}
+
+@interface M26Bg : NSObject <PHPickerViewControllerDelegate, UIColorPickerViewControllerDelegate>
++ (instancetype)shared;
+@property (nonatomic, copy) NSString *key;
+@property (nonatomic, weak) UIViewController *host;
+@end
+@implementation M26Bg
++ (instancetype)shared { static M26Bg *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Bg new]; }); return t; }
+- (void)pick:(UIButton *)b {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    if (!self.key) return;
+    if (b.tag == 0) { SetBg(self.key, nil); return; }
+    if (b.tag == 1) {
+        PHPickerConfiguration *cfg = [PHPickerConfiguration new];
+        cfg.filter = [PHPickerFilter imagesFilter]; cfg.selectionLimit = 1;
+        PHPickerViewController *pk = [[PHPickerViewController alloc] initWithConfiguration:cfg];
+        pk.delegate = self;
+        [self.host presentViewController:pk animated:YES completion:nil];
+        return;
+    }
+    UIColorPickerViewController *cp = [UIColorPickerViewController new];
+    cp.delegate = self; cp.supportsAlpha = NO;
+    NSDictionary *d = BgFor(self.key);
+    if ([d[@"type"] isEqualToString:@"color"]) cp.selectedColor = HexColor(d[@"hex"]);
+    [self.host presentViewController:cp animated:YES completion:nil];
+}
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    NSItemProvider *ip = results.firstObject.itemProvider;
+    NSString *key = self.key;
+    if (!ip || !key || ![ip canLoadObjectOfClass:[UIImage class]]) return;
+    [ip loadObjectOfClass:[UIImage class] completionHandler:^(id obj, NSError *err) {
+        UIImage *im = [obj isKindOfClass:[UIImage class]] ? obj : nil;
+        if (!im) return;
+        // keep it screen-sized
+        CGFloat maxSide = 1600, sc = MIN(1, maxSide / MAX(im.size.width, im.size.height));
+        CGSize sz = CGSizeMake(round(im.size.width * sc), round(im.size.height * sc));
+        UIGraphicsImageRendererFormat *f = [UIGraphicsImageRendererFormat defaultFormat]; f.scale = 1;
+        UIImage *small = [[[UIGraphicsImageRenderer alloc] initWithSize:sz format:f] imageWithActions:^(__unused UIGraphicsImageRendererContext *c) { [im drawInRect:CGRectMake(0, 0, sz.width, sz.height)]; }];
+        [UIImageJPEGRepresentation(small, 0.85) writeToFile:BgFile(key) atomically:YES];
+        dispatch_async(dispatch_get_main_queue(), ^{ SetBg(key, @{@"type": @"photo", @"t": @([NSDate date].timeIntervalSince1970)}); });
+    }];
+}
+- (void)colorPickerViewControllerDidSelectColor:(UIColorPickerViewController *)vc { if (self.key) SetBg(self.key, @{@"type": @"color", @"hex": ColorHex(vc.selectedColor), @"t": @([NSDate date].timeIntervalSince1970)}); }
+- (void)colorPickerViewControllerDidFinish:(UIColorPickerViewController *)vc { [self colorPickerViewControllerDidSelectColor:vc]; }
+@end
+
+// The Backgrounds tab: None / Photo / Color circles under the tabs.
+static void StyleBgTab(UIViewController *vc) {
+    UITableView *tb = (UITableView *)gDetTable;
+    if (![tb isKindOfClass:[UITableView class]]) return;
+    UIView *box = [tb viewWithTag:BGTAB_TAG];
+    BOOL on = [gDetTab isEqualToString:@"Backgrounds"];
+    NSString *key = ConvKey(vc);
+    M26Bg *B = [M26Bg shared]; B.key = key; B.host = vc;
+    if (!on || !key || gHeadRowSection < 0) { box.hidden = YES; return; }
+    BOOL dark = IsDark(tb);
+    CGFloat W = tb.bounds.size.width, d = 84, lab = 26, gap = (W - 3 * d) / 4;
+    if (!box) {
+        box = [UIView new]; box.tag = BGTAB_TAG;
+        NSArray *names = @[@"None", @"Photo", @"Color"];
+        for (int i = 0; i < 3; i++) {
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom]; b.tag = i;
+            b.layer.cornerRadius = d / 2; b.clipsToBounds = YES; b.imageView.contentMode = UIViewContentModeScaleAspectFill;
+            [b addTarget:B action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
+            b.frame = CGRectMake(gap + i * (d + gap), 8, d, d);
+            [box addSubview:b];
+            UIView *ring = [[UIView alloc] initWithFrame:CGRectInset(b.frame, -5, -5)]; ring.tag = 10 + i; ring.userInteractionEnabled = NO;
+            ring.layer.cornerRadius = ring.bounds.size.width / 2; ring.layer.borderWidth = 3;
+            [box addSubview:ring];
+            UIImageView *chk = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark.circle.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightBold]]];
+            chk.tag = 20 + i; chk.frame = CGRectMake(CGRectGetMaxX(b.frame) - 26, CGRectGetMaxY(b.frame) - 26, 30, 30); chk.contentMode = UIViewContentModeCenter;
+            chk.layer.cornerRadius = 15; chk.clipsToBounds = YES;
+            [box addSubview:chk];
+            UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(CGRectGetMidX(b.frame) - 60, CGRectGetMaxY(b.frame) + 10, 120, lab)];
+            l.text = names[i]; l.textAlignment = NSTextAlignmentCenter; l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium]; l.tag = 30 + i;
+            [box addSubview:l];
+        }
+        [tb addSubview:box];
+    }
+    box.hidden = NO;
+    CGRect hr = [tb rectForSection:gHeadRowSection];
+    CGRect bf = CGRectMake(0, CGRectGetMaxY(hr) + 6, W, d + lab + 30);
+    if (!CGRectEqualToRect(box.frame, bf)) box.frame = bf;
+    if (tb.subviews.lastObject != box) [tb bringSubviewToFront:box];
+    NSDictionary *cur = BgFor(key);
+    NSInteger sel = [cur[@"type"] isEqualToString:@"photo"] ? 1 : [cur[@"type"] isEqualToString:@"color"] ? 2 : 0;
+    for (int i = 0; i < 3; i++) {
+        UIButton *b = (UIButton *)[box viewWithTag:i];
+        if (![b isKindOfClass:[UIButton class]]) { for (UIView *x in box.subviews) if ([x isKindOfClass:[UIButton class]] && x.tag == i) b = (UIButton *)x; }
+        UIView *ring = [box viewWithTag:10 + i]; UIImageView *chk = (UIImageView *)[box viewWithTag:20 + i]; UILabel *l = (UILabel *)[box viewWithTag:30 + i];
+        l.textColor = Ink(tb);
+        ring.layer.borderColor = (sel == i ? Ink(tb) : UIColor.clearColor).CGColor;
+        chk.hidden = sel != i; chk.tintColor = dark ? UIColor.whiteColor : UIColor.blackColor; chk.backgroundColor = dark ? UIColor.blackColor : UIColor.whiteColor;
+        if (i == 0) b.backgroundColor = dark ? [UIColor colorWithWhite:0.17 alpha:1] : [UIColor colorWithWhite:0.88 alpha:1];
+        if (i == 1) {
+            UIImage *im = sel == 1 ? BgImage(key) : nil;
+            if (im) { [b setImage:im forState:UIControlStateNormal]; b.backgroundColor = UIColor.blackColor; }
+            else { [b setImage:[UIImage systemImageNamed:@"photo" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:28 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal]; b.imageView.contentMode = UIViewContentModeCenter; b.tintColor = Ink(tb); b.backgroundColor = dark ? [UIColor colorWithWhite:0.09 alpha:1] : [UIColor colorWithWhite:0.8 alpha:1]; }
+            if (im) b.imageView.contentMode = UIViewContentModeScaleAspectFill;
+        }
+        if (i == 2) {
+            CAGradientLayer *gl = nil; for (CALayer *x in b.layer.sublayers) if ([x.name isEqualToString:@"g"]) gl = (CAGradientLayer *)x;
+            if (!gl) { gl = [CAGradientLayer layer]; gl.name = @"g"; gl.frame = b.bounds; gl.startPoint = CGPointMake(0, 0); gl.endPoint = CGPointMake(1, 1); [b.layer insertSublayer:gl atIndex:0]; }
+            if (sel == 2) gl.colors = @[(id)HexColor(cur[@"hex"]).CGColor, (id)HexColor(cur[@"hex"]).CGColor];
+            else gl.colors = @[(id)[UIColor colorWithRed:1 green:0.55 blue:0.75 alpha:1].CGColor, (id)[UIColor colorWithRed:1 green:0.72 blue:0.25 alpha:1].CGColor, (id)[UIColor colorWithRed:0.98 green:0.55 blue:0.6 alpha:1].CGColor];
+        }
+    }
+}
+
+// In the chat: that conversation's background behind the messages.
+static void ApplyChatBg(UIWindow *w) {
+    UIView *e = gEntry;
+    if (!e.window) return;
+    UICollectionView *cv = (UICollectionView *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UICollectionView class]] && [NSStringFromClass([v class]) containsString:@"Transcript"]; }, 3000);
+    if (!cv) return;
+    NSString *key = nil;
+    for (UIResponder *r = cv; r && !key; r = r.nextResponder) if ([r respondsToSelector:NSSelectorFromString(@"conversation")]) key = ConvKey(r);
+    if (!key) { id d = cv.delegate; for (int i = 0; i < 3 && d && !key; i++) { key = ConvKey(d); @try { d = [d valueForKey:@"delegate"]; } @catch (__unused id ex) { d = nil; } } }
+    NSDictionary *bg = gOn ? BgFor(key) : nil;
+    NSString *stamp = bg ? [NSString stringWithFormat:@"%@|%@|%@", key, bg[@"t"], bg[@"hex"]] : @"none";
+    if ([objc_getAssociatedObject(cv, "m26bg") isEqual:stamp]) return;
+    objc_setAssociatedObject(cv, "m26bg", stamp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!bg) { if ([cv.backgroundView isKindOfClass:[UIView class]] && cv.backgroundView.tag == CHATBG_TAG) cv.backgroundView = nil; return; }
+    UIView *host = [UIView new]; host.tag = CHATBG_TAG; host.clipsToBounds = YES;
+    if ([bg[@"type"] isEqualToString:@"photo"]) {
+        UIImageView *iv = [[UIImageView alloc] initWithImage:BgImage(key)];
+        iv.contentMode = UIViewContentModeScaleAspectFill; iv.frame = host.bounds; iv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [host addSubview:iv];
+        UIView *dim = [UIView new]; dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.28]; dim.frame = host.bounds; dim.autoresizingMask = iv.autoresizingMask;
+        [host addSubview:dim];
+    } else host.backgroundColor = HexColor(bg[@"hex"]);
+    cv.backgroundView = host;
+    cv.backgroundColor = UIColor.clearColor;
 }
 
 #pragma mark - debug + tick
@@ -2186,6 +2372,7 @@ static void Tick(void) {
     @try { StyleSearchPill(w); } @catch (__unused id e) {}
     @try { InstallSwipe(w); } @catch (__unused id e) {}
     @try { StyleDetails(w); } @catch (__unused id e) {}
+    @try { ApplyChatBg(w); } @catch (__unused id e) {}
     if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
     UIView *e = gEntry;
@@ -2213,7 +2400,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.11.4 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.12.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
