@@ -815,8 +815,8 @@ static void StyleToField(UIWindow *w) {
         if (!c) { c = ClearGlass(add); c.tag = GLASS_TAG + 10; [add.superview insertSubview:c belowSubview:add]; }
         SheenFit(c);
         CGRect af = add.frame; CGFloat d = 34;   // (frame includes the move)
-        UIImageView *pi = (UIImageView *)[c viewWithTag:1];
-        if (!pi) { pi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]]]; pi.tag = 1; pi.contentMode = UIViewContentModeCenter; pi.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [c addSubview:pi]; }
+        UIImageView *pi = (UIImageView *)[([c isKindOfClass:[UIVisualEffectView class]] ? ((UIVisualEffectView *)c).contentView : c) viewWithTag:1];
+        if (!pi) { pi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]]]; pi.tag = 1; pi.contentMode = UIViewContentModeCenter; pi.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [([c isKindOfClass:[UIVisualEffectView class]] ? ((UIVisualEffectView *)c).contentView : c) addSubview:pi]; }
         pi.tintColor = Ink(row); pi.frame = c.bounds;
         CGRect cf = CGRectMake(CGRectGetMidX(af) - d / 2, CGRectGetMidY(af) - d / 2, d, d);
         if (!CGRectEqualToRect(c.frame, cf)) { c.frame = cf; c.layer.cornerRadius = d / 2; [c viewWithTag:1].frame = c.bounds; }
