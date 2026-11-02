@@ -1,4 +1,5 @@
-// Messages26 1.0.1 - made by nano
+// Messages26 1.0.2 - made by nano
+// 1.0.2: smoother on older iPhones (8 / 8 Plus / X): fewer screen checks, none while touching or scrolling
 // 1.0.1: contact name always shows in its capsule at the top of a chat; name + capsule a little lower
 // 1.0: first public release - iOS 26 Messages redesign plus custom features (all in the Messages26 settings)
 // 0.18.14: jelly bounce on search / new message / settings / Edit / + pills, iMessage box same glass as search, smoother + menu, iOS 26 settings
@@ -107,6 +108,29 @@
 #import <NaturalLanguage/NaturalLanguage.h>
 #import <UserNotifications/UserNotifications.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <sys/sysctl.h>
+// Older phones (iPhone X / 8 / 8 Plus and earlier): the screen checks run less often and pause while you touch.
+static BOOL SlowDevice(void) {
+    static int slow = -1;
+    if (slow < 0) {
+        char m[64] = {0}; size_t n = sizeof(m) - 1;
+        slow = 0;
+        if (sysctlbyname("hw.machine", m, &n, NULL, 0) == 0 && strncmp(m, "iPhone", 6) == 0) { int major = atoi(m + 6); slow = (major > 0 && major <= 10) ? 1 : 0; }
+    }
+    return slow == 1;
+}
+static BOOL gTouching = NO;
+static NSTimeInterval gTouchEnd = 0;
+static void (*origSendEvent)(id, SEL, UIEvent *);
+static void SendEvent(UIApplication *self, SEL _cmd, UIEvent *e) {
+    if (e.type == UIEventTypeTouches) {
+        BOOL down = NO;
+        for (UITouch *t in e.allTouches) if (t.phase != UITouchPhaseEnded && t.phase != UITouchPhaseCancelled) { down = YES; break; }
+        if (gTouching && !down) gTouchEnd = [NSDate timeIntervalSinceReferenceDate];
+        gTouching = down;
+    }
+    origSendEvent(self, _cmd, e);
+}
 
 #define PLUS_TAG  0x4D323650
 #define GLASS_TAG 0x4D323647
@@ -1273,7 +1297,8 @@ static void Crisp(UIView *root, CGFloat s) {
 static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     UIView *name = gNameNow, *oldA = gAvatarV;
     UIView *av = nil;
-    if (chat && gTopOn && name.window && nb) {
+    if (SlowDevice() && chat && gTopOn && oldA.window && oldA.window == name.window) av = oldA;
+    else if (chat && gTopOn && name.window && nb) {
         // the photo: a square right above the name, in the middle (searched in the whole window)
         UIWindow *win = name.window;
         CGRect nw = [name convertRect:name.bounds toView:nil];
@@ -5154,6 +5179,9 @@ static void ApplyChatBg(UIWindow *w) {
 @end
 
 static void Tick(void) {
+    static unsigned long tickN = 0; tickN++;
+    // older phones: leave the screen alone while a finger is down or a scroll is still gliding
+    if (SlowDevice() && (gTouching || [NSDate timeIntervalSinceReferenceDate] - gTouchEnd < 0.6)) return;
     UIWindow *w = nil;
     for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
         if (![sc isKindOfClass:[UIWindowScene class]]) continue;
@@ -5184,7 +5212,7 @@ static void Tick(void) {
         CGRect fr = [f convertRect:f.bounds toView:e], pr = pill ? [pill convertRect:pill.bounds toView:e] : CGRectNull;
         if (f && (!pill || fabs(CGRectGetMidY(fr) - CGRectGetMidY(pr)) > 3)) { @try { StyleEntry(e); } @catch (__unused id ex) {} }
     }
-    if (!e.window) {
+    if (!e.window && (!SlowDevice() || tickN % 4 == 0)) {
         for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
             if (![sc isKindOfClass:[UIWindowScene class]]) continue;
             for (UIWindow *x in ((UIWindowScene *)sc).windows) {
@@ -5203,7 +5231,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.0.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.0.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -5333,6 +5361,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
             MSHookMessageEx(CB, @selector(setHidden:), (IMP)BalloonHidden, (IMP *)&origBalloonHidden);
             MSHookMessageEx(CB, @selector(didMoveToSuperview), (IMP)BalloonMove, (IMP *)&origBalloonMove);
         }
-        [NSTimer scheduledTimerWithTimeInterval:0.3 repeats:YES block:^(__unused NSTimer *t) { @try { Tick(); } @catch (__unused id ex) {} }];
+        MSHookMessageEx([UIApplication class], @selector(sendEvent:), (IMP)SendEvent, (IMP *)&origSendEvent);
+        [NSTimer scheduledTimerWithTimeInterval:SlowDevice() ? 0.5 : 0.3 repeats:YES block:^(__unused NSTimer *t) { @try { Tick(); } @catch (__unused id ex) {} }];
     });
 }
