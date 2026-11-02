@@ -1,4 +1,6 @@
-// Messages26 0.7.0 - made by nano
+// Messages26 0.7.1 - made by nano
+// 0.7.1: the whole row (text + mic) sits right above the keyboard, text lined up for real,
+//        Cancel button is an X, glassier To: pill with a white glass +
 // 0.7.0: field sits at the bottom (no gap above the keyboard), solid crisp pill, text lined up by the caret;
 //        compose: no glass on the title, Cancel is a glass X, glass To: field with a white glass +;
 //        list: compose glass no longer cut off
@@ -82,7 +84,27 @@ static UIVisualEffectView *GlassView(UIView *forTrait) {
     g.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.17] : [UIColor colorWithWhite:0 alpha:0.08]).CGColor;
     return g;
 }
+// Extra-glassy (iOS 26): clear blur, a light sheen on top and a bright rim.
+static UIColor *Ink(UIView *v);
+static UIVisualEffectView *ClearGlass(UIView *forTrait) {
+    UIVisualEffectView *g = GlassView(forTrait);
+    BOOL dark = IsDark(forTrait);
+    g.contentView.backgroundColor = dark ? [UIColor colorWithWhite:1 alpha:0.06] : [UIColor colorWithWhite:1 alpha:0.3];
+    g.layer.borderWidth = 1;
+    g.layer.borderColor = [UIColor colorWithWhite:1 alpha:dark ? 0.28 : 0.6].CGColor;
+    CAGradientLayer *sheen = [CAGradientLayer layer];
+    sheen.name = @"m26.sheen";
+    sheen.colors = @[(id)[UIColor colorWithWhite:1 alpha:dark ? 0.16 : 0.45].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+    sheen.startPoint = CGPointMake(0.5, 0); sheen.endPoint = CGPointMake(0.5, 0.6);
+    [g.contentView.layer addSublayer:sheen];
+    return g;
+}
 static UIColor *Ink(UIView *v) { return IsDark(v) ? UIColor.whiteColor : UIColor.blackColor; }
+static void SheenFit(UIView *g) {
+    if (![g isKindOfClass:[UIVisualEffectView class]]) return;
+    for (CALayer *l in ((UIVisualEffectView *)g).contentView.layer.sublayers) if ([l.name isEqualToString:@"m26.sheen"]) { [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = g.bounds; [CATransaction commit]; }
+}
+
 
 static UIView *Find(UIView *root, BOOL (^test)(UIView *v), int limit) {
     NSMutableArray *st = [NSMutableArray arrayWithObject:root];
@@ -474,13 +496,28 @@ static void StyleEntry(UIView *entry) {
         CGRect sf = [strip convertRect:strip.bounds toView:entry];
         CGRect cf0 = CGRectApplyAffineTransform(container.frame, CGAffineTransformInvert(container.transform));
         (void)sf; (void)cf0;
-        // the field row drops to the bottom of the bar (where the app row was)
-        container = field;
-        CGRect ff0 = [field.superview convertRect:CGRectApplyAffineTransform(field.frame, CGAffineTransformInvert(field.transform)) toView:entry];
-        shift = MAX(0, entry.bounds.size.height - 8 - CGRectGetMaxY(ff0));
+        // the field row (text box + mic) drops to the bottom of the bar, where
+        // the app row was. Measured from untransformed frames so it never adds up.
+        for (UIView *p = field; p && p != entry; p = p.superview) if (p != field && !CGAffineTransformIsIdentity(p.transform) && ![p.subviews containsObject:strip]) p.transform = CGAffineTransformIdentity;
+        if (!CGAffineTransformIsIdentity(field.transform)) field.transform = CGAffineTransformIdentity;
+        CGRect ff0 = [field convertRect:field.bounds toView:entry];
+        shift = MAX(0, entry.bounds.size.height - 6 - CGRectGetMaxY(ff0));
+        container = nil;
+        // every piece of that row: views at the field's height that don't hold the app row
+        NSMutableArray *rowViews = [NSMutableArray array];
+        NSMutableArray *rs = [NSMutableArray arrayWithArray:entry.subviews];
+        int gr = 0;
+        while (rs.count && gr++ < 300) {
+            UIView *v = rs.firstObject; [rs removeObjectAtIndex:0];
+            if (v.tag == PLUS_TAG || v.tag == PILL_TAG || v == strip) continue;
+            if ([strip isDescendantOfView:v]) { [rs addObjectsFromArray:v.subviews]; continue; }
+            CGRect vf = [v.superview convertRect:CGRectMake(v.center.x - v.bounds.size.width / 2, v.center.y - v.bounds.size.height / 2, v.bounds.size.width, v.bounds.size.height) toView:entry];
+            if (CGRectGetMidY(vf) > CGRectGetMinY(ff0) - 4 && CGRectGetMidY(vf) < CGRectGetMaxY(ff0) + 4) [rowViews addObject:v];
+        }
+        CGAffineTransform rt = CGAffineTransformMakeTranslation(0, shift);
+        for (UIView *v in rowViews) if (!CGAffineTransformEqualToTransform(v.transform, rt)) v.transform = rt;
     } else if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
-    CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift);
-    if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t;
+    if (container) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift); if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t; }
     // Instagram-style... no: iOS 26 field look is drawn by our pill behind it
     {
         UIView *topc = field; while (topc.superview && topc.superview != entry) topc = topc.superview;
@@ -506,21 +543,22 @@ static void StyleEntry(UIView *entry) {
     }
     UIView *textV = Find(field, ^BOOL(UIView *v) { return [v isKindOfClass:[UITextView class]]; }, 100) ?: field;
     {
-        // where the text is actually drawn: the caret's start in the text view
-        CGFloat want = 12 + 46 + 10 + 16;
-        CGFloat textX = CGRectGetMinX([textV convertRect:textV.bounds toView:entry]);
-        if ([textV isKindOfClass:[UITextView class]]) {
-            UITextView *tv = (UITextView *)textV;
-            CGRect caret = [tv caretRectForPosition:tv.beginningOfDocument];
-            if (!CGRectIsNull(caret) && !CGRectIsInfinite(caret)) textX = CGRectGetMinX([tv convertRect:caret toView:entry]);
-        }
-        CGFloat dx = want - textX;   // + = move right
-        gTextDebug = [NSString stringWithFormat:@"textX=%.0f want=%.0f", textX, want];
-        if (fabs(dx) > 1 && fabs(dx) < 140 && field.superview) {
-            CGRect bnd = field.bounds; bnd.size.width -= dx; field.bounds = bnd;   // right edge (mic) stays
+        // where the text is actually drawn: the caret's start; adjust and re-measure
+        CGFloat want = 12 + 46 + 10 + 16, textX = 0;
+        for (int it = 0; it < 4; it++) {
+            textX = CGRectGetMinX([textV convertRect:textV.bounds toView:entry]);
+            if ([textV isKindOfClass:[UITextView class]]) {
+                UITextView *tv = (UITextView *)textV;
+                CGRect caret = [tv caretRectForPosition:tv.beginningOfDocument];
+                if (!CGRectIsNull(caret) && !CGRectIsInfinite(caret)) textX = CGRectGetMinX([tv convertRect:caret toView:entry]);
+            }
+            CGFloat dx = want - textX;
+            if (fabs(dx) <= 1 || fabs(dx) > 160 || !field.superview) break;
+            CGRect bnd = field.bounds; bnd.size.width -= dx; field.bounds = bnd;   // right edge stays
             CGPoint c = field.center; c.x += dx / 2; field.center = c;
-            [field layoutIfNeeded];
+            [field setNeedsLayout]; [field layoutIfNeeded];
         }
+        gTextDebug = [NSString stringWithFormat:@"textX=%.0f want=%.0f", textX, want];
     }
     CGRect ff = [field convertRect:field.bounds toView:entry];   // includes the move down
     CGFloat padY = 6, D = MAX(46, MIN(ff.size.height + padY * 2, 52));
@@ -728,21 +766,31 @@ static void StyleToField(UIWindow *w) {
     for (UIView *s in row.superview.subviews) if (s != row && s.bounds.size.height <= 1.5 && s.bounds.size.width >= w.bounds.size.width * 0.8) s.hidden = YES;
     for (UIView *s in row.subviews) if (s.bounds.size.height <= 1.5 && s.bounds.size.width >= w.bounds.size.width * 0.8) s.hidden = YES;
     UIView *g = [row viewWithTag:GLASS_TAG + 9];
-    if (!g) { g = GlassView(row); g.tag = GLASS_TAG + 9; [row insertSubview:g atIndex:0]; }
+    if (!g) { g = ClearGlass(row); g.tag = GLASS_TAG + 9; [row insertSubview:g atIndex:0]; }
     CGFloat h = MIN(row.bounds.size.height - 8, 52);
     CGRect gf = CGRectMake(16, CGRectGetMidY([to convertRect:to.bounds toView:row]) - h / 2, row.bounds.size.width - 32, h);
-    if (!CGRectEqualToRect(g.frame, gf)) { g.frame = gf; g.layer.cornerRadius = h / 2; }
+    if (!CGRectEqualToRect(g.frame, gf)) { g.frame = gf; g.layer.cornerRadius = h / 2; SheenFit(g); }
     if (CGRectGetMinX(to.frame) < 30 && to.superview == row) { CGRect f = to.frame; f.origin.x = 32; to.frame = f; }
-    UIButton *add = (UIButton *)Find(row, ^BOOL(UIView *v) { return [v isKindOfClass:[UIButton class]] && v.bounds.size.width < 60; }, 200);
+    UIButton *add = nil; CGFloat ax = -1;
+    { NSMutableArray *bs = [NSMutableArray arrayWithObject:row]; int gb = 0;
+      while (bs.count && gb++ < 200) { UIView *v = bs.lastObject; [bs removeLastObject];
+        if ([v isKindOfClass:[UIButton class]] && !v.hidden && v.alpha > 0.05 && v.bounds.size.width < 70) { CGFloat x = [v convertPoint:CGPointZero toView:row].x; if (x > ax) { ax = x; add = (UIButton *)v; } }
+        [bs addObjectsFromArray:v.subviews]; } }
     if (add) {
         add.tintColor = Ink(row);
+        if (add.imageView) add.imageView.tintColor = Ink(row);
         UIView *c = [add.superview viewWithTag:GLASS_TAG + 10];
-        if (!c) { c = GlassView(add); c.tag = GLASS_TAG + 10; [add.superview insertSubview:c belowSubview:add]; }
+        if (!c) { c = ClearGlass(add); c.tag = GLASS_TAG + 10; [add.superview insertSubview:c belowSubview:add]; }
+        SheenFit(c);
         CGRect af = add.frame; CGFloat d = 34;
         CGRect cf = CGRectMake(CGRectGetMidX(af) - d / 2, CGRectGetMidY(af) - d / 2, d, d);
         if (!CGRectEqualToRect(c.frame, cf)) { c.frame = cf; c.layer.cornerRadius = d / 2; }
         UIImage *plus = [UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightBold]];
-        if (![[add imageForState:UIControlStateNormal].description containsString:@"plus)"]) [add setImage:plus forState:UIControlStateNormal];
+        UIImage *white = [plus imageWithTintColor:Ink(row) renderingMode:UIImageRenderingModeAlwaysOriginal];
+        if (!objc_getAssociatedObject(add, "m26plus")) {
+            objc_setAssociatedObject(add, "m26plus", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            for (NSNumber *st in @[@(UIControlStateNormal), @(UIControlStateHighlighted)]) [add setImage:white forState:st.unsignedIntegerValue];
+        }
     }
 }
 static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
@@ -779,6 +827,21 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
         NSString *cn = NSStringFromClass([v class]);
         if ([v isKindOfClass:[UIControl class]] && f.size.width >= 24 && f.size.width < 170 && f.size.height >= 24 && f.size.height < 80) {
             BOOL left = CGRectGetMidX(f) < W * 0.33, right = CGRectGetMidX(f) > W * 0.67;
+            // "Cancel" text button -> X
+            if (right && [v isKindOfClass:[UIButton class]]) {
+                UIButton *b = (UIButton *)v;
+                NSString *bt = [b titleForState:UIControlStateNormal] ?: b.titleLabel.text;
+                if ([bt.lowercaseString isEqualToString:@"cancel"]) {
+                    [b setTitle:@"" forState:UIControlStateNormal];
+                    [b setImage:[[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] imageWithTintColor:Ink(nb) renderingMode:UIImageRenderingModeAlwaysOriginal] forState:UIControlStateNormal];
+                    if (b.configuration) { UIButtonConfiguration *c = b.configuration; c.title = nil; c.attributedTitle = nil; c.image = [b imageForState:UIControlStateNormal]; b.configuration = c; }
+                }
+                // labels inside a custom bar view ("Cancel" drawn as a label)
+                NSMutableArray *ls2 = [NSMutableArray arrayWithObject:v]; int g2 = 0;
+                while (ls2.count && g2++ < 20) { UIView *x = ls2.lastObject; [ls2 removeLastObject];
+                    if ([x isKindOfClass:[UILabel class]] && [((UILabel *)x).text.lowercaseString isEqualToString:@"cancel"]) x.hidden = YES;
+                    [ls2 addObjectsFromArray:x.subviews]; }
+            }
             if (left) {
                 // unread count on the back button: dark number on the white badge
                 NSMutableArray *ls = [NSMutableArray arrayWithObject:v]; int gl = 0;
@@ -882,7 +945,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.7.0 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.7.1 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
