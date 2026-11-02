@@ -1,4 +1,5 @@
-// Messages26 0.17.1 - made by nano
+// Messages26 0.18.0 - made by nano
+// 0.18.0: animations removed; Spelling Fix, Mood Detection, Reaction Effects (+sounds), Saved Messages, Message Reminders
 // 0.17.1: search + smart badge removed; Message Animations (pick a send and a receive style)
 // 0.17.0: Search in Chat (tap the name on the contact page), Smart Unread Badge
 // 0.16.3: lock screen solid + hides the message bar; Cancel / 2 fails go to the list; Lock Again timer; scheduled send + auto unsend removed
@@ -87,6 +88,9 @@
 #import <PhotosUI/PhotosUI.h>
 #import <Photos/Photos.h>
 #import <LocalAuthentication/LocalAuthentication.h>
+#import <NaturalLanguage/NaturalLanguage.h>
+#import <UserNotifications/UserNotifications.h>
+#import <AudioToolbox/AudioToolbox.h>
 
 #define PLUS_TAG  0x4D323650
 #define GLASS_TAG 0x4D323647
@@ -3056,7 +3060,7 @@ static id CtxMenu(id self, SEL _cmd, UICollectionView *cv, NSIndexPath *ip, CGPo
 static NSArray *AnimStyles(void);
 static NSString *AnimStyle(BOOL send);
 static void PreviewAnim(NSString *st, BOOL mine, UITableViewCell *c);
-static BOOL Opt(NSString *k) { if ([k isEqualToString:@"sched"] || [k isEqualToString:@"unsend"] || [k isEqualToString:@"search"] || [k isEqualToString:@"badge"]) return NO; return gOn && [[NSUserDefaults standardUserDefaults] boolForKey:[@"m26.opt." stringByAppendingString:k]]; }
+static BOOL Opt(NSString *k) { if ([k isEqualToString:@"sched"] || [k isEqualToString:@"unsend"] || [k isEqualToString:@"search"] || [k isEqualToString:@"badge"] || [k isEqualToString:@"anim"]) return NO; return gOn && [[NSUserDefaults standardUserDefaults] boolForKey:[@"m26.opt." stringByAppendingString:k]]; }
 static void SetOpt(NSString *k, BOOL v) { [[NSUserDefaults standardUserDefaults] setBool:v forKey:[@"m26.opt." stringByAppendingString:k]]; }
 static NSArray *LockedKeys(void) { return [[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.locked"] ?: @[]; }
 __attribute__((unused)) static NSMutableSet *gUnlocked;
@@ -3783,10 +3787,12 @@ static void StyleFeatures(UIWindow *w) {
     @try { CheckScheduled(); } @catch (__unused id e) {}
     @try { ChatLock(w); } @catch (__unused id e) {}
     UIView *e = gEntry;
-    if (!e.window) return;
+    if (!e.window) { [w viewWithTag:0x4D32365F].alpha = 0; [w viewWithTag:0x4D323660].hidden = YES; return; }
     @try { ReadTimer(w); } @catch (__unused id ex) {}
     @try { IncomingFx(w); } @catch (__unused id ex) {}
     @try { SmartBadge(w); } @catch (__unused id ex) {}
+    @try { SpellFix(w); } @catch (__unused id ex) {}
+    @try { MoodPill(w); } @catch (__unused id ex) {}
 }
 
 // ---- pick which chats are locked ----
@@ -3813,6 +3819,304 @@ static void StyleFeatures(UIWindow *w) {
     [tv reloadRowsAtIndexPaths:@[ip] withRowAnimation:UITableViewRowAnimationNone];
 }
 @end
+
+// ======== Saved messages + reminders (hold a message) ========
+static NSArray *SavedMsgs(void) { return [[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.saved"] ?: @[]; }
+static NSArray *Reminders(void) {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    NSMutableArray *a = [NSMutableArray array];
+    for (NSDictionary *d in [[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.reminders"] ?: @[]) if ([d[@"at"] doubleValue] > now) [a addObject:d];
+    return a;
+}
+static NSDictionary *MsgInfo(id item) {
+    NSString *t = ItemText(item) ?: @"(attachment)";
+    BOOL me = ItemFromMe(item);
+    NSDate *d = nil; @try { d = [item valueForKeyPath:@"IMChatItem.time"]; } @catch (__unused id e) {}
+    if (![d isKindOfClass:[NSDate class]]) d = [NSDate date];
+    NSString *who = me ? @"You" : ConvNameForKey(gChatKeyNow);
+    return @{@"text": t, @"who": who ?: @"", @"chat": ConvNameForKey(gChatKeyNow) ?: @"", @"time": @(d.timeIntervalSince1970), @"saved": @([NSDate date].timeIntervalSince1970)};
+}
+static void Toast(NSString *msg, NSString *icon) {
+    UIWindow *w = [UIApplication sharedApplication].keyWindow; if (!w) return;
+    UIButton *t = [UIButton buttonWithType:UIButtonTypeCustom]; t.userInteractionEnabled = NO;
+    [t setTitle:[@"  " stringByAppendingString:msg] forState:UIControlStateNormal]; [t setImage:[UIImage systemImageNamed:icon] forState:UIControlStateNormal];
+    t.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; t.tintColor = UIColor.whiteColor;
+    t.backgroundColor = [UIColor colorWithRed:0.115 green:0.115 blue:0.125 alpha:0.96];
+    CGSize sz = [t sizeThatFits:CGSizeMake(300, 40)]; sz.width += 32;
+    t.frame = CGRectMake((w.bounds.size.width - sz.width) / 2, w.safeAreaInsets.top + 6, sz.width, 40); t.layer.cornerRadius = 20; RimFit(t, YES);
+    t.transform = CGAffineTransformMakeTranslation(0, -80); [w addSubview:t];
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:0 animations:^{ t.transform = CGAffineTransformIdentity; } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.35 delay:1.4 options:0 animations:^{ t.transform = CGAffineTransformMakeTranslation(0, -80); } completion:^(__unused BOOL f2) { [t removeFromSuperview]; }]; }];
+}
+static void SaveMessage(id item) {
+    NSMutableArray *a = [SavedMsgs() mutableCopy];
+    [a insertObject:MsgInfo(item) atIndex:0];
+    [[NSUserDefaults standardUserDefaults] setObject:a forKey:@"m26.saved"];
+    [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
+    Toast(@"Message Saved", @"bookmark.fill");
+}
+@interface M26RemindVC : UIViewController
+@property (nonatomic, strong) NSDictionary *info;
+@end
+@implementation M26RemindVC { UIDatePicker *_dp; UIButton *_go; NSArray *_chips; }
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    BOOL dark = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight;
+    UIVisualEffectView *bg = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterial]];
+    bg.frame = self.view.bounds; bg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [self.view addSubview:bg];
+    CGFloat W = self.view.bounds.size.width;
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(20, 18, W - 40, 24)]; t.text = @"Remind Me"; t.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold]; t.textAlignment = NSTextAlignmentCenter; t.autoresizingMask = UIViewAutoresizingFlexibleWidth; [self.view addSubview:t];
+    UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(24, 50, W - 48, 40)]; m.text = [NSString stringWithFormat:@"%@: %@", self.info[@"who"], self.info[@"text"]]; m.textColor = UIColor.secondaryLabelColor; m.numberOfLines = 2; m.font = [UIFont systemFontOfSize:15]; m.textAlignment = NSTextAlignmentCenter; m.autoresizingMask = UIViewAutoresizingFlexibleWidth; [self.view addSubview:m];
+    NSArray *titles = @[@"In 1 Hour", @"Tonight", @"Tomorrow"];
+    NSMutableArray *chips = [NSMutableArray array]; CGFloat cw = (W - 40 - 16) / 3;
+    for (NSUInteger i = 0; i < titles.count; i++) {
+        UIButton *c = [UIButton buttonWithType:UIButtonTypeCustom]; c.tag = i; c.frame = CGRectMake(20 + i * (cw + 8), 104, cw, 36);
+        [c setTitle:titles[i] forState:UIControlStateNormal]; c.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold]; [c setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
+        c.backgroundColor = [UIColor colorWithWhite:dark ? 1 : 0 alpha:0.08]; c.layer.cornerRadius = 18;
+        [c addTarget:self action:@selector(chip:) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:c]; [chips addObject:c];
+    }
+    _chips = chips;
+    UILabel *wl = [[UILabel alloc] initWithFrame:CGRectMake(24, 154, 120, 34)]; wl.text = @"Remind at"; wl.font = [UIFont systemFontOfSize:17]; [self.view addSubview:wl];
+    _dp = [UIDatePicker new]; _dp.datePickerMode = UIDatePickerModeDateAndTime; _dp.preferredDatePickerStyle = UIDatePickerStyleCompact;
+    _dp.minimumDate = [NSDate dateWithTimeIntervalSinceNow:60]; _dp.date = [NSDate dateWithTimeIntervalSinceNow:3600];
+    [_dp sizeToFit]; _dp.frame = CGRectMake(W - 20 - _dp.bounds.size.width, 154, _dp.bounds.size.width, 34); _dp.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    [_dp addTarget:self action:@selector(changed) forControlEvents:UIControlEventValueChanged]; [self.view addSubview:_dp];
+    _go = [UIButton buttonWithType:UIButtonTypeCustom]; _go.frame = CGRectMake(20, 204, W - 40, 50); _go.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    _go.backgroundColor = UIColor.systemPinkColor; _go.layer.cornerRadius = 25;
+    [_go setImage:[UIImage systemImageNamed:@"bell.fill"] forState:UIControlStateNormal]; _go.tintColor = UIColor.whiteColor; _go.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    [_go addTarget:self action:@selector(go) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:_go];
+    [self changed];
+}
+- (void)changed { NSDateFormatter *f = [NSDateFormatter new]; f.doesRelativeDateFormatting = YES; f.dateStyle = NSDateFormatterShortStyle; f.timeStyle = NSDateFormatterShortStyle; [_go setTitle:[NSString stringWithFormat:@"  Remind %@", [f stringFromDate:_dp.date]] forState:UIControlStateNormal]; }
+- (void)chip:(UIButton *)c {
+    [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+    NSCalendar *cal = NSCalendar.currentCalendar; NSDate *now = [NSDate date], *d = nil;
+    if (c.tag == 0) d = [now dateByAddingTimeInterval:3600];
+    else if (c.tag == 1) { d = [cal dateBySettingHour:21 minute:0 second:0 ofDate:now options:0]; if ([d timeIntervalSinceNow] < 120) d = [d dateByAddingTimeInterval:86400]; }
+    else d = [cal dateBySettingHour:9 minute:0 second:0 ofDate:[now dateByAddingTimeInterval:86400] options:0];
+    [_dp setDate:d animated:YES]; [self changed];
+    for (UIButton *x in _chips) x.backgroundColor = [UIColor colorWithWhite:self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight ? 1 : 0 alpha:x == c ? 0.22 : 0.08];
+}
+- (void)go {
+    NSString *ident = [NSUUID UUID].UUIDString;
+    UNMutableNotificationContent *ct = [UNMutableNotificationContent new];
+    ct.title = [NSString stringWithFormat:@"Reminder · %@", self.info[@"chat"]]; ct.body = [NSString stringWithFormat:@"%@: %@", self.info[@"who"], self.info[@"text"]]; ct.sound = UNNotificationSound.defaultSound;
+    NSDateComponents *dc = [NSCalendar.currentCalendar components:NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay | NSCalendarUnitHour | NSCalendarUnitMinute fromDate:_dp.date];
+    UNNotificationRequest *rq = [UNNotificationRequest requestWithIdentifier:ident content:ct trigger:[UNCalendarNotificationTrigger triggerWithDateMatchingComponents:dc repeats:NO]];
+    [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:rq withCompletionHandler:nil];
+    NSMutableArray *a = [[[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.reminders"] ?: @[] mutableCopy];
+    NSMutableDictionary *d = [self.info mutableCopy]; d[@"at"] = @(_dp.date.timeIntervalSince1970); d[@"id"] = ident; [a addObject:d];
+    [[NSUserDefaults standardUserDefaults] setObject:a forKey:@"m26.reminders"];
+    [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
+    [self dismissViewControllerAnimated:YES completion:^{ Toast(@"Reminder Set", @"bell.fill"); }];
+}
+@end
+static void RemindMessage(id item) {
+    M26RemindVC *vc = [M26RemindVC new]; vc.info = MsgInfo(item);
+    if (@available(iOS 16.0, *)) {
+        UISheetPresentationController *sp = vc.sheetPresentationController;
+        sp.detents = @[[UISheetPresentationControllerDetent customDetentWithIdentifier:@"m26rem" resolver:^CGFloat(__unused id<UISheetPresentationControllerDetentResolutionContext> ctx) { return 280; }]];
+        sp.prefersGrabberVisible = YES; sp.preferredCornerRadius = 32;
+    }
+    UIWindow *w = [UIApplication sharedApplication].keyWindow;
+    [w endEditing:YES];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [TopVC(w) presentViewController:vc animated:YES completion:nil]; });
+}
+// list screens (Saved / Reminders)
+@interface M26ListVC : UITableViewController
+@property (nonatomic) NSInteger kind;   // 0 saved, 1 reminders
+@property (nonatomic, strong) NSMutableArray *rows;
+@end
+@implementation M26ListVC
+- (void)viewDidLoad { [super viewDidLoad]; self.title = self.kind ? @"Upcoming Reminders" : @"Saved Messages"; self.rows = [(self.kind ? Reminders() : SavedMsgs()) mutableCopy]; }
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return MAX(1, self.rows.count); }
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    if (!self.rows.count) { c.textLabel.text = self.kind ? @"No reminders" : @"No saved messages"; c.textLabel.textColor = UIColor.secondaryLabelColor; return c; }
+    NSDictionary *d = self.rows[ip.row];
+    c.textLabel.text = d[@"text"]; c.textLabel.numberOfLines = 4;
+    NSDateFormatter *f = [NSDateFormatter new]; f.doesRelativeDateFormatting = YES; f.dateStyle = NSDateFormatterShortStyle; f.timeStyle = NSDateFormatterShortStyle;
+    NSDate *dt = [NSDate dateWithTimeIntervalSince1970:[d[self.kind ? @"at" : @"time"] doubleValue]];
+    c.detailTextLabel.text = self.kind ? [NSString stringWithFormat:@"🔔 %@ · %@ in %@", [f stringFromDate:dt], d[@"who"], d[@"chat"]] : [NSString stringWithFormat:@"%@ in %@ · %@", d[@"who"], d[@"chat"], [f stringFromDate:dt]];
+    c.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+    return c;
+}
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    if (!self.rows.count) return;
+    [UIPasteboard generalPasteboard].string = self.rows[ip.row][@"text"];
+    Toast(@"Copied", @"doc.on.doc.fill");
+}
+- (BOOL)tableView:(UITableView *)tv canEditRowAtIndexPath:(NSIndexPath *)ip { return self.rows.count > 0; }
+- (void)tableView:(UITableView *)tv commitEditingStyle:(UITableViewCellEditingStyle)st forRowAtIndexPath:(NSIndexPath *)ip {
+    NSDictionary *d = self.rows[ip.row];
+    if (self.kind && d[@"id"]) [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifiers:@[d[@"id"]]];
+    [self.rows removeObjectAtIndex:ip.row];
+    [[NSUserDefaults standardUserDefaults] setObject:self.rows forKey:self.kind ? @"m26.reminders" : @"m26.saved"];
+    [tv reloadData];
+}
+@end
+// hold menu on a message: Save Message / Remind Me
+static id (*origMsgMenu)(id, SEL, id);
+static id MsgMenu(id self, SEL _cmd, id item) {
+    UIMenu *m = origMsgMenu(self, _cmd, item);
+    if (![m isKindOfClass:[UIMenu class]] || (!Opt(@"save") && !Opt(@"remind"))) return m;
+    NSMutableArray *extra = [NSMutableArray array];
+    if (Opt(@"save")) [extra addObject:[UIAction actionWithTitle:@"Save Message" image:[UIImage systemImageNamed:@"bookmark"] identifier:nil handler:^(__unused UIAction *a) { SaveMessage(item); }]];
+    if (Opt(@"remind")) [extra addObject:[UIAction actionWithTitle:@"Remind Me" image:[UIImage systemImageNamed:@"bell"] identifier:nil handler:^(__unused UIAction *a) { RemindMessage(item); }]];
+    UIMenu *grp = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:extra];
+    return [m menuByReplacingChildren:[@[grp] arrayByAddingObjectsFromArray:m.children]];
+}
+
+// ======== Spelling Fix (on device) ========
+#define SPELL_TAG 0x4D32365F
+static NSString *gSpellFor; static NSString *gSpellFixed; static NSInteger gSpellCount;
+@interface M26Spell : NSObject
++ (instancetype)shared;
+@end
+@implementation M26Spell
++ (instancetype)shared { static M26Spell *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Spell new]; }); return t; }
+- (void)fix:(UIButton *)b {
+    UITextView *tv = EntryTextView();
+    if (!tv || !gSpellFixed) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    tv.text = gSpellFixed;
+    if ([tv.delegate respondsToSelector:@selector(textViewDidChange:)]) [tv.delegate textViewDidChange:tv];
+    [[NSNotificationCenter defaultCenter] postNotificationName:UITextViewTextDidChangeNotification object:tv];
+    gSpellFor = gSpellFixed; gSpellCount = 0;
+    [UIView animateWithDuration:0.25 animations:^{ b.alpha = 0; b.transform = CGAffineTransformMakeScale(0.8, 0.8); } completion:^(__unused BOOL f) { b.transform = CGAffineTransformIdentity; }];
+}
+@end
+static void SpellFix(UIWindow *w) {
+    UIButton *chip = (UIButton *)[w viewWithTag:SPELL_TAG];
+    UITextView *tv = EntryTextView();
+    NSString *text = tv.text ?: @"";
+    if (!Opt(@"spell") || !gEntry.window || !tv.isFirstResponder || text.length < 2) { chip.alpha = 0; return; }
+    if (![text isEqualToString:gSpellFor]) {
+        gSpellFor = text;
+        UITextChecker *ck = [UITextChecker new];
+        NSString *lang = [[NSLocale preferredLanguages].firstObject stringByReplacingOccurrencesOfString:@"-" withString:@"_"];
+        if (![[UITextChecker availableLanguages] containsObject:lang]) lang = @"en_US";
+        NSMutableString *out = [text mutableCopy]; NSInteger n = 0, start = 0;
+        // ignore the word still being typed
+        NSInteger limit = text.length; if (limit && ![[NSCharacterSet whitespaceAndNewlineCharacterSet] characterIsMember:[text characterAtIndex:limit - 1]] && ![[NSCharacterSet punctuationCharacterSet] characterIsMember:[text characterAtIndex:limit - 1]]) { NSRange sp = [text rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet options:NSBackwardsSearch]; limit = sp.location == NSNotFound ? 0 : sp.location; }
+        NSMutableArray *fixes = [NSMutableArray array];
+        while (start < limit) {
+            NSRange r = [ck rangeOfMisspelledWordInString:text range:NSMakeRange(0, limit) startingAt:start wrap:NO language:lang];
+            if (r.location == NSNotFound) break;
+            NSArray *g = [ck guessesForWordRange:r inString:text language:lang];
+            if (g.count) { [fixes addObject:@[[NSValue valueWithRange:r], g.firstObject]]; n++; }
+            start = NSMaxRange(r);
+        }
+        for (NSArray *f in [fixes reverseObjectEnumerator]) [out replaceCharactersInRange:[f[0] rangeValue] withString:f[1]];
+        gSpellFixed = out; gSpellCount = n;
+    }
+    if (!chip) {
+        chip = [UIButton buttonWithType:UIButtonTypeCustom]; chip.tag = SPELL_TAG;
+        [chip setImage:[UIImage systemImageNamed:@"sparkles" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+        chip.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]; chip.tintColor = UIColor.whiteColor;
+        chip.backgroundColor = [UIColor colorWithRed:0.115 green:0.115 blue:0.125 alpha:0.96];
+        [chip addTarget:[M26Spell shared] action:@selector(fix:) forControlEvents:UIControlEventTouchUpInside];
+        chip.alpha = 0; [w addSubview:chip];
+    }
+    BOOL show = gSpellCount > 0;
+    if (show) {
+        [chip setTitle:[NSString stringWithFormat:@"  Fix %ld typo%@", (long)gSpellCount, gSpellCount == 1 ? @"" : @"s"] forState:UIControlStateNormal];
+        UIView *f = gField, *pill = [f.superview viewWithTag:PILL_TAG];
+        CGRect pr = [(pill ?: f) convertRect:(pill ?: f).bounds toView:w];
+        CGSize sz = [chip sizeThatFits:CGSizeMake(220, 34)]; sz.width += 26;
+        CGRect cf = CGRectMake(CGRectGetMinX(pr) + 6, CGRectGetMinY(pr) - 42, sz.width, 34);
+        if (!CGRectEqualToRect(chip.frame, cf)) { chip.frame = cf; chip.layer.cornerRadius = 17; RimFit(chip, YES); }
+        [w bringSubviewToFront:chip];
+    }
+    CGFloat a = show ? 1 : 0;
+    if (fabs(chip.alpha - a) > 0.01 && ![chip.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.2 animations:^{ chip.alpha = a; }];
+    chip.userInteractionEnabled = show;
+}
+
+// ======== Mood Detection (on device) ========
+#define MOOD_TAG 0x4D323660
+static void MoodPill(UIWindow *w) {
+    UILabel *p = (UILabel *)[w viewWithTag:MOOD_TAG];
+    UIView *name = gNameNow;
+    if (!Opt(@"mood") || !gEntry.window || !name.window) { p.hidden = YES; return; }
+    UICollectionView *cv = TranscriptCV(w);
+    NSArray *items = ChatItems(cv);
+    id lastIn = nil; for (id it in [items reverseObjectEnumerator]) if (!ItemFromMe(it) && ItemText(it).length) { lastIn = it; break; }
+    NSString *sig = [NSString stringWithFormat:@"%@|%@", gChatKeyNow, lastIn ? ItemText(lastIn) : @""];
+    if (!p) { p = [UILabel new]; p.tag = MOOD_TAG; p.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold]; p.textAlignment = NSTextAlignmentCenter; p.textColor = UIColor.whiteColor; p.layer.cornerRadius = 11; p.layer.masksToBounds = YES; p.backgroundColor = [UIColor colorWithRed:0.115 green:0.115 blue:0.125 alpha:0.94]; [w addSubview:p]; }
+    if (![objc_getAssociatedObject(p, "sig") isEqual:sig]) {
+        objc_setAssociatedObject(p, "sig", sig, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // their last few messages, newest counts most
+        double sum = 0, wsum = 0; int k = 0;
+        for (id it in [items reverseObjectEnumerator]) {
+            if (ItemFromMe(it)) continue;
+            NSString *t = ItemText(it); if (!t.length) continue;
+            NLTagger *tg = [[NLTagger alloc] initWithTagSchemes:@[NLTagSchemeSentimentScore]]; tg.string = t;
+            NSString *sc = [tg tagAtIndex:0 unit:NLTokenUnitParagraph scheme:NLTagSchemeSentimentScore tokenRange:NULL];
+            double wt = 1.0 / (1 + k); sum += sc.doubleValue * wt; wsum += wt;
+            if (++k >= 5) break;
+        }
+        double m = wsum ? sum / wsum : 0;
+        NSString *t = !k ? @"" : m > 0.35 ? @"😊 Happy" : m > 0.08 ? @"🙂 Positive" : m > -0.08 ? @"😐 Neutral" : m > -0.4 ? @"😕 Down" : @"😢 Upset";
+        p.text = t;
+        if (t.length) { p.alpha = 0; p.transform = CGAffineTransformMakeScale(0.7, 0.7); [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{ p.alpha = 1; p.transform = CGAffineTransformIdentity; } completion:nil]; }
+    }
+    p.hidden = !p.text.length;
+    CGRect nr = [name convertRect:name.bounds toView:w];
+    nr = NameDrawn(name, nr, w);
+    CGSize sz = [p sizeThatFits:CGSizeMake(200, 22)]; sz.width += 18;
+    CGRect f = CGRectMake(CGRectGetMidX(nr) - sz.width / 2, CGRectGetMaxY(nr) + 6, sz.width, 22);
+    if (!CGRectEqualToRect(p.frame, f) && CGAffineTransformIsIdentity(p.transform)) p.frame = f;
+    [w bringSubviewToFront:p];
+}
+
+// ======== Reaction Effects ========
+static NSMutableDictionary *gAckSeen; static NSTimeInterval gAckReadyAt; static NSString *gAckChat;
+static NSString *AckEmoji(long long t) {
+    switch (t % 1000) { case 0: return @"❤️"; case 1: return @"👍"; case 2: return @"👎"; case 3: return @"😂"; case 4: return @"‼️"; case 5: return @"❓"; default: return @"✨"; }
+}
+static void ReactBurst(UIView *v, NSString *emoji) {
+    UIWindow *w = v.window; if (!w) return;
+    CGRect r = [v convertRect:v.bounds toView:w];
+    CGPoint c = CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r));
+    UIView *host = [[UIView alloc] initWithFrame:w.bounds]; host.userInteractionEnabled = NO; [w addSubview:host];
+    for (int i = 0; i < 9; i++) {
+        CALayer *l = EmojiLayer(emoji, 26 + arc4random_uniform(14), c); [host.layer addSublayer:l];
+        CGFloat ang = -M_PI_2 + ((double)arc4random_uniform(1000) / 1000.0 - 0.5) * 1.8, dist = 60 + arc4random_uniform(90);
+        CGPoint to = CGPointMake(c.x + cos(ang) * dist, c.y + sin(ang) * dist - 40);
+        CAAnimationGroup *g = [CAAnimationGroup animation];
+        CABasicAnimation *mv = [CABasicAnimation animationWithKeyPath:@"position"]; mv.toValue = [NSValue valueWithCGPoint:to]; mv.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2 :0.8 :0.3 :1];
+        CAKeyframeAnimation *sc = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; sc.values = @[@0.2, @1.3, @1]; sc.keyTimes = @[@0, @0.3, @1];
+        CABasicAnimation *op = [CABasicAnimation animationWithKeyPath:@"opacity"]; op.fromValue = @1; op.toValue = @0; op.beginTime = 0.7; op.duration = 0.6;
+        CABasicAnimation *rt = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"]; rt.toValue = @(((double)arc4random_uniform(100) / 100.0 - 0.5) * 1.6);
+        g.animations = @[mv, sc, op, rt]; g.duration = 1.3; g.fillMode = kCAFillModeForwards; g.removedOnCompletion = NO; g.beginTime = CACurrentMediaTime() + i * 0.03;
+        l.opacity = 1; [l addAnimation:g forKey:@"b"];
+    }
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"m26.reactSound"]) AudioServicesPlaySystemSound(1407);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [host removeFromSuperview]; });
+}
+static void (*origAckCfg)(id, SEL, id);
+static void AckCfg(UIView *self, SEL _cmd, id item) {
+    origAckCfg(self, _cmd, item);
+    if (!Opt(@"react")) return;
+    @try {
+        if (![gAckChat isEqualToString:gChatKeyNow]) { gAckChat = gChatKeyNow; gAckSeen = [NSMutableDictionary dictionary]; gAckReadyAt = [NSDate date].timeIntervalSince1970 + 1.5; }
+        NSString *guid = nil; @try { guid = [item valueForKey:@"guid"]; } @catch (__unused id e) {}
+        NSInteger n = 0; @try { n = [[item valueForKey:@"acknowledgments"] count]; } @catch (__unused id e) {}
+        long long tp = 0; @try { tp = [[item valueForKey:@"latestAcknowledgmentType"] longLongValue]; } @catch (__unused id e) {}
+        if (!guid) return;
+        NSString *sig = [NSString stringWithFormat:@"%ld|%lld", (long)n, tp];
+        NSString *old = gAckSeen[guid]; gAckSeen[guid] = sig;
+        if ([NSDate date].timeIntervalSince1970 < gAckReadyAt || [old isEqualToString:sig]) return;
+        if (!old && n > 1) return;   // an old one scrolled in
+        NSString *em = AckEmoji(tp);
+        UIView *me = self;
+        dispatch_async(dispatch_get_main_queue(), ^{ ReactBurst(me, em); });
+    } @catch (__unused id e) {}
+}
+
 @interface M26SettingsVC : UITableViewController
 @end
 @implementation M26SettingsVC
@@ -3827,14 +4131,20 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     return @[@[@"lock", @"Chat Lock", @"lock.fill", UIColor.systemOrangeColor, @"Face ID before chosen chats open; their preview is hidden on the list."],
              @[@"fx", @"Keyword Effects", @"sparkles", UIColor.systemPinkColor, @"Emoji rain for words like \"love you\" ❤️, \"congrats\" 🎉, \"lol\" 😂, \"fire\" 🔥, \"good night\" 🌙."],
              @[@"readtime", @"Live Read Time", @"eye.fill", UIColor.systemGreenColor, @"\"Read 7:53 PM\" becomes \"Read 2m ago\" and keeps counting."],
-             @[@"anim", @"Message Animations", @"wand.and.stars", UIColor.systemPurpleColor, @"Your own animation when a message is sent or arrives. Pick a style for each below."]];
+             @[@"spell", @"Spelling Fix", @"textformat.abc.dottedunderline", UIColor.systemBlueColor, @"While you type, a glass \"Fix typos\" chip shows up above the message box when something's misspelled. Works on your phone, nothing is sent anywhere."],
+             @[@"mood", @"Mood Detection", @"face.smiling.fill", UIColor.systemYellowColor, @"A small mood pill under their name (😊 Happy, 😐 Neutral, 😢 Upset…) from their latest messages, worked out on your phone."],
+             @[@"react", @"Reaction Effects", @"heart.circle.fill", UIColor.systemRedColor, @"When a tapback lands, its emoji bursts out and floats up from the message."],
+             @[@"save", @"Saved Messages", @"bookmark.fill", UIColor.systemOrangeColor, @"Hold a message → Save Message. Find them all here."],
+             @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     if (s == 0) return 1;
     NSString *k = FeatRows()[s - 1][0];
     if ([k isEqualToString:@"lock"] && Opt(@"lock")) return 3;
-    if ([k isEqualToString:@"anim"] && Opt(@"anim")) return 3;
+    if ([k isEqualToString:@"react"] && Opt(@"react")) return 2;
+    if ([k isEqualToString:@"save"] && Opt(@"save")) return 2;
+    if ([k isEqualToString:@"remind"] && Opt(@"remind")) return 2;
     if ([k isEqualToString:@"unsend"] && Opt(@"unsend")) return 2;
     if ([k isEqualToString:@"sched"] && Opt(@"sched") && Scheduled().count) return 2;
     return 1;
@@ -3863,6 +4173,14 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
         c.accessoryView = sw; c.selectionStyle = UITableViewCellSelectionStyleNone;
         return c;
     }
+    if ([r[0] isEqualToString:@"react"]) {
+        c.textLabel.text = @"Reaction Sounds"; c.selectionStyle = UITableViewCellSelectionStyleNone;
+        UISwitch *sw = [UISwitch new]; sw.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"m26.reactSound"];
+        [sw addTarget:self action:@selector(reactSound:) forControlEvents:UIControlEventValueChanged]; c.accessoryView = sw;
+        return c;
+    }
+    if ([r[0] isEqualToString:@"save"]) { c.textLabel.text = @"Saved Messages"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)SavedMsgs().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c; }
+    if ([r[0] isEqualToString:@"remind"]) { c.textLabel.text = @"Upcoming Reminders"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)Reminders().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c; }
     if ([r[0] isEqualToString:@"anim"]) {
         BOOL send = ip.row == 1;
         c.textLabel.text = send ? @"Sending" : @"Receiving"; c.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -3909,6 +4227,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     SetOpt(FeatRows()[sw.tag - 1][0], sw.on);
     [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:sw.tag] withRowAnimation:UITableViewRowAnimationFade];
 }
+- (void)reactSound:(UISwitch *)sw { [[NSUserDefaults standardUserDefaults] setBool:sw.on forKey:@"m26.reactSound"]; }
 - (void)lockSecs:(UISegmentedControl *)sg { [[NSUserDefaults standardUserDefaults] setInteger:[(NSNumber *)@[@0, @180, @300, @-1][sg.selectedSegmentIndex] integerValue] forKey:@"m26.lockSecs"]; [gUnlockedAt removeAllObjects]; }
 - (void)secs:(UISegmentedControl *)sg { [[NSUserDefaults standardUserDefaults] setInteger:[(NSNumber *)@[@30, @60, @90, @110][sg.selectedSegmentIndex] integerValue] forKey:@"m26.unsendSecs"]; }
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
@@ -3916,6 +4235,8 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     if (ip.section == 0) { [self.navigationController pushViewController:[[M26FramesVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES]; return; }
     NSString *k = FeatRows()[ip.section - 1][0];
     if (ip.row == 1 && [k isEqualToString:@"lock"]) [self.navigationController pushViewController:[[M26LockListVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+    if (ip.row == 1 && [k isEqualToString:@"save"]) { M26ListVC *l = [[M26ListVC alloc] initWithStyle:UITableViewStyleInsetGrouped]; l.kind = 0; [self.navigationController pushViewController:l animated:YES]; }
+    if (ip.row == 1 && [k isEqualToString:@"remind"]) { M26ListVC *l = [[M26ListVC alloc] initWithStyle:UITableViewStyleInsetGrouped]; l.kind = 1; [self.navigationController pushViewController:l animated:YES]; }
     if (ip.row == 1 && [k isEqualToString:@"sched"]) { SaveScheduled(@[]); [tv reloadSections:[NSIndexSet indexSetWithIndex:ip.section] withRowAnimation:UITableViewRowAnimationFade]; }
 }
 @end
@@ -4232,7 +4553,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.17.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -4328,6 +4649,10 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         MSHookMessageEx([UITextView class], @selector(setTextContainerInset:), (IMP)TVInset, (IMP *)&origTVInset);
         @try { HookThemes(); } @catch (__unused id ex) {}
         @try { HookDetailsTable(); } @catch (__unused id ex) {}
+        { Class CC = NSClassFromString(@"CKChatController"); SEL mm = NSSelectorFromString(@"_menuForChatItem:");
+          if (CC && class_getInstanceMethod(CC, mm)) MSHookMessageEx(CC, mm, (IMP)MsgMenu, (IMP *)&origMsgMenu);
+          Class AB = NSClassFromString(@"CKAggregateAcknowledgmentBalloonView"); SEL ac = NSSelectorFromString(@"configureForAggregateAcknowledgmentChatItem:");
+          if (AB && class_getInstanceMethod(AB, ac)) MSHookMessageEx(AB, ac, (IMP)AckCfg, (IMP *)&origAckCfg); }
         { Class TC = NSClassFromString(@"CKTranscriptCollectionViewController"); SEL wd = @selector(collectionView:willDisplayCell:forItemAtIndexPath:);
           if (TC && class_getInstanceMethod(TC, wd)) MSHookMessageEx(TC, wd, (IMP)WillDisplay, (IMP *)&origWillDisplay); }
         { SEL cm = @selector(collectionView:contextMenuConfigurationForItemAtIndexPath:point:);
