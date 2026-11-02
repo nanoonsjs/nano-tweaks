@@ -1,4 +1,5 @@
-// Messages26 0.18.1 - made by nano
+// Messages26 0.18.2 - made by nano
+// 0.18.2: Custom frames (any 3 emojis + color / match photo), Ignored Words for Spelling Fix, much richer 3D reactions
 // 0.18.1: 3D tapbacks (glossy emoji that turns) and 3D reaction bursts
 // 0.18.0: animations removed; Spelling Fix, Mood Detection, Reaction Effects (+sounds), Saved Messages, Message Reminders
 // 0.17.1: search + smart badge removed; Message Animations (pick a send and a receive style)
@@ -2751,18 +2752,21 @@ static void StyleBubblePill(UIViewController *vc) {
 #pragma mark - contact frames + Messages26 settings
 
 static NSString *FrameFor(NSString *key) { return key ? [[NSUserDefaults standardUserDefaults] stringForKey:[@"m26.frame." stringByAppendingString:key]] : nil; }
+static NSArray *FramedKeys(void);
+#define MAX_FRAMES 3
 static NSArray *FramedKeys(void) {
     NSMutableArray *a = [NSMutableArray array];
     for (NSString *k in [[NSUserDefaults standardUserDefaults] dictionaryRepresentation]) if ([k hasPrefix:@"m26.frame."]) [a addObject:[k substringFromIndex:10]];
     return a;
 }
-#define MAX_FRAMES 3
 static void SetFrame(NSString *key, NSString *name) {
     if (!key) return;
     if (name.length && ![name isEqualToString:@"None"]) [[NSUserDefaults standardUserDefaults] setObject:name forKey:[@"m26.frame." stringByAppendingString:key]];
     else [[NSUserDefaults standardUserDefaults] removeObjectForKey:[@"m26.frame." stringByAppendingString:key]];
 }
-static NSArray *FrameNames(void) { return @[@"None", @"Love", @"Bat", @"Christmas", @"Fire", @"Stars", @"Crown", @"Neon", @"Snow", @"Butterfly"]; }
+static NSArray *FrameNames(void) { return @[@"None", @"Love", @"Bat", @"Christmas", @"Fire", @"Stars", @"Crown", @"Neon", @"Snow", @"Butterfly", @"Custom"]; }
+static NSDictionary *CustomFrame(NSString *key) { return key ? [[NSUserDefaults standardUserDefaults] dictionaryForKey:[@"m26.fcustom." stringByAppendingString:key]] : nil; }
+static void SetCustomFrame(NSString *key, NSDictionary *d) { if (key) [[NSUserDefaults standardUserDefaults] setObject:d forKey:[@"m26.fcustom." stringByAppendingString:key]]; }
 static UIImage *EmojiImage(NSString *e, CGFloat sz) {
     UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(sz, sz)];
     return [r imageWithActions:^(__unused UIGraphicsImageRendererContext *c) {
@@ -2789,7 +2793,11 @@ static CAEmitterLayer *Emitter(NSString *emoji, CGPoint pos, CGSize size, CGFloa
     return em;
 }
 // A frame around a round photo of diameter d (the view is d + 2*pad, centered on the photo)
-static UIView *MakeFrame(NSString *name, CGFloat d) {
+static UIColor *HexColor(NSString *h);
+static NSString *ColorHex(UIColor *c);
+static UIView *MakeFrameX(NSString *name, CGFloat d, NSDictionary *custom, UIColor *match);
+static UIView *MakeFrame(NSString *name, CGFloat d) { return MakeFrameX(name, d, nil, nil); }
+static UIView *MakeFrameX(NSString *name, CGFloat d, NSDictionary *custom, UIColor *match) {
     CGFloat pad = MAX(10, d * 0.22), S = d + pad * 2, R = d / 2 + MAX(2, d * 0.04), lw = MAX(2.5, d * 0.06);
     CGPoint c = CGPointMake(S / 2, S / 2);
     UIView *v = [[UIView alloc] initWithFrame:CGRectMake(0, 0, S, S)]; v.userInteractionEnabled = NO;
@@ -2803,6 +2811,12 @@ static UIView *MakeFrame(NSString *name, CGFloat d) {
     else if ([name isEqualToString:@"Stars"] || [name isEqualToString:@"Crown"]) { cols = @[(id)[UIColor colorWithRed:1 green:0.86 blue:0.4 alpha:1].CGColor, (id)[UIColor colorWithRed:0.75 green:0.55 blue:0.1 alpha:1].CGColor, (id)[UIColor colorWithRed:1 green:0.95 blue:0.7 alpha:1].CGColor, (id)[UIColor colorWithRed:1 green:0.86 blue:0.4 alpha:1].CGColor]; spin = YES; spinT = 5; }
     else if ([name isEqualToString:@"Neon"]) { cols = @[(id)UIColor.systemPinkColor.CGColor, (id)UIColor.systemPurpleColor.CGColor, (id)UIColor.systemBlueColor.CGColor, (id)UIColor.systemTealColor.CGColor, (id)UIColor.systemGreenColor.CGColor, (id)UIColor.systemYellowColor.CGColor, (id)UIColor.systemPinkColor.CGColor]; spin = YES; spinT = 3; }
     else if ([name isEqualToString:@"Snow"]) { cols = @[(id)[UIColor colorWithRed:0.75 green:0.9 blue:1 alpha:1].CGColor, (id)UIColor.whiteColor.CGColor, (id)[UIColor colorWithRed:0.5 green:0.75 blue:1 alpha:1].CGColor, (id)[UIColor colorWithRed:0.75 green:0.9 blue:1 alpha:1].CGColor]; spin = YES; spinT = 9; }
+    else if ([name isEqualToString:@"Custom"]) {
+        UIColor *base = [custom[@"match"] boolValue] ? (match ?: [UIColor colorWithRed:0.55 green:0.65 blue:0.95 alpha:1]) : HexColor(custom[@"hex"] ?: @"FF4F8B");
+        CGFloat h0, s0, b0, a0; [base getHue:&h0 saturation:&s0 brightness:&b0 alpha:&a0];
+        UIColor *lt = [UIColor colorWithHue:h0 saturation:s0 * 0.45 brightness:MIN(1, b0 + 0.3) alpha:1], *dk = [UIColor colorWithHue:h0 saturation:MIN(1, s0 * 1.1) brightness:b0 * 0.6 alpha:1];
+        cols = @[(id)base.CGColor, (id)lt.CGColor, (id)base.CGColor, (id)dk.CGColor, (id)base.CGColor]; spin = YES; spinT = 5;
+    }
     else if ([name isEqualToString:@"Butterfly"]) { cols = @[(id)[UIColor colorWithRed:0.55 green:0.75 blue:1 alpha:1].CGColor, (id)[UIColor colorWithRed:0.85 green:0.6 blue:1 alpha:1].CGColor, (id)[UIColor colorWithRed:0.5 green:0.95 blue:0.9 alpha:1].CGColor, (id)[UIColor colorWithRed:0.55 green:0.75 blue:1 alpha:1].CGColor]; spin = YES; spinT = 7; }
     if (cols) {
         CAGradientLayer *g = [CAGradientLayer layer]; g.type = kCAGradientLayerConic; g.frame = v.bounds; g.colors = cols;
@@ -2843,6 +2857,14 @@ static UIView *MakeFrame(NSString *name, CGFloat d) {
     } else if ([name isEqualToString:@"Snow"]) {
         CAEmitterLayer *em = Emitter(@"❄️", CGPointMake(c.x, 0), CGSizeMake(S, 1), 2.5, d * 0.04, d * 0.2, 0.1 * d / 60, 2.6); em.emitterShape = kCAEmitterLayerLine; em.frame = v.bounds; [v.layer addSublayer:em];
         CALayer *sm = EmojiLayer(@"☃️", e * 0.8, at(135, R + 1)); [v.layer addSublayer:sm];
+    } else if ([name isEqualToString:@"Custom"]) {
+        NSArray *es = custom[@"e"]; NSArray *angs = @[@(-50), @(50), @(180)]; NSArray *szs = @[@1.0, @0.75, @0.7];
+        for (NSUInteger i = 0; i < MIN(3, es.count); i++) {
+            NSString *em = es[i]; if (![em isKindOfClass:[NSString class]] || !em.length) continue;
+            CALayer *l = EmojiLayer(em, e * [szs[i] doubleValue], at([angs[i] doubleValue], R + 2)); [v.layer addSublayer:l];
+            Anim(l, @"position.y", @(l.position.y), @(l.position.y - d * 0.05), 1.1 + i * 0.3, YES, i * 0.4);
+            Anim(l, @"transform.rotation.z", @(-0.18), @0.18, 1.5 + i * 0.25, YES, i * 0.3);
+        }
     } else if ([name isEqualToString:@"Butterfly"]) {
         for (int i = 0; i < 2; i++) { CALayer *b = EmojiLayer(@"🦋", e * (i ? 0.6 : 0.85), at(i ? 150 : -40, R + 2)); [v.layer addSublayer:b]; Anim(b, @"transform.scale.x", @1, @0.4, 0.25 + i * 0.05, YES, i * 0.1); Anim(b, @"position", [NSValue valueWithCGPoint:b.position], [NSValue valueWithCGPoint:CGPointMake(b.position.x + (i ? -1 : 1) * d * 0.06, b.position.y - d * 0.07)], 1.4 + i * 0.4, YES, 0); }
     }
@@ -2871,14 +2893,42 @@ static NSString *KeyForView(UIView *v) {
     return nil;
 }
 static char kFrameKey;
-static void PutFrame(UIView *av, NSString *name) {
+// the main color of a contact photo (for "match photo" frames)
+static UIColor *PhotoColor(UIView *av, UIView *skip) {
+    BOOL h = skip.hidden; skip.hidden = YES;
+    unsigned char px[4 * 8 * 8] = {0};
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(px, 8, 8, 8, 32, cs, kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(cs);
+    if (!ctx) { skip.hidden = h; return nil; }
+    CGFloat dd = MIN(av.bounds.size.width, av.bounds.size.height);
+    CGContextScaleCTM(ctx, 8 / dd, 8 / dd);
+    [av.layer renderInContext:ctx];
+    CGContextRelease(ctx);
+    skip.hidden = h;
+    double r = 0, g = 0, b = 0, n = 0;
+    for (int i = 0; i < 64; i++) { double a = px[i * 4 + 3]; if (a < 40) continue; r += px[i * 4]; g += px[i * 4 + 1]; b += px[i * 4 + 2]; n += a / 255.0; }
+    if (n < 1) return nil;
+    UIColor *c = [UIColor colorWithRed:r / n / 255 green:g / n / 255 blue:b / n / 255 alpha:1];
+    CGFloat hh, ss, bb, aa; [c getHue:&hh saturation:&ss brightness:&bb alpha:&aa];
+    return [UIColor colorWithHue:hh saturation:MIN(1, ss * 1.6 + 0.15) brightness:MAX(0.7, bb) alpha:1];
+}
+static void PutFrame(UIView *av, NSString *name, NSString *key) {
     UIView *fv = objc_getAssociatedObject(av, &kFrameKey);
     CGFloat w = av.bounds.size.width, h = av.bounds.size.height, dd = MIN(w, h);
-    NSString *stamp = name ? [NSString stringWithFormat:@"%@|%.0f", name, dd] : nil;
+    NSDictionary *cu = [name isEqualToString:@"Custom"] ? CustomFrame(key) : nil;
+    UIColor *mc = nil;
+    if ([cu[@"match"] boolValue]) {
+        mc = objc_getAssociatedObject(av, "m26pc");
+        NSNumber *at = objc_getAssociatedObject(av, "m26pct");
+        if (!mc || [NSDate date].timeIntervalSince1970 - at.doubleValue > 4) { mc = PhotoColor(av, fv) ?: mc; objc_setAssociatedObject(av, "m26pc", mc, OBJC_ASSOCIATION_RETAIN_NONATOMIC); objc_setAssociatedObject(av, "m26pct", @([NSDate date].timeIntervalSince1970), OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    }
+    CGFloat mr = 0, mg = 0, mb = 0, ma = 0; [mc getRed:&mr green:&mg blue:&mb alpha:&ma];
+    NSString *stamp = name ? [NSString stringWithFormat:@"%@|%.0f|%@|%.1f%.1f%.1f", name, dd, cu, mr, mg, mb] : nil;
     if (!stamp) { [fv removeFromSuperview]; objc_setAssociatedObject(av, &kFrameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); return; }
     if (![objc_getAssociatedObject(fv, "st") isEqual:stamp]) {
         [fv removeFromSuperview];
-        fv = MakeFrame(name, dd); objc_setAssociatedObject(fv, "st", stamp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        fv = MakeFrameX(name, dd, cu, mc); objc_setAssociatedObject(fv, "st", stamp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(av, &kFrameKey, fv, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (fv.superview != av) [av addSubview:fv];
@@ -2901,18 +2951,107 @@ static void StyleFrames(UIWindow *w) {
                 NSString *k = KeyForView(v); if (k) keyed++;
                 LockPreview(v, k);
                 NSString *fn = FrameFor(k); if (fn) framed++;
-                PutFrame(v, fn);
+                PutFrame(v, fn, k);
                 continue;   // outermost avatar only
             }
             [st addObjectsFromArray:v.subviews];
         }
     }
     UIView *av = gAvatarV;
-    if (av) PutFrame(av, nil);   // frames only on the list, never inside a chat
+    if (av) PutFrame(av, nil, nil);   // frames only on the list, never inside a chat
     gFrameDebug = [NSString stringWithFormat:@"frames: avatars=%d keyed=%d framed=%d", found, keyed, framed];
 }
 
 // ---- Settings (gear on the list) -> Contact Frames ----
+
+// ---- custom frame editor: any 3 emojis + a color (or match their photo) ----
+@interface M26CustomFrameVC : UIViewController <UITextFieldDelegate>
+@property (nonatomic, copy) NSString *key, *name;
+@property (nonatomic, copy) void (^onSave)(void);
+@end
+@implementation M26CustomFrameVC { NSMutableArray *_em; NSInteger _slot; NSArray *_slots; UIView *_photo; UISegmentedControl *_mode; UIColorWell *_well; UITextField *_typer; UIScrollView *_sc; }
+static NSArray *QuickEmojis(void) { return @[@"❤️", @"💖", @"💕", @"🔥", @"✨", @"⭐️", @"🌙", @"👑", @"🦋", @"🌸", @"🌹", @"🍀", @"🎀", @"💎", @"🦇", @"🎃", @"👻", @"💀", @"🎄", @"🎅", @"❄️", @"☃️", @"🎁", @"🎉", @"🥳", @"😈", @"😇", @"😍", @"🥺", @"😎", @"🤍", @"🖤", @"💜", @"💙", @"💚", @"💛", @"🧡", @"🐼", @"🐻", @"🐱", @"🐶", @"🦄", @"🌈", @"☀️", @"⚡️", @"💫", @"🍓", @"🍒", @"🎮", @"⚽️", @"🏀", @"🎵"]; }
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Custom Frame";
+    self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
+    NSDictionary *cur = CustomFrame(self.key);
+    _em = [cur[@"e"] mutableCopy] ?: [@[@"❤️", @"✨", @"🦋"] mutableCopy];
+    while (_em.count < 3) [_em addObject:@""];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Use" style:UIBarButtonItemStyleDone target:self action:@selector(save)];
+    _sc = [[UIScrollView alloc] initWithFrame:self.view.bounds]; _sc.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; _sc.alwaysBounceVertical = YES; [self.view addSubview:_sc];
+    CGFloat W = self.view.bounds.size.width;
+    _photo = [[UIView alloc] initWithFrame:CGRectMake((W - 96) / 2, 34, 96, 96)]; _photo.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+    _photo.layer.cornerRadius = 48;
+    CAGradientLayer *pg = [CAGradientLayer layer]; pg.frame = _photo.bounds; pg.cornerRadius = 48; pg.colors = @[(id)[UIColor colorWithRed:0.62 green:0.78 blue:0.95 alpha:1].CGColor, (id)[UIColor colorWithRed:0.42 green:0.6 blue:0.86 alpha:1].CGColor]; [_photo.layer addSublayer:pg];
+    UILabel *ini = [[UILabel alloc] initWithFrame:_photo.bounds]; ini.text = [[self.name substringToIndex:MIN(1, self.name.length)] uppercaseString]; ini.textAlignment = NSTextAlignmentCenter; ini.font = [UIFont systemFontOfSize:40 weight:UIFontWeightBold]; ini.textColor = UIColor.whiteColor; [_photo addSubview:ini];
+    [_sc addSubview:_photo];
+    // three emoji slots
+    NSMutableArray *slots = [NSMutableArray array]; CGFloat sw = 64, gap = 18, x0 = (W - 3 * sw - 2 * gap) / 2;
+    for (int i = 0; i < 3; i++) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom]; b.tag = i; b.frame = CGRectMake(x0 + i * (sw + gap), 176, sw, sw);
+        b.titleLabel.font = [UIFont systemFontOfSize:34]; b.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor; b.layer.cornerRadius = 20; b.layer.cornerCurve = kCACornerCurveContinuous;
+        [b addTarget:self action:@selector(slot:) forControlEvents:UIControlEventTouchUpInside];
+        [_sc addSubview:b]; [slots addObject:b];
+    }
+    _slots = slots;
+    UIButton *kb = [UIButton buttonWithType:UIButtonTypeSystem]; kb.frame = CGRectMake(20, 248, W - 40, 30);
+    [kb setTitle:@"Type any emoji ⌨︎" forState:UIControlStateNormal]; [kb addTarget:self action:@selector(type) forControlEvents:UIControlEventTouchUpInside]; [_sc addSubview:kb];
+    _typer = [[UITextField alloc] initWithFrame:CGRectMake(-100, -100, 10, 10)]; _typer.delegate = self; [_typer addTarget:self action:@selector(typed) forControlEvents:UIControlEventEditingChanged]; [_sc addSubview:_typer];
+    // quick emoji grid
+    NSArray *qs = QuickEmojis(); CGFloat cell = (W - 32) / 8, y = 288;
+    for (NSUInteger i = 0; i < qs.count; i++) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom]; b.frame = CGRectMake(16 + (i % 8) * cell, y + (i / 8) * cell, cell, cell);
+        [b setTitle:qs[i] forState:UIControlStateNormal]; b.titleLabel.font = [UIFont systemFontOfSize:28];
+        [b addTarget:self action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside]; [_sc addSubview:b];
+    }
+    y += ((qs.count + 7) / 8) * cell + 16;
+    // color
+    _mode = [[UISegmentedControl alloc] initWithItems:@[@"Pick Color", @"Match Their Photo"]]; _mode.frame = CGRectMake(20, y, W - 40, 34);
+    _mode.selectedSegmentIndex = [cur[@"match"] boolValue] ? 1 : 0; [_mode addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged]; [_sc addSubview:_mode];
+    _well = [[UIColorWell alloc] initWithFrame:CGRectMake((W - 44) / 2, y + 50, 44, 44)]; _well.supportsAlpha = NO; _well.selectedColor = HexColor(cur[@"hex"] ?: @"FF4F8B");
+    [_well addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged]; [_sc addSubview:_well];
+    UILabel *note = [[UILabel alloc] initWithFrame:CGRectMake(20, y + 50, W - 40, 44)]; note.tag = 77; note.text = @"The ring takes the main color of their contact photo."; note.textColor = UIColor.secondaryLabelColor; note.font = [UIFont systemFontOfSize:14]; note.textAlignment = NSTextAlignmentCenter; note.numberOfLines = 2; [_sc addSubview:note];
+    _sc.contentSize = CGSizeMake(W, y + 120);
+    _slot = 0;
+    [self refresh];
+}
+- (NSDictionary *)data { return @{@"e": _em, @"hex": ColorHex(_well.selectedColor ?: UIColor.systemPinkColor), @"match": @(_mode.selectedSegmentIndex == 1)}; }
+- (void)refresh {
+    for (UIButton *b in _slots) { [b setTitle:_em[b.tag] forState:UIControlStateNormal]; b.layer.borderWidth = b.tag == _slot ? 2.5 : 0; b.layer.borderColor = UIColor.systemBlueColor.CGColor; }
+    _well.hidden = _mode.selectedSegmentIndex == 1; [_sc viewWithTag:77].hidden = !_well.hidden;
+    for (UIView *x in _photo.subviews) if (x.tag == 99) [x removeFromSuperview];
+    UIView *fv = MakeFrameX(@"Custom", 96, [self data], nil); fv.tag = 99; fv.center = CGPointMake(48, 48); [_photo addSubview:fv];
+}
+- (void)slot:(UIButton *)b { _slot = b.tag; [[[UISelectionFeedbackGenerator alloc] init] selectionChanged]; [self refresh]; }
+- (void)put:(NSString *)e {
+    _em[_slot] = e; _slot = (_slot + 1) % 3;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    [self refresh];
+}
+- (void)pick:(UIButton *)b { [self put:[b titleForState:UIControlStateNormal]]; }
+- (void)type { _typer.text = @""; [_typer becomeFirstResponder]; }
+- (void)typed {
+    NSString *t = _typer.text; if (!t.length) return;
+    __block NSString *last = nil;
+    [t enumerateSubstringsInRange:NSMakeRange(0, t.length) options:NSStringEnumerationByComposedCharacterSequences usingBlock:^(NSString *sub, NSRange r, NSRange er, BOOL *stop) { last = sub; }];
+    if (last) [self put:last];
+    _typer.text = @"";
+}
+- (void)save {
+    NSArray *taken = FramedKeys();
+    if (![taken containsObject:self.key] && taken.count >= MAX_FRAMES) {
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Up to 3 Frames" message:@"Frames can be on 3 people at once. Set another person's frame to None first." preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:ac animated:YES completion:nil]; return;
+    }
+    SetCustomFrame(self.key, [self data]);
+    SetFrame(self.key, @"Custom");
+    [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
+    if (self.onSave) self.onSave();
+    [self.navigationController popViewControllerAnimated:YES];
+}
+@end
 @interface M26FramePickVC : UICollectionViewController
 @property (nonatomic, copy) NSString *key, *name;
 @end
@@ -2936,7 +3075,8 @@ static void StyleFrames(UIWindow *w) {
     [photo.layer addSublayer:pg];
     UILabel *ini = [[UILabel alloc] initWithFrame:photo.bounds]; ini.text = [[self.name substringToIndex:MIN(1, self.name.length)] uppercaseString]; ini.textAlignment = NSTextAlignmentCenter; ini.font = [UIFont systemFontOfSize:28 weight:UIFontWeightBold]; ini.textColor = UIColor.whiteColor; [photo addSubview:ini];
     [c.contentView addSubview:photo];
-    if (![fn isEqualToString:@"None"]) { UIView *fv = MakeFrame(fn, d); fv.center = CGPointMake(d / 2, d / 2); [photo addSubview:fv]; }
+    if ([fn isEqualToString:@"Custom"] && !CustomFrame(self.key)) { UIImageView *pl = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"plus.circle.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:26 weight:UIImageSymbolWeightBold]]]; pl.tintColor = UIColor.whiteColor; pl.frame = photo.bounds; pl.contentMode = UIViewContentModeCenter; [ini removeFromSuperview]; [photo addSubview:pl]; }
+    else if (![fn isEqualToString:@"None"]) { UIView *fv = MakeFrameX(fn, d, CustomFrame(self.key), nil); fv.center = CGPointMake(d / 2, d / 2); [photo addSubview:fv]; }
     UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(0, 18 + d + 14, cw, 20)]; l.text = fn; l.textAlignment = NSTextAlignmentCenter; l.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]; l.textColor = UIColor.labelColor; [c.contentView addSubview:l];
     BOOL on = [(FrameFor(self.key) ?: @"None") isEqualToString:fn];
     c.contentView.backgroundColor = [UIColor colorWithWhite:self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleLight ? 0 : 1 alpha:on ? 0.14 : 0.05];
@@ -2955,6 +3095,7 @@ static void StyleFrames(UIWindow *w) {
         return;
     }
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    if ([fn isEqualToString:@"Custom"]) { M26CustomFrameVC *ed = [M26CustomFrameVC new]; ed.key = self.key; ed.name = self.name; ed.onSave = ^{ [cv reloadData]; }; [self.navigationController pushViewController:ed animated:YES]; return; }
     SetFrame(self.key, fn);
     [cv reloadData];
 }
@@ -3974,6 +4115,37 @@ static id MsgMenu(id self, SEL _cmd, id item) {
 // ======== Spelling Fix (on device) ========
 #define SPELL_TAG 0x4D32365F
 static NSString *gSpellFor; static NSString *gSpellFixed; static NSInteger gSpellCount;
+static NSArray *IgnoredWords(void) {
+    NSArray *a = [[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.ignoreWords"];
+    return a ?: @[@"rn", @"lol", @"lmao", @"idk", @"tbh", @"ngl", @"fr", @"wyd", @"hbu", @"wbu", @"omg", @"btw", @"imo", @"smh", @"bruh", @"ight", @"gonna", @"wanna", @"gotta", @"ily", @"bae", @"nvm", @"ikr", @"tho", @"finna", @"lowkey", @"highkey", @"deadass", @"bet", @"mf", @"wtf", @"stfu", @"brb", @"ttyl", @"ok", @"okk", @"yk", @"ong", @"istg", @"pls", @"plz", @"u", @"ur", @"r", @"ya", @"yea", @"yeah"];
+}
+@interface M26WordsVC : UITableViewController
+@property (nonatomic, strong) NSMutableArray *words;
+@end
+@implementation M26WordsVC
+- (void)viewDidLoad {
+    [super viewDidLoad]; self.title = @"Ignored Words";
+    self.words = [IgnoredWords() mutableCopy];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(add)];
+}
+- (void)store { [[NSUserDefaults standardUserDefaults] setObject:self.words forKey:@"m26.ignoreWords"]; gSpellFor = nil; }
+- (void)add {
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Add Word" message:@"Spelling Fix will never flag it." preferredStyle:UIAlertControllerStyleAlert];
+    [ac addTextFieldWithConfigurationHandler:^(UITextField *tf) { tf.placeholder = @"e.g. rn"; tf.autocapitalizationType = UITextAutocapitalizationTypeNone; tf.autocorrectionType = UITextAutocorrectionTypeNo; }];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Add" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
+        NSString *w = [[ac.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] lowercaseString];
+        if (w.length && ![self.words containsObject:w]) { [self.words insertObject:w atIndex:0]; [self store]; [self.tableView reloadData]; }
+    }]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return self.words.count; }
+- (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s { return @"Slang and short words here never trigger the Fix typos chip. Tap + to add your own, swipe to remove."; }
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip { UITableViewCell *c = [tv dequeueReusableCellWithIdentifier:@"w"] ?: [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"w"]; c.textLabel.text = self.words[ip.row]; return c; }
+- (BOOL)tableView:(UITableView *)tv canEditRowAtIndexPath:(NSIndexPath *)ip { return YES; }
+- (void)tableView:(UITableView *)tv commitEditingStyle:(UITableViewCellEditingStyle)st forRowAtIndexPath:(NSIndexPath *)ip { [self.words removeObjectAtIndex:ip.row]; [self store]; [tv deleteRowsAtIndexPaths:@[ip] withRowAnimation:UITableViewRowAnimationAutomatic]; }
+@end
+
 @interface M26Spell : NSObject
 + (instancetype)shared;
 @end
@@ -4008,7 +4180,8 @@ static void SpellFix(UIWindow *w) {
             NSRange r = [ck rangeOfMisspelledWordInString:text range:NSMakeRange(0, limit) startingAt:start wrap:NO language:lang];
             if (r.location == NSNotFound) break;
             NSArray *g = [ck guessesForWordRange:r inString:text language:lang];
-            if (g.count) { [fixes addObject:@[[NSValue valueWithRange:r], g.firstObject]]; n++; }
+            NSString *word = [[text substringWithRange:r] lowercaseString];
+            if (g.count && ![IgnoredWords() containsObject:word]) { [fixes addObject:@[[NSValue valueWithRange:r], g.firstObject]]; n++; }
             start = NSMaxRange(r);
         }
         for (NSArray *f in [fixes reverseObjectEnumerator]) [out replaceCharactersInRange:[f[0] rangeValue] withString:f[1]];
@@ -4079,33 +4252,82 @@ static NSMutableDictionary *gAckSeen; static NSTimeInterval gAckReadyAt; static 
 static NSString *AckEmoji(long long t) {
     switch (t % 1000) { case 0: return @"❤️"; case 1: return @"👍"; case 2: return @"👎"; case 3: return @"😂"; case 4: return @"‼️"; case 5: return @"❓"; default: return @"✨"; }
 }
+static UIColor *AckTint(NSString *e) {
+    if ([e isEqualToString:@"❤️"]) return [UIColor colorWithRed:1 green:0.25 blue:0.45 alpha:1];
+    if ([e isEqualToString:@"😂"]) return [UIColor colorWithRed:1 green:0.82 blue:0.2 alpha:1];
+    if ([e isEqualToString:@"👍"] || [e isEqualToString:@"👎"]) return [UIColor colorWithRed:1 green:0.75 blue:0.35 alpha:1];
+    if ([e isEqualToString:@"‼️"]) return [UIColor colorWithRed:1 green:0.3 blue:0.25 alpha:1];
+    if ([e isEqualToString:@"❓"]) return [UIColor colorWithRed:0.45 green:0.7 blue:1 alpha:1];
+    return UIColor.whiteColor;
+}
+// a glossy 3D emoji: the emoji, a moving shine masked to its shape, and a soft shadow
+static CALayer *Emoji3D(NSString *emoji, CGFloat sz) {
+    UIImage *im = EmojiImage(emoji, 180);
+    CALayer *l = [CALayer layer]; l.bounds = CGRectMake(0, 0, sz, sz); l.contents = (id)im.CGImage; l.contentsGravity = kCAGravityResizeAspect;
+    l.shadowColor = UIColor.blackColor.CGColor; l.shadowOpacity = 0.5; l.shadowRadius = sz * 0.12; l.shadowOffset = CGSizeMake(0, sz * 0.14);
+    CAGradientLayer *sh = [CAGradientLayer layer]; sh.frame = CGRectMake(-sz, 0, sz * 3, sz);
+    sh.colors = @[(id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.75].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+    sh.startPoint = CGPointMake(0, 0.3); sh.endPoint = CGPointMake(1, 0.7); sh.locations = @[@0.4, @0.5, @0.6];
+    CALayer *holder = [CALayer layer]; holder.frame = l.bounds;
+    CALayer *mask = [CALayer layer]; mask.frame = l.bounds; mask.contents = (id)im.CGImage; mask.contentsGravity = kCAGravityResizeAspect; holder.mask = mask;
+    [holder addSublayer:sh]; [l addSublayer:holder];
+    CABasicAnimation *mv = [CABasicAnimation animationWithKeyPath:@"position.x"]; mv.fromValue = @(-sz * 0.6); mv.toValue = @(sz * 1.6); mv.duration = 1.4; mv.repeatCount = HUGE_VALF; mv.removedOnCompletion = NO;
+    mv.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [sh addAnimation:mv forKey:@"shine"];
+    return l;
+}
 static void ReactBurst(UIView *v, NSString *emoji) {
     UIWindow *w = v.window; if (!w) return;
     CGRect r = [v convertRect:v.bounds toView:w];
     CGPoint c = CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r));
     UIView *host = [[UIView alloc] initWithFrame:w.bounds]; host.userInteractionEnabled = NO; [w addSubview:host];
-    CATransform3D persp = CATransform3DIdentity; persp.m34 = -1.0 / 420; host.layer.sublayerTransform = persp;
-    for (int i = 0; i < 9; i++) {
-        CALayer *l = EmojiLayer(emoji, 28 + arc4random_uniform(16), c); [host.layer addSublayer:l];
-        l.contents = (id)EmojiImage(emoji, 160).CGImage;
-        l.shadowColor = UIColor.blackColor.CGColor; l.shadowOpacity = 0.45; l.shadowRadius = 6; l.shadowOffset = CGSizeMake(0, 6);
-        CABasicAnimation *ry = [CABasicAnimation animationWithKeyPath:@"transform.rotation.y"]; ry.fromValue = @0; ry.toValue = @(M_PI * 2 * (i % 2 ? 1 : -1)); ry.duration = 1.1; ry.beginTime = CACurrentMediaTime() + i * 0.03; ry.fillMode = kCAFillModeBackwards;
-        [l addAnimation:ry forKey:@"ry"];
-        CGFloat ang = -M_PI_2 + ((double)arc4random_uniform(1000) / 1000.0 - 0.5) * 1.8, dist = 60 + arc4random_uniform(90);
-        CGPoint to = CGPointMake(c.x + cos(ang) * dist, c.y + sin(ang) * dist - 40);
-        CAAnimationGroup *g = [CAAnimationGroup animation];
-        CABasicAnimation *mv = [CABasicAnimation animationWithKeyPath:@"position"]; mv.toValue = [NSValue valueWithCGPoint:to]; mv.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2 :0.8 :0.3 :1];
-        CAKeyframeAnimation *sc = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; sc.values = @[@0.2, @1.3, @1]; sc.keyTimes = @[@0, @0.3, @1];
-        CABasicAnimation *op = [CABasicAnimation animationWithKeyPath:@"opacity"]; op.fromValue = @1; op.toValue = @0; op.beginTime = 0.7; op.duration = 0.6;
-        CABasicAnimation *rt = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"]; rt.toValue = @(((double)arc4random_uniform(100) / 100.0 - 0.5) * 1.6);
-        g.animations = @[mv, sc, op, rt]; g.duration = 1.3; g.fillMode = kCAFillModeForwards; g.removedOnCompletion = NO; g.beginTime = CACurrentMediaTime() + i * 0.03;
-        l.opacity = 1; [l addAnimation:g forKey:@"b"];
+    CATransform3D persp = CATransform3DIdentity; persp.m34 = -1.0 / 380; host.layer.sublayerTransform = persp;
+    UIColor *tint = AckTint(emoji);
+    CFTimeInterval t0 = CACurrentMediaTime();
+    // shockwave rings
+    for (int k = 0; k < 2; k++) {
+        CAShapeLayer *ring = [CAShapeLayer layer]; ring.frame = host.bounds; ring.fillColor = UIColor.clearColor.CGColor; ring.strokeColor = tint.CGColor; ring.lineWidth = 3;
+        ring.path = [UIBezierPath bezierPathWithArcCenter:c radius:22 startAngle:0 endAngle:M_PI * 2 clockwise:YES].CGPath;
+        ring.shadowColor = tint.CGColor; ring.shadowOpacity = 1; ring.shadowRadius = 8; ring.shadowOffset = CGSizeZero;
+        [host.layer addSublayer:ring];
+        CABasicAnimation *pa = [CABasicAnimation animationWithKeyPath:@"path"]; pa.toValue = (id)[UIBezierPath bezierPathWithArcCenter:c radius:110 + k * 40 startAngle:0 endAngle:M_PI * 2 clockwise:YES].CGPath;
+        CABasicAnimation *op = [CABasicAnimation animationWithKeyPath:@"opacity"]; op.fromValue = @0.9; op.toValue = @0;
+        CABasicAnimation *lw = [CABasicAnimation animationWithKeyPath:@"lineWidth"]; lw.toValue = @0.5;
+        CAAnimationGroup *g = [CAAnimationGroup animation]; g.animations = @[pa, op, lw]; g.duration = 0.75; g.beginTime = t0 + k * 0.12; g.fillMode = kCAFillModeBoth; g.removedOnCompletion = NO;
+        g.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.1 :0.8 :0.3 :1];
+        ring.opacity = 0; [ring addAnimation:g forKey:@"wave"];
     }
-    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    // sparkles
+    CAEmitterLayer *sp = [CAEmitterLayer layer]; sp.frame = host.bounds; sp.emitterPosition = c; sp.emitterShape = kCAEmitterLayerPoint;
+    CAEmitterCell *sc = [CAEmitterCell emitterCell]; sc.contents = (id)EmojiImage(@"✨", 48).CGImage; sc.birthRate = 60; sc.lifetime = 0.9; sc.velocity = 170; sc.velocityRange = 90; sc.emissionRange = M_PI * 2; sc.scale = 0.28; sc.scaleRange = 0.15; sc.alphaSpeed = -1.1; sc.spinRange = 4;
+    sp.emitterCells = @[sc]; [host.layer addSublayer:sp];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ sp.birthRate = 0; });
+    // the 3D emojis: fly out of the screen toward you, tumbling, then float up and fade
+    for (int i = 0; i < 10; i++) {
+        CGFloat sz = 30 + arc4random_uniform(22);
+        CALayer *l = Emoji3D(emoji, sz); l.position = c; [host.layer addSublayer:l];
+        CGFloat ang = -M_PI_2 + ((double)arc4random_uniform(1000) / 1000.0 - 0.5) * 2.4, dist = 70 + arc4random_uniform(110);
+        CGPoint mid = CGPointMake(c.x + cos(ang) * dist, c.y + sin(ang) * dist);
+        CGPoint end = CGPointMake(mid.x + ((double)arc4random_uniform(60) - 30), mid.y - 90 - arc4random_uniform(80));
+        CAKeyframeAnimation *path = [CAKeyframeAnimation animationWithKeyPath:@"position"];
+        UIBezierPath *bp = [UIBezierPath bezierPath]; [bp moveToPoint:c]; [bp addQuadCurveToPoint:end controlPoint:CGPointMake(mid.x, mid.y - 20)];
+        path.path = bp.CGPath; path.calculationMode = kCAAnimationPaced;
+        CAKeyframeAnimation *z = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.z"]; z.values = @[@-120, @(140 + arc4random_uniform(80)), @40]; z.keyTimes = @[@0, @0.35, @1];
+        CAKeyframeAnimation *ry = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.y"]; ry.values = @[@0, @(M_PI * (i % 2 ? 2.2 : -2.2)), @(M_PI * (i % 2 ? 2 : -2))];
+        CAKeyframeAnimation *rx = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.x"]; rx.values = @[@0.6, @-0.3, @0];
+        CAKeyframeAnimation *s = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; s.values = @[@0.1, @1.25, @1]; s.keyTimes = @[@0, @0.3, @1];
+        CABasicAnimation *op = [CABasicAnimation animationWithKeyPath:@"opacity"]; op.fromValue = @1; op.toValue = @0; op.beginTime = 1.05; op.duration = 0.45;
+        CAAnimationGroup *g = [CAAnimationGroup animation]; g.animations = @[path, z, ry, rx, s, op]; g.duration = 1.5; g.beginTime = t0 + i * 0.035;
+        g.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.15 :0.85 :0.35 :1]; g.fillMode = kCAFillModeBoth; g.removedOnCompletion = NO;
+        l.opacity = 0; [l addAnimation:g forKey:@"b"];
+    }
+    // the bubble itself jumps
+    CAKeyframeAnimation *bj = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; bj.values = @[@1, @1.25, @0.92, @1.05, @1]; bj.duration = 0.55; [v.layer addAnimation:bj forKey:@"jump"];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy] impactOccurred];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred]; });
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"m26.reactSound"]) AudioServicesPlaySystemSound(1407);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [host removeFromSuperview]; });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [host removeFromSuperview]; });
 }
-static void (*origAckCfg)(id, SEL, id);
 // the tapback on the bubble: Apple's flat glyph becomes a glossy 3D emoji that gently turns
 static void Ack3D(UIView *b, id item) {
     CALayer *mine = nil; for (CALayer *x in b.layer.sublayers) if ([x.name isEqualToString:@"m26ack3d"]) mine = x;
@@ -4120,16 +4342,26 @@ static void Ack3D(UIView *b, id item) {
     CGRect gr = [glyph convertRect:glyph.bounds toView:b];
     CGFloat d = MAX(gr.size.width, gr.size.height) * 1.25;
     NSString *em = AckEmoji(tp);
-    if (!mine) {
-        mine = [CALayer layer]; mine.name = @"m26ack3d"; mine.contentsGravity = kCAGravityResizeAspect;
-        mine.shadowColor = UIColor.blackColor.CGColor; mine.shadowOpacity = 0.4; mine.shadowRadius = 2.5; mine.shadowOffset = CGSizeMake(0, 2);
+    if (![objc_getAssociatedObject(b, "m26ackem") isEqual:em] || ![objc_getAssociatedObject(b, "m26acksz") isEqual:@((int)d)]) {
+        BOOL was = mine != nil;
+        [mine removeFromSuperlayer];
+        objc_setAssociatedObject(b, "m26ackem", em, OBJC_ASSOCIATION_RETAIN_NONATOMIC); objc_setAssociatedObject(b, "m26acksz", @((int)d), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        mine = Emoji3D(em, d); mine.name = @"m26ack3d";
+        mine.shadowOpacity = 0.45; mine.shadowRadius = 2.5; mine.shadowOffset = CGSizeMake(0, 2.5);
         [b.layer addSublayer:mine];
-        CATransform3D p = CATransform3DIdentity; p.m34 = -1.0 / 120; b.layer.sublayerTransform = p;
-        CAKeyframeAnimation *wob = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.y"]; wob.values = @[@0, @0.55, @0, @-0.55, @0]; wob.duration = 3.2; wob.repeatCount = HUGE_VALF; wob.removedOnCompletion = NO;
-        wob.timingFunctions = @[[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
-        [mine addAnimation:wob forKey:@"wob"];
+        CATransform3D p = CATransform3DIdentity; p.m34 = -1.0 / 110; b.layer.sublayerTransform = p;
+        // floats and tilts in 3D
+        CAKeyframeAnimation *ry = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.y"]; ry.values = @[@0, @0.6, @0, @-0.6, @0]; ry.duration = 3.4; ry.repeatCount = HUGE_VALF; ry.removedOnCompletion = NO;
+        CAKeyframeAnimation *rx = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.x"]; rx.values = @[@0.25, @-0.25, @0.25]; rx.duration = 2.6; rx.repeatCount = HUGE_VALF; rx.removedOnCompletion = NO;
+        CAKeyframeAnimation *fy = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"]; fy.values = @[@0, @(-d * 0.08), @0]; fy.duration = 2.0; fy.repeatCount = HUGE_VALF; fy.removedOnCompletion = NO;
+        for (CAKeyframeAnimation *a in @[ry, rx, fy]) { a.calculationMode = kCAAnimationCubic; [mine addAnimation:a forKey:a.keyPath]; }
+        if (was || [NSDate date].timeIntervalSince1970 > gAckReadyAt) {
+            // a new reaction pops in with a full spin
+            CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; pop.values = @[@0, @1.5, @0.85, @1.1, @1]; pop.duration = 0.7;
+            CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.y"]; spin.fromValue = @(-M_PI * 2); spin.toValue = @0; spin.duration = 0.7; spin.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.3 :1];
+            [mine addAnimation:pop forKey:@"pop"]; [mine addAnimation:spin forKey:@"spin"];
+        }
     }
-    if (![objc_getAssociatedObject(b, "m26ackem") isEqual:em]) { objc_setAssociatedObject(b, "m26ackem", em, OBJC_ASSOCIATION_RETAIN_NONATOMIC); mine.contents = (id)EmojiImage(em, 120).CGImage; }
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     mine.bounds = CGRectMake(0, 0, d, d); mine.position = CGPointMake(CGRectGetMidX(gr), CGRectGetMidY(gr));
     [CATransaction commit];
@@ -4183,6 +4415,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     NSString *k = FeatRows()[s - 1][0];
     if ([k isEqualToString:@"lock"] && Opt(@"lock")) return 3;
     if ([k isEqualToString:@"react"] && Opt(@"react")) return 2;
+    if ([k isEqualToString:@"spell"] && Opt(@"spell")) return 2;
     if ([k isEqualToString:@"save"] && Opt(@"save")) return 2;
     if ([k isEqualToString:@"remind"] && Opt(@"remind")) return 2;
     if ([k isEqualToString:@"unsend"] && Opt(@"unsend")) return 2;
@@ -4219,6 +4452,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
         [sw addTarget:self action:@selector(reactSound:) forControlEvents:UIControlEventValueChanged]; c.accessoryView = sw;
         return c;
     }
+    if ([r[0] isEqualToString:@"spell"]) { c.textLabel.text = @"Ignored Words"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)IgnoredWords().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c; }
     if ([r[0] isEqualToString:@"save"]) { c.textLabel.text = @"Saved Messages"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)SavedMsgs().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c; }
     if ([r[0] isEqualToString:@"remind"]) { c.textLabel.text = @"Upcoming Reminders"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)Reminders().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c; }
     if ([r[0] isEqualToString:@"anim"]) {
@@ -4275,6 +4509,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     if (ip.section == 0) { [self.navigationController pushViewController:[[M26FramesVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES]; return; }
     NSString *k = FeatRows()[ip.section - 1][0];
     if (ip.row == 1 && [k isEqualToString:@"lock"]) [self.navigationController pushViewController:[[M26LockListVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
+    if (ip.row == 1 && [k isEqualToString:@"spell"]) { [self.navigationController pushViewController:[[M26WordsVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES]; return; }
     if (ip.row == 1 && [k isEqualToString:@"save"]) { M26ListVC *l = [[M26ListVC alloc] initWithStyle:UITableViewStyleInsetGrouped]; l.kind = 0; [self.navigationController pushViewController:l animated:YES]; }
     if (ip.row == 1 && [k isEqualToString:@"remind"]) { M26ListVC *l = [[M26ListVC alloc] initWithStyle:UITableViewStyleInsetGrouped]; l.kind = 1; [self.navigationController pushViewController:l animated:YES]; }
     if (ip.row == 1 && [k isEqualToString:@"sched"]) { SaveScheduled(@[]); [tv reloadSections:[NSIndexSet indexSetWithIndex:ip.section] withRowAnimation:UITableViewRowAnimationFade]; }
@@ -4593,7 +4828,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
