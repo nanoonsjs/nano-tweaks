@@ -1,4 +1,5 @@
-// Messages26 0.10.2 - made by nano
+// Messages26 0.10.3 - made by nano
+// 0.10.3: To: row fits the capsule (no overlap), white + right under the X
 // 0.10.2: rim sits on the bubble edge, none on big emoji; reply arrow no longer grows huge
 // 0.10.1: bubble rim follows the bubble shape; swipe reply opens the reply view
 // 0.10.0: glass rim on received bubbles, deeper blue iMessages, swipe right to reply
@@ -943,13 +944,26 @@ static void StyleToField(UIWindow *w) {
       g.backgroundColor = dk ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.97 alpha:0.97];
       g.layer.borderWidth = 0; }
     CGFloat h = MIN(row.bounds.size.height - 8, 52);
-    CGRect gf = CGRectMake(16, CGRectGetMidY([to convertRect:to.bounds toView:row]) - h / 2, row.bounds.size.width - 32, h);
+    // capsule: 16pt from both screen edges (worked out on screen, wherever the row sits)
+    CGFloat W = w.bounds.size.width;
+    CGFloat ox = [row convertPoint:CGPointZero toView:nil].x;
+    CGRect gf = CGRectMake(16 - ox, CGRectGetMidY([to convertRect:to.bounds toView:row]) - h / 2, W - 32, h);
+    // everything in the row (To:, the typed names) slides right together so "To:" sits inside
+    { CGFloat lx = [to convertRect:to.bounds toView:nil].origin.x;
+      UIView *top = to; while (top.superview && top.superview != row) top = top.superview;
+      CGFloat cur = top.transform.tx, dx = MAX(0, cur + (34 - lx));
+      if (dx > 40) dx = 0;
+      for (UIView *c in row.subviews) {
+          if (c == g || c.tag == GLASS_TAG + 11 || c.tag == GLASS_TAG + 9) continue;
+          if (c.bounds.size.height <= 1.5) continue;
+          if (fabs(c.transform.tx - dx) > 0.5) c.transform = CGAffineTransformMakeTranslation(dx, 0);
+      } }
     if (!CGRectEqualToRect(g.frame, gf)) { g.frame = gf; g.layer.cornerRadius = h / 2; RimFit(g, IsDark(row)); }
-    if (CGRectGetMinX(to.frame) < 30 && to.superview == row) { CGRect f = to.frame; f.origin.x = 32; to.frame = f; }
     UIButton *add = nil; CGFloat ax = -1;
     { NSMutableArray *bs = [NSMutableArray arrayWithObject:row]; int gb = 0;
       while (bs.count && gb++ < 200) { UIView *v = bs.lastObject; [bs removeLastObject];
-        if ([v isKindOfClass:[UIButton class]] && !v.hidden && v.alpha > 0.05 && v.bounds.size.width < 70) { CGFloat x = [v convertPoint:CGPointZero toView:row].x; if (x > ax) { ax = x; add = (UIButton *)v; } }
+        if (v.tag == GLASS_TAG + 11) continue;   // ours
+        if ([v isKindOfClass:[UIButton class]] && !v.hidden && v.alpha > 0.01 && v.bounds.size.width < 70) { CGFloat x = [v convertPoint:CGPointZero toView:row].x; if (x > ax) { ax = x; add = (UIButton *)v; } }
         [bs addObjectsFromArray:v.subviews]; } }
     if (add) {
         if (add.alpha > 0) add.alpha = 0.02;   // Apple's blue one: invisible
@@ -969,7 +983,18 @@ static void StyleToField(UIWindow *w) {
         mine.backgroundColor = dk ? [UIColor colorWithWhite:1 alpha:0.12] : [UIColor colorWithWhite:0 alpha:0.06];
         mine.layer.borderColor = [UIColor colorWithWhite:dk ? 1 : 0 alpha:dk ? 0.18 : 0.1].CGColor;
         CGFloat d = 32;
-        CGRect mf = CGRectMake(CGRectGetMaxX(g.frame) - 9 - d, CGRectGetMidY(g.frame) - d / 2, d, d);
+        CGFloat cx = CGRectGetMaxX(g.frame) - 9 - d / 2;
+        // right under the X (its glass circle), if it's there
+        CGFloat best = -1;
+        for (UIView *sv in [gStyled allObjects]) {
+            if (sv.window != w) continue;
+            UIView *gl = objc_getAssociatedObject(sv, &kGlassKey);
+            if (!gl || gl.hidden) continue;
+            CGRect gw = [gl convertRect:gl.bounds toView:nil];
+            if (CGRectGetMidX(gw) > W * 0.7 && CGRectGetMidX(gw) > best) best = CGRectGetMidX(gw);
+        }
+        if (best > 0) cx = MIN(best - ox, CGRectGetMaxX(g.frame) - 6 - d / 2);
+        CGRect mf = CGRectMake(cx - d / 2, CGRectGetMidY(g.frame) - d / 2, d, d);
         if (!CGRectEqualToRect(mine.frame, mf)) { mine.frame = mf; mine.layer.cornerRadius = d / 2; }
         if (row.subviews.lastObject != mine) [row bringSubviewToFront:mine];
     }
@@ -1591,7 +1616,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.2 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@", gBubbleDebug, gReplyDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
