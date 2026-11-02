@@ -1,4 +1,5 @@
-// Messages26 0.10.6 - made by nano
+// Messages26 0.10.7 - made by nano
+// 0.10.7: photo + name scaled one by one (bigger for real); drag the debug box anywhere
 // 0.10.6: bigger contact photo + name at the top of a chat
 // 0.10.5: To: typing spot stays after the label (Messages' resets are undone right away)
 // 0.10.4: typing in To: starts after the label; + is white
@@ -882,7 +883,7 @@ static UIViewController *SearchList(void);
 static NSHashTable *gNameGlass;
 static __weak UIView *gNameNow;
 // A soft blur fading down from the top (behind the status bar and the buttons).
-static __weak UIView *gTitleBox;
+static __weak UINavigationBar *gChatBar;
 static void TopBlur(UINavigationBar *nb) {
     UIView *host = nb.superview;
     if (!host) return;
@@ -897,7 +898,7 @@ static void TopBlur(UINavigationBar *nb) {
     }
     if (b.superview != host || [host.subviews indexOfObject:b] > [host.subviews indexOfObject:nb]) [host insertSubview:b belowSubview:nb];
     CGFloat bot = CGRectGetMaxY([nb convertRect:nb.bounds toView:host]) + 6;
-    UIView *tb = gTitleBox;
+    UIView *tb = gNameNow;
     if (tb.window && [tb isDescendantOfView:nb]) bot = MAX(bot, CGRectGetMaxY([tb convertRect:tb.bounds toView:host]) + 14);
     CGRect f = CGRectMake(0, 0, host.bounds.size.width, bot);
     if (!CGRectEqualToRect(b.frame, f)) { b.frame = f; [CATransaction begin]; [CATransaction setDisableActions:YES]; b.layer.mask.frame = b.bounds; [CATransaction commit]; }
@@ -1127,32 +1128,57 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
 }
 
 // Bigger contact photo + name in a chat (iOS 26 size), a little lower.
+static __weak UIView *gAvatarV;
+static NSString *gTitleDebug = @"title: -";
 #define TITLE_SCALE 1.3
-static void ScaleTitle(BOOL chat) {
-    UIView *h = gNameNow, *old = gTitleBox;
-    UIView *box = nil;
-    if (chat && gTopOn && h.window) {
-        CGFloat W = h.window.bounds.size.width;
-        box = h;
-        while (box.superview && ![box.superview isKindOfClass:[UINavigationBar class]] && box.superview.bounds.size.width < W * 0.8) box = box.superview;
-        // must hold the photo too
-        BOOL pic = Find(box, ^BOOL(UIView *v) { return v != h && ![v isDescendantOfView:h] && ![v isKindOfClass:[UILabel class]] && v.bounds.size.width >= 30 && fabs(v.bounds.size.width - v.bounds.size.height) < 4; }, 80) != nil;
-        if (!pic || box == h) box = nil;
-    }
-    if (old && old != box) old.transform = CGAffineTransformIdentity;
-    gTitleBox = box;
-    if (!box) return;
-    CGFloat hgt = box.bounds.size.height, s = TITLE_SCALE;
-    CGAffineTransform t = CGAffineTransformMakeTranslation(0, (s - 1) * hgt / 2 + 14);
-    t = CGAffineTransformScale(t, s, s);
-    if (!CGAffineTransformEqualToTransform(box.transform, t)) box.transform = t;
-    // crisp text at the bigger size
+static void Crisp(UIView *root, CGFloat s) {
     CGFloat cs = UIScreen.mainScreen.scale * s;
-    NSMutableArray *st = [NSMutableArray arrayWithObject:box]; int g = 0;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:root]; int g = 0;
     while (st.count && g++ < 60) { UIView *v = st.lastObject; [st removeLastObject];
         if ([v isKindOfClass:[UILabel class]] && fabs(v.layer.contentsScale - cs) > 0.01) { v.layer.contentsScale = cs; [v setNeedsDisplay]; }
         [st addObjectsFromArray:v.subviews]; }
-    for (UIView *p = box.superview; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
+}
+static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
+    UIView *name = gNameNow, *oldA = gAvatarV;
+    UIView *av = nil;
+    if (chat && gTopOn && name.window && nb) {
+        CGFloat W = nb.bounds.size.width;
+        CGRect nr = [name convertRect:name.bounds toView:nb];
+        // the photo: a square right above the name, in the middle
+        CGFloat bestW = 0;
+        NSMutableArray *st = [NSMutableArray arrayWithArray:nb.subviews]; int g = 0;
+        while (st.count && g++ < 600) { UIView *v = st.lastObject; [st removeLastObject];
+            if (v.hidden || v.alpha < 0.05 || v.tag == GLASS_TAG || v == name || [v isDescendantOfView:name]) continue;
+            CGSize sz = v.bounds.size;
+            if (![v isKindOfClass:[UILabel class]] && ![name isDescendantOfView:v] && sz.width >= 30 && sz.width <= 90 && fabs(sz.width - sz.height) < 4) {
+                CGPoint c = [v convertPoint:CGPointMake(sz.width / 2, sz.height / 2) toView:nb];
+                CGFloat ty = v.transform.ty;
+                if (fabs(c.x - W / 2) < 30 && c.y - ty < CGRectGetMinY(nr) + 6 && sz.width > bestW) { bestW = sz.width; av = v; }
+            }
+            [st addObjectsFromArray:v.subviews];
+        }
+        // the outermost view of that size
+        while (av.superview && av.superview != nb && fabs(av.superview.bounds.size.width - av.bounds.size.width) < 1 && fabs(av.superview.bounds.size.height - av.bounds.size.height) < 1) av = av.superview;
+    }
+    if (oldA && oldA != av) oldA.transform = CGAffineTransformIdentity;
+    gAvatarV = av;
+    CGFloat s = TITLE_SCALE;
+    if (!av) {
+        if (name && !CGAffineTransformIsIdentity(name.transform) && !(chat && gTopOn)) name.transform = CGAffineTransformIdentity;
+        gTitleDebug = @"title: no photo";
+        return;
+    }
+    CGFloat a = av.bounds.size.height, n = name.bounds.size.height;
+    CGFloat tyA = 14 + (s - 1) * a / 2;
+    CGFloat tyN = tyA + (s - 1) * a / 2 + (s - 1) * n / 2 + 2;
+    CGAffineTransform ta = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, tyA), s, s);
+    CGAffineTransform tn = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, tyN), s, s);
+    if (!CGAffineTransformEqualToTransform(av.transform, ta)) av.transform = ta;
+    if (!CGAffineTransformEqualToTransform(name.transform, tn)) name.transform = tn;
+    Crisp(name, s);
+    for (UIView *p = av.superview; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
+    for (UIView *p = name.superview; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
+    gTitleDebug = [NSString stringWithFormat:@"title: photo=%@ %.0f name=%@ %.0f", NSStringFromClass([av class]), a, NSStringFromClass([name class]), n];
 }
 static void StyleNav(UIWindow *w) {
     UIView *e = gEntry;
@@ -1167,7 +1193,7 @@ static void StyleNav(UIWindow *w) {
         if ([v isKindOfClass:[UINavigationBar class]]) {
             CGRect f = [v convertRect:v.bounds toView:nil];
             // the chat's bar (on the right side on iPad-style splits)
-            if (CGRectGetMaxX(f) >= w.bounds.size.width - 2) { bars++; StyleOneNav((UINavigationBar *)v, found, chat); }
+            if (CGRectGetMaxX(f) >= w.bounds.size.width - 2) { bars++; StyleOneNav((UINavigationBar *)v, found, chat); gChatBar = (UINavigationBar *)v; }
             continue;
         }
         [st addObjectsFromArray:v.subviews];
@@ -1179,7 +1205,7 @@ static void StyleNav(UIWindow *w) {
         [gNameGlass removeObject:h];
     }
     if (!chat) gNameNow = nil;
-    @try { ScaleTitle(chat); } @catch (__unused id e) {}
+    @try { ScaleTitle(chat, gChatBar); } @catch (__unused id e) {}
     gNavDebug = [NSString stringWithFormat:@"nav chat=%d bars=%d items: %@", chat, bars, [found componentsJoinedByString:@" "]];
 }
 
@@ -1642,6 +1668,17 @@ static void InstallSwipe(UIWindow *w) {
 @implementation M26Debug
 + (instancetype)shared { static M26Debug *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Debug new]; }); return t; }
 - (void)hold:(UILongPressGestureRecognizer *)g { if (g.state == UIGestureRecognizerStateBegan) gShowDebug = !gShowDebug; }
+// drag the debug box anywhere (remembered)
+- (void)drag:(UIPanGestureRecognizer *)g {
+    UIView *l = g.view;
+    CGPoint t = [g translationInView:l.superview];
+    l.center = CGPointMake(l.center.x + t.x, l.center.y + t.y);
+    [g setTranslation:CGPointZero inView:l.superview];
+    if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        [[NSUserDefaults standardUserDefaults] setDouble:l.frame.origin.y forKey:@"m26.debugY"];
+        [[NSUserDefaults standardUserDefaults] setDouble:l.frame.origin.x forKey:@"m26.debugX"];
+    }
+}
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b { return YES; }
 @end
 
@@ -1682,16 +1719,29 @@ static void Tick(void) {
     UILabel *l = (UILabel *)[w viewWithTag:DEBUG_TAG];
     if (!gShowDebug && !gPrefDebug) { [l removeFromSuperview]; return; }
     if (!l) {
-        l = [UILabel new]; l.tag = DEBUG_TAG; l.numberOfLines = 0; l.userInteractionEnabled = NO;
+        l = [UILabel new]; l.tag = DEBUG_TAG; l.numberOfLines = 0; l.userInteractionEnabled = YES;
+        [l addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:[M26Debug shared] action:@selector(drag:)]];
         l.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
         l.textColor = UIColor.whiteColor; l.backgroundColor = [UIColor colorWithRed:0.3 green:0 blue:0.35 alpha:0.85];
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.10.6 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
-    l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@", gBubbleDebug, gReplyDebug, gToDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.10.7 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
-    l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
+    {
+        NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+        BOOL dragging = NO;
+        for (UIGestureRecognizer *gr in l.gestureRecognizers) if (gr.state == UIGestureRecognizerStateBegan || gr.state == UIGestureRecognizerStateChanged) dragging = YES;
+        if (!dragging) {
+            CGFloat x = [ud objectForKey:@"m26.debugX"] ? [ud doubleForKey:@"m26.debugX"] : 12;
+            CGFloat y = [ud objectForKey:@"m26.debugY"] ? [ud doubleForKey:@"m26.debugY"] : w.safeAreaInsets.top + 140;
+            CGFloat bw = w.bounds.size.width - 24, bh = s.height + 12;
+            x = MIN(MAX(x, -bw + 60), w.bounds.size.width - 60);
+            y = MIN(MAX(y, 0), w.bounds.size.height - 40);
+            l.frame = CGRectMake(x, y, bw, bh);
+        }
+    }
     [w bringSubviewToFront:l];
 }
 
@@ -1699,8 +1749,8 @@ static void Tick(void) {
 - (BOOL)pointInside:(CGPoint)p withEvent:(UIEvent *)e {
     BOOL r = %orig;
     if (r) return r;
-    UIView *tb = gTitleBox;
-    if (tb && tb.window && (self == tb || [tb isDescendantOfView:self]) && CGRectContainsPoint([tb convertRect:tb.bounds toView:self], p)) return YES;
+    UIView *tb = gNameNow;
+    if (tb && tb.window && !CGAffineTransformIsIdentity(tb.transform) && (self == tb || [tb isDescendantOfView:self]) && CGRectContainsPoint([tb convertRect:tb.bounds toView:self], p)) return YES;
     UIView *en = gEntry, *fld = gField;
     if (!en || (self != en && ![en isDescendantOfView:self] && !(fld && [fld isDescendantOfView:self]))) return r;
     for (NSNumber *t in @[@(PILL_TAG), @(PLUS_TAG)]) {
