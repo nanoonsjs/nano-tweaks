@@ -1,4 +1,5 @@
-// Messages26 0.16.0 - made by nano
+// Messages26 0.16.1 - made by nano
+// 0.16.1: iOS 26 lock screen for chats (Face ID, Cancel goes back); compact Send Later sheet, keyboard hides first
 // 0.16.0: Chat Lock, Scheduled Send, Keyword Effects, Live Read Time, Auto Unsend (all off by default, in Messages26 settings)
 // 0.15.2: frames only on the list (not inside chats)
 // 0.15.1: settings is a glass button (opens for real); frames on up to 3 people; Set Frame in the hold menu
@@ -3155,28 +3156,66 @@ static void CheckScheduled(void) {
 @interface M26SchedVC : UIViewController
 @property (nonatomic, copy) NSString *text, *key;
 @end
-@implementation M26SchedVC { UIDatePicker *_dp; }
+@implementation M26SchedVC { UIDatePicker *_dp; UIButton *_go; NSArray *_chips; }
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = UIColor.systemBackgroundColor;
+    BOOL dark = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight;
+    self.view.backgroundColor = UIColor.clearColor;
+    UIVisualEffectView *bg = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterial]];
+    bg.frame = self.view.bounds; bg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [self.view addSubview:bg];
     CGFloat W = self.view.bounds.size.width;
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(20, 24, W - 40, 30)]; t.text = @"Send Later"; t.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold]; [self.view addSubview:t];
-    UILabel *m = [[UILabel alloc] initWithFrame:CGRectMake(20, 58, W - 40, 40)]; m.text = self.text; m.numberOfLines = 2; m.textColor = UIColor.secondaryLabelColor; m.autoresizingMask = UIViewAutoresizingFlexibleWidth; [self.view addSubview:m];
-    _dp = [[UIDatePicker alloc] initWithFrame:CGRectMake(0, 100, W, 216)]; _dp.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    _dp.datePickerMode = UIDatePickerModeDateAndTime; _dp.preferredDatePickerStyle = UIDatePickerStyleWheels;
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(20, 18, W - 40, 24)]; t.text = @"Send Later"; t.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold]; t.textAlignment = NSTextAlignmentCenter; t.autoresizingMask = UIViewAutoresizingFlexibleWidth; [self.view addSubview:t];
+    // the message as a little bubble
+    UILabel *m = [UILabel new]; m.text = self.text; m.font = [UIFont systemFontOfSize:16]; m.textColor = UIColor.whiteColor; m.numberOfLines = 1;
+    CGSize ms = [m sizeThatFits:CGSizeMake(W - 120, 22)]; ms.width = MIN(ms.width, W - 120);
+    UIView *bub = [[UIView alloc] initWithFrame:CGRectMake(W - 24 - ms.width - 28, 54, ms.width + 28, 34)]; bub.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    bub.backgroundColor = DeepBlue(); bub.layer.cornerRadius = 17; m.frame = CGRectMake(14, 6, ms.width, 22); [bub addSubview:m]; [self.view addSubview:bub];
+    // quick picks
+    NSArray *titles = @[@"In 1 Hour", @"Tonight", @"Tomorrow"];
+    NSMutableArray *chips = [NSMutableArray array]; CGFloat cw = (W - 40 - 16) / 3;
+    for (NSUInteger i = 0; i < titles.count; i++) {
+        UIButton *c = [UIButton buttonWithType:UIButtonTypeCustom]; c.tag = i; c.frame = CGRectMake(20 + i * (cw + 8), 104, cw, 36);
+        [c setTitle:titles[i] forState:UIControlStateNormal]; c.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+        [c setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
+        c.backgroundColor = [UIColor colorWithWhite:dark ? 1 : 0 alpha:0.08]; c.layer.cornerRadius = 18; c.layer.cornerCurve = kCACornerCurveContinuous;
+        [c addTarget:self action:@selector(chip:) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:c]; [chips addObject:c];
+    }
+    _chips = chips;
+    // compact date + time (opens the system pickers)
+    UILabel *wl = [[UILabel alloc] initWithFrame:CGRectMake(24, 154, 120, 34)]; wl.text = @"Send at"; wl.font = [UIFont systemFontOfSize:17]; [self.view addSubview:wl];
+    _dp = [UIDatePicker new]; _dp.datePickerMode = UIDatePickerModeDateAndTime; _dp.preferredDatePickerStyle = UIDatePickerStyleCompact;
     _dp.minimumDate = [NSDate dateWithTimeIntervalSinceNow:60]; _dp.date = [NSDate dateWithTimeIntervalSinceNow:3600];
+    [_dp sizeToFit]; _dp.frame = CGRectMake(W - 20 - _dp.bounds.size.width, 154, _dp.bounds.size.width, 34); _dp.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    [_dp addTarget:self action:@selector(changed) forControlEvents:UIControlEventValueChanged];
     [self.view addSubview:_dp];
-    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem]; b.frame = CGRectMake(20, 330, W - 40, 52); b.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [b setTitle:@"Schedule" forState:UIControlStateNormal]; b.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
-    b.backgroundColor = UIColor.systemBlueColor; [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal]; b.layer.cornerRadius = 26;
-    [b addTarget:self action:@selector(go) forControlEvents:UIControlEventTouchUpInside]; [self.view addSubview:b];
+    _go = [UIButton buttonWithType:UIButtonTypeCustom]; _go.frame = CGRectMake(20, 204, W - 40, 50); _go.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    _go.backgroundColor = UIColor.systemBlueColor; _go.layer.cornerRadius = 25; _go.layer.cornerCurve = kCACornerCurveContinuous;
+    [_go setImage:[UIImage systemImageNamed:@"clock.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal]; _go.tintColor = UIColor.whiteColor;
+    _go.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    [_go addTarget:self action:@selector(go) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:_go];
+    [self changed];
+}
+- (void)changed {
+    NSDateFormatter *f = [NSDateFormatter new];
+    f.doesRelativeDateFormatting = YES; f.dateStyle = NSDateFormatterShortStyle; f.timeStyle = NSDateFormatterShortStyle;
+    [_go setTitle:[NSString stringWithFormat:@"  Schedule for %@", [f stringFromDate:_dp.date]] forState:UIControlStateNormal];
+}
+- (void)chip:(UIButton *)c {
+    [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+    NSCalendar *cal = NSCalendar.currentCalendar; NSDate *now = [NSDate date], *d = nil;
+    if (c.tag == 0) d = [now dateByAddingTimeInterval:3600];
+    else if (c.tag == 1) { d = [cal dateBySettingHour:21 minute:0 second:0 ofDate:now options:0]; if ([d timeIntervalSinceNow] < 120) d = [d dateByAddingTimeInterval:86400]; }
+    else d = [cal dateBySettingHour:9 minute:0 second:0 ofDate:[now dateByAddingTimeInterval:86400] options:0];
+    [_dp setDate:d animated:YES]; [self changed];
+    for (UIButton *x in _chips) x.backgroundColor = [UIColor colorWithWhite:self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight ? 1 : 0 alpha:x == c ? 0.22 : 0.08];
 }
 - (void)go {
     NSMutableArray *a = Scheduled();
     [a addObject:@{@"text": self.text, @"key": self.key, @"at": @(_dp.date.timeIntervalSince1970)}];
     SaveScheduled(a);
     [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
-    // clear the message box
     UITextView *tv = EntryTextView();
     UIView *e = gEntry; Class CC = NSClassFromString(@"CKComposition"); SEL sc = NSSelectorFromString(@"setComposition:");
     if (e && CC && [e respondsToSelector:sc]) ((void (*)(id, SEL, id))objc_msgSend)(e, sc, [CC new]); else tv.text = @"";
@@ -3206,8 +3245,14 @@ static void CheckScheduled(void) {
     if (!text.length || !gChatKeyNow) return;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     M26SchedVC *vc = [M26SchedVC new]; vc.text = text; vc.key = gChatKeyNow;
-    if (@available(iOS 15.0, *)) { vc.sheetPresentationController.detents = @[UISheetPresentationControllerDetent.mediumDetent]; vc.sheetPresentationController.prefersGrabberVisible = YES; }
-    [TopVC(g.view.window) presentViewController:vc animated:YES completion:nil];
+    UIWindow *w = g.view.window;
+    [w endEditing:YES];   // keyboard down so the sheet has room
+    if (@available(iOS 16.0, *)) {
+        UISheetPresentationController *sp = vc.sheetPresentationController;
+        sp.detents = @[[UISheetPresentationControllerDetent customDetentWithIdentifier:@"m26sched" resolver:^CGFloat(__unused id<UISheetPresentationControllerDetentResolutionContext> ctx) { return 280; }]];
+        sp.prefersGrabberVisible = YES; sp.preferredCornerRadius = 32;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.28 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [TopVC(w) presentViewController:vc animated:YES completion:nil]; });
 }
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g { return Opt(@"sched") && EntryTextView().text.length > 0; }
 @end
@@ -3240,36 +3285,125 @@ static void LockPreview(UIView *avatar, NSString *key) {
     if (locked && !l) { l = [UILabel new]; l.tag = LOCK_TAG; l.text = @"🔒 Locked"; l.font = [UIFont systemFontOfSize:16]; l.textColor = UIColor.secondaryLabelColor; [cell addSubview:l]; }
     if (l) { l.hidden = !locked; l.frame = CGRectMake(CGRectGetMaxX(ar) + 16, CGRectGetMidY(ar) + 2, 200, 22); }
 }
+static NSString *ConvNameForKey(NSString *key);
+@interface M26Lock : NSObject
++ (instancetype)shared;
+@property (nonatomic, copy) NSString *key;
+@property (nonatomic, weak) UIView *overlay;
+@end
+static void LockLeave(UIWindow *w) {
+    UICollectionView *cv = TranscriptCV(w);
+    UIResponder *r = cv; while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
+    UINavigationController *nc = nil;
+    for (UIViewController *p = (UIViewController *)r; p && !nc; p = p.parentViewController) nc = p.navigationController;
+    if (!nc) { UIViewController *lv = ListVC(w.rootViewController, 0); nc = lv.navigationController; }
+    [nc popToRootViewControllerAnimated:YES];
+}
+@implementation M26Lock
++ (instancetype)shared { static M26Lock *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Lock new]; }); return t; }
+- (void)unlocked {
+    UIView *ov = self.overlay;
+    if (!gUnlocked) gUnlocked = [NSMutableSet set];
+    if (self.key) [gUnlocked addObject:self.key];
+    [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
+    UIImageView *ic = (UIImageView *)[ov viewWithTag:7];
+    [UIView transitionWithView:ic duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ ic.image = [UIImage systemImageNamed:@"lock.open.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:38 weight:UIImageSymbolWeightSemibold]]; } completion:nil];
+    UIView *disc = [ov viewWithTag:6];
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:0 animations:^{ disc.transform = CGAffineTransformMakeScale(1.15, 1.15); } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.45 delay:0.05 options:UIViewAnimationOptionCurveEaseIn animations:^{ ov.alpha = 0; ov.transform = CGAffineTransformMakeScale(1.08, 1.08); } completion:^(__unused BOOL f2) { [ov removeFromSuperview]; gLockAsking = NO; }];
+    }];
+}
+- (void)ask {
+    if (gLockAsking) return;
+    gLockAsking = YES;
+    UIView *ov = self.overlay;
+    LAContext *ctx = [LAContext new];
+    ctx.localizedCancelTitle = @"Cancel";
+    ctx.localizedFallbackTitle = @"Use Passcode";
+    NSError *err = nil;
+    LAPolicy pol = [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&err] ? LAPolicyDeviceOwnerAuthenticationWithBiometrics : LAPolicyDeviceOwnerAuthentication;
+    UIView *disc = [ov viewWithTag:6];
+    [UIView animateWithDuration:0.6 delay:0 options:UIViewAnimationOptionAutoreverse | UIViewAnimationOptionRepeat | UIViewAnimationOptionAllowUserInteraction animations:^{ disc.transform = CGAffineTransformMakeScale(1.06, 1.06); } completion:nil];
+    [ctx evaluatePolicy:pol localizedReason:@"Unlock this chat" reply:^(BOOL ok, NSError *e) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [disc.layer removeAllAnimations]; disc.transform = CGAffineTransformIdentity;
+            if (ok) { [self unlocked]; return; }
+            gLockAsking = NO;
+            if (e.code == LAErrorUserFallback) {
+                LAContext *c2 = [LAContext new];
+                gLockAsking = YES;
+                [c2 evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:@"Unlock this chat" reply:^(BOOL ok2, __unused NSError *e2) { dispatch_async(dispatch_get_main_queue(), ^{ gLockAsking = NO; if (ok2) [self unlocked]; else [self cancel]; }); }];
+                return;
+            }
+            [self cancel];
+        });
+    }];
+}
+- (void)cancel {
+    UIView *ov = self.overlay; UIWindow *w = ov.window;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    gLockAsking = YES;   // keep it covered while leaving
+    LockLeave(w);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [UIView animateWithDuration:0.25 animations:^{ ov.alpha = 0; } completion:^(__unused BOOL f) { [ov removeFromSuperview]; gLockAsking = NO; }];
+    });
+}
+- (void)press:(UIView *)b { [UIView animateWithDuration:0.15 animations:^{ b.transform = CGAffineTransformMakeScale(0.95, 0.95); }]; }
+- (void)lift:(UIView *)b { [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil]; }
+- (void)unlockTap:(UIView *)b { [self lift:b]; [self ask]; }
+- (void)cancelTap:(UIView *)b { [self lift:b]; [self cancel]; }
+@end
+static UIButton *LockGlassButton(NSString *title, NSString *icon, CGRect f, BOOL strong, SEL act) {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom]; b.frame = f;
+    b.backgroundColor = strong ? [UIColor colorWithWhite:1 alpha:0.18] : [UIColor colorWithWhite:1 alpha:0.08];
+    b.layer.cornerRadius = f.size.height / 2; b.layer.cornerCurve = kCACornerCurveContinuous;
+    [b setTitle:icon ? [@"  " stringByAppendingString:title] : title forState:UIControlStateNormal];
+    if (icon) [b setImage:[UIImage systemImageNamed:icon withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    b.tintColor = UIColor.whiteColor; [b setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    b.titleLabel.font = [UIFont systemFontOfSize:17 weight:strong ? UIFontWeightSemibold : UIFontWeightMedium];
+    RimFit(b, YES);
+    [b addTarget:[M26Lock shared] action:@selector(press:) forControlEvents:UIControlEventTouchDown];
+    [b addTarget:[M26Lock shared] action:@selector(lift:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    [b addTarget:[M26Lock shared] action:act forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
 static void ChatLock(UIWindow *w) {
     UIView *ov = [w viewWithTag:LOCK_TAG + 1];
     NSString *key = gChatKeyNow; UIView *e = gEntry;
     BOOL need = e.window && key && Opt(@"lock") && [LockedKeys() containsObject:key] && ![gUnlocked containsObject:key];
     if (!need) { if (ov && !gLockAsking) [ov removeFromSuperview]; return; }
+    M26Lock *L = [M26Lock shared];
     if (!ov) {
-        UIVisualEffectView *b = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterialDark]];
-        b.frame = w.bounds; b.tag = LOCK_TAG + 1;
-        UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"lock.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:44 weight:UIImageSymbolWeightSemibold]]];
-        ic.tintColor = UIColor.whiteColor; ic.center = CGPointMake(w.bounds.size.width / 2, w.bounds.size.height / 2 - 20); [b.contentView addSubview:ic];
-        [w addSubview:b]; ov = b;
+        [w endEditing:YES];
+        CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
+        UIVisualEffectView *bv = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+        bv.frame = w.bounds; bv.tag = LOCK_TAG + 1;
+        UIView *shade = [[UIView alloc] initWithFrame:w.bounds]; shade.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; [bv.contentView addSubview:shade];
+        // glass disc with the lock
+        UIView *disc = [[UIView alloc] initWithFrame:CGRectMake((W - 104) / 2, H * 0.3, 104, 104)]; disc.tag = 6;
+        disc.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; disc.layer.cornerRadius = 52; RimFit(disc, YES);
+        disc.layer.shadowColor = UIColor.blackColor.CGColor; disc.layer.shadowOpacity = 0.4; disc.layer.shadowRadius = 20;
+        UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"lock.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:38 weight:UIImageSymbolWeightSemibold]]];
+        ic.tag = 7; ic.tintColor = UIColor.whiteColor; ic.contentMode = UIViewContentModeCenter; ic.frame = disc.bounds; [disc addSubview:ic];
+        [bv.contentView addSubview:disc];
+        UILabel *nm = [[UILabel alloc] initWithFrame:CGRectMake(24, CGRectGetMaxY(disc.frame) + 24, W - 48, 36)];
+        nm.text = ConvNameForKey(key); nm.textAlignment = NSTextAlignmentCenter; nm.textColor = UIColor.whiteColor; nm.font = [UIFont systemFontOfSize:30 weight:UIFontWeightBold];
+        [bv.contentView addSubview:nm];
+        UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(24, CGRectGetMaxY(nm.frame) + 6, W - 48, 22)];
+        sub.text = @"This chat is locked"; sub.textAlignment = NSTextAlignmentCenter; sub.textColor = [UIColor colorWithWhite:1 alpha:0.6]; sub.font = [UIFont systemFontOfSize:17];
+        [bv.contentView addSubview:sub];
+        CGFloat bw = MIN(300, W - 64), by = H - w.safeAreaInsets.bottom - 130;
+        [bv.contentView addSubview:LockGlassButton(@"Unlock with Face ID", @"faceid", CGRectMake((W - bw) / 2, by, bw, 56), YES, @selector(unlockTap:))];
+        [bv.contentView addSubview:LockGlassButton(@"Cancel", nil, CGRectMake((W - bw) / 2, by + 68, bw, 50), NO, @selector(cancelTap:))];
+        // arrive: fade in, disc drops in with a spring
+        bv.alpha = 0; disc.transform = CGAffineTransformMakeScale(0.6, 0.6);
+        [w addSubview:bv]; ov = bv;
+        [UIView animateWithDuration:0.25 animations:^{ bv.alpha = 1; }];
+        [UIView animateWithDuration:0.6 delay:0.05 usingSpringWithDamping:0.62 initialSpringVelocity:0 options:0 animations:^{ disc.transform = CGAffineTransformIdentity; } completion:nil];
+        L.key = key; L.overlay = ov;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [L ask]; });
     }
     [w bringSubviewToFront:ov];
-    if (gLockAsking) return;
-    gLockAsking = YES;
-    LAContext *ctx = [LAContext new];
-    [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthentication localizedReason:@"Unlock this chat" reply:^(BOOL ok, NSError *err) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            gLockAsking = NO;
-            if (ok) { if (!gUnlocked) gUnlocked = [NSMutableSet set]; [gUnlocked addObject:key]; [UIView animateWithDuration:0.3 animations:^{ ov.alpha = 0; } completion:^(__unused BOOL f) { [ov removeFromSuperview]; }]; }
-            else {
-                UICollectionView *cv = TranscriptCV(w);
-                UIResponder *r = cv; while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
-                UINavigationController *nc = ((UIViewController *)r).navigationController;
-                if (!nc) for (UIViewController *p = (UIViewController *)r; p && !nc; p = p.parentViewController) nc = p.navigationController;
-                [nc popToRootViewControllerAnimated:YES];
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [ov removeFromSuperview]; });
-            }
-        });
-    }];
 }
 
 // ---- live "Read 2m ago" ----
@@ -3735,7 +3869,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.16.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.16.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -3774,9 +3908,24 @@ static void Tick(void) {
     return r;
 }
 %end
+
+// Messages has no Face ID usage text; give it one so Face ID (not just the passcode) can be used
+static NSDictionary *(*origInfoDict)(id, SEL);
+static NSDictionary *InfoDict(NSBundle *self, SEL _cmd) {
+    NSDictionary *d = origInfoDict(self, _cmd);
+    if (self == [NSBundle mainBundle] && d && !d[@"NSFaceIDUsageDescription"]) { NSMutableDictionary *m = [d mutableCopy]; m[@"NSFaceIDUsageDescription"] = @"Unlock locked chats with Face ID."; return m; }
+    return d;
+}
+static id (*origInfoKey)(id, SEL, NSString *);
+static id InfoKey(NSBundle *self, SEL _cmd, NSString *k) {
+    if ([k isEqualToString:@"NSFaceIDUsageDescription"] && self == [NSBundle mainBundle]) return origInfoKey(self, _cmd, k) ?: @"Unlock locked chats with Face ID.";
+    return origInfoKey(self, _cmd, k);
+}
 %ctor {
     if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.MobileSMS"]) return;
     LoadPrefs();
+    MSHookMessageEx([NSBundle class], @selector(infoDictionary), (IMP)InfoDict, (IMP *)&origInfoDict);
+    MSHookMessageEx([NSBundle class], @selector(objectForInfoDictionaryKey:), (IMP)InfoKey, (IMP *)&origInfoKey);
     [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardWillChangeFrameNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
         CGRect f = [n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
         CGFloat H = UIScreen.mainScreen.bounds.size.height;
