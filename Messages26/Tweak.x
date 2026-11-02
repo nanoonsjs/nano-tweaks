@@ -1,4 +1,7 @@
-// Messages26 0.6.2 - made by nano
+// Messages26 0.7.0 - made by nano
+// 0.7.0: field sits at the bottom (no gap above the keyboard), solid crisp pill, text lined up by the caret;
+//        compose: no glass on the title, Cancel is a glass X, glass To: field with a white glass +;
+//        list: compose glass no longer cut off
 // 0.6.2: "iMessage" lines up inside the pill (measured where the text is drawn)
 // 0.6.1: text starts just inside the pill, the mic sits inside its right end
 // 0.6.0: + menu and hold-for-Photos work again (the app row is switched on when it's off),
@@ -470,12 +473,11 @@ static void StyleEntry(UIView *entry) {
         if (strip.userInteractionEnabled) strip.userInteractionEnabled = NO;
         CGRect sf = [strip convertRect:strip.bounds toView:entry];
         CGRect cf0 = CGRectApplyAffineTransform(container.frame, CGAffineTransformInvert(container.transform));
-        if ([strip isDescendantOfView:container]) {
-            // the app row is inside the same box: move just the field row down
-            container = field;
-            CGRect ff0 = CGRectApplyAffineTransform([field.superview convertRect:CGRectApplyAffineTransform(field.frame, CGAffineTransformInvert(field.transform)) toView:entry], CGAffineTransformIdentity);
-            if (CGRectGetMinY(sf) >= CGRectGetMaxY(ff0) - 6) shift = MAX(0, sf.size.height - 4);
-        } else if (CGRectGetMinY(sf) >= CGRectGetMaxY(cf0) - 6 && container != strip) shift = MAX(0, sf.size.height - 4);
+        (void)sf; (void)cf0;
+        // the field row drops to the bottom of the bar (where the app row was)
+        container = field;
+        CGRect ff0 = [field.superview convertRect:CGRectApplyAffineTransform(field.frame, CGAffineTransformInvert(field.transform)) toView:entry];
+        shift = MAX(0, entry.bounds.size.height - 8 - CGRectGetMaxY(ff0));
     } else if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
     CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift);
     if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t;
@@ -504,25 +506,19 @@ static void StyleEntry(UIView *entry) {
     }
     UIView *textV = Find(field, ^BOOL(UIView *v) { return [v isKindOfClass:[UITextView class]]; }, 100) ?: field;
     {
-        // where the text is actually drawn: the placeholder ("iMessage") or the
-        // text view's first character, not the view's edge
+        // where the text is actually drawn: the caret's start in the text view
         CGFloat want = 12 + 46 + 10 + 16;
         CGFloat textX = CGRectGetMinX([textV convertRect:textV.bounds toView:entry]);
-        if ([textV isKindOfClass:[UITextView class]]) { UITextView *tv = (UITextView *)textV; textX += tv.textContainerInset.left + tv.textContainer.lineFragmentPadding; }
-        NSMutableArray *ls = [NSMutableArray arrayWithObject:field]; int gl = 0;
-        while (ls.count && gl++ < 80) { UIView *x = ls.lastObject; [ls removeLastObject];
-            if ([x isKindOfClass:[UILabel class]] && ((UILabel *)x).text.length && !x.hidden && x.alpha > 0.05) {
-                CGRect lf = [x convertRect:x.bounds toView:entry];
-                CGRect tr = [(UILabel *)x textRectForBounds:x.bounds limitedToNumberOfLines:1];
-                textX = MIN(textX, CGRectGetMinX(lf) + tr.origin.x);
-            }
-            [ls addObjectsFromArray:x.subviews]; }
+        if ([textV isKindOfClass:[UITextView class]]) {
+            UITextView *tv = (UITextView *)textV;
+            CGRect caret = [tv caretRectForPosition:tv.beginningOfDocument];
+            if (!CGRectIsNull(caret) && !CGRectIsInfinite(caret)) textX = CGRectGetMinX([tv convertRect:caret toView:entry]);
+        }
         CGFloat dx = want - textX;   // + = move right
         gTextDebug = [NSString stringWithFormat:@"textX=%.0f want=%.0f", textX, want];
-        if (fabs(dx) > 1 && field.superview) {
-            CGRect f = field.frame;
-            f.origin.x += dx; f.size.width -= dx;   // right edge (mic) stays
-            field.frame = f;
+        if (fabs(dx) > 1 && fabs(dx) < 140 && field.superview) {
+            CGRect bnd = field.bounds; bnd.size.width -= dx; field.bounds = bnd;   // right edge (mic) stays
+            CGPoint c = field.center; c.x += dx / 2; field.center = c;
             [field layoutIfNeeded];
         }
     }
@@ -547,14 +543,19 @@ static void StyleEntry(UIView *entry) {
     right = MIN(right + 8, entry.bounds.size.width - 8);
     CGRect pillF = CGRectMake(px + D + 10, CGRectGetMinY(ff) - padY, right - (px + D + 10), ff.size.height + padY * 2);
     UIView *pill = [entry viewWithTag:PILL_TAG];
-    UIView *top = container;
-    while (top.superview && top.superview != entry) top = top.superview;
-    if (!pill) {
-        pill = GlassView(entry); pill.tag = PILL_TAG;
-        [entry insertSubview:pill belowSubview:top];
+    UIView *pHost = field.superview ?: entry;
+    if (!pill || pill.superview != pHost) {
+        [pill removeFromSuperview];
+        pill = [UIView new]; pill.tag = PILL_TAG; pill.userInteractionEnabled = NO;
+        pill.layer.cornerCurve = kCACornerCurveContinuous; pill.layer.borderWidth = 0.8;
+        [pHost insertSubview:pill belowSubview:field];
     }
-    if ([entry.subviews indexOfObject:pill] > [entry.subviews indexOfObject:top]) [entry insertSubview:pill belowSubview:top];
-    if (!CGRectEqualToRect(pill.frame, pillF)) { pill.frame = pillF; pill.layer.cornerRadius = MIN(pillF.size.height / 2, 26); }
+    if ([pHost.subviews indexOfObject:pill] > [pHost.subviews indexOfObject:field]) [pHost insertSubview:pill belowSubview:field];
+    pill.backgroundColor = dark ? [UIColor colorWithRed:0.13 green:0.13 blue:0.14 alpha:1] : [UIColor colorWithWhite:0.96 alpha:1];
+    CGRect pillIn = [entry convertRect:pillF toView:pHost];
+    // in the field's space the move down is already in field's transform: follow it
+    pillIn = CGRectOffset(pillIn, 0, 0);
+    if (!CGRectEqualToRect(pill.frame, pillIn)) { pill.frame = pillIn; pill.layer.cornerRadius = MIN(pillIn.size.height / 2, 26); }
     pill.layer.borderColor = (dark ? [UIColor colorWithWhite:1 alpha:0.17] : [UIColor colorWithWhite:0 alpha:0.08]).CGColor;
     UIButton *plus = (UIButton *)[entry viewWithTag:PLUS_TAG];
     if (!plus) {
@@ -635,6 +636,7 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     if (g.layer.animationKeys.count || g.alpha < 1) return;
     if (!CGRectEqualToRect(g.frame, want)) { g.frame = want; g.layer.cornerRadius = MIN(want.size.width, want.size.height) / 2; }
     g.hidden = v.hidden || v.alpha < 0.05;
+    for (UIView *p = host; p && ![p isKindOfClass:[UIWindow class]]; p = p.superview) { if (p.clipsToBounds) p.clipsToBounds = NO; if ([p isKindOfClass:[UINavigationBar class]]) break; }
 }
 static NSHashTable *gFaded;   // bar backgrounds we hid
 static void UndoNav(void) {
@@ -690,8 +692,62 @@ static void TopBlur(UINavigationBar *nb) {
     CGRect f = CGRectMake(0, 0, host.bounds.size.width, CGRectGetMaxY([nb convertRect:nb.bounds toView:host]) + 6);
     if (!CGRectEqualToRect(b.frame, f)) { b.frame = f; [CATransaction begin]; [CATransaction setDisableActions:YES]; b.layer.mask.frame = b.bounds; [CATransaction commit]; }
 }
+@interface M26Cancel : NSObject
++ (instancetype)shared;
+@end
+@implementation M26Cancel
++ (instancetype)shared { static M26Cancel *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Cancel new]; }); return t; }
+- (void)tap:(UIBarButtonItem *)it {
+    UIBarButtonItem *orig = objc_getAssociatedObject(it, "m26orig");
+    if (orig.target && orig.action) ((void (*)(id, SEL, id))objc_msgSend)(orig.target, orig.action, orig);
+}
+@end
+static void CancelToX(UINavigationItem *ni) {
+    NSArray *items = ni.rightBarButtonItems;
+    if (!items.count) return;
+    NSMutableArray *out = [NSMutableArray array]; BOOL changed = NO;
+    for (UIBarButtonItem *it in items) {
+        if (objc_getAssociatedObject(it, "m26orig")) { [out addObject:it]; continue; }
+        NSString *t = it.title.lowercaseString;
+        NSInteger sys = -1; @try { sys = [[it valueForKey:@"systemItem"] integerValue]; } @catch (__unused id e) {}
+        BOOL isCancel = [t isEqualToString:@"cancel"] || ([it respondsToSelector:@selector(isSystemItem)] && sys == UIBarButtonSystemItemCancel);
+        if (!isCancel) { [out addObject:it]; continue; }
+        UIBarButtonItem *x = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] style:UIBarButtonItemStylePlain target:[M26Cancel shared] action:@selector(tap:)];
+        objc_setAssociatedObject(x, "m26orig", it, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [out addObject:x]; changed = YES;
+    }
+    if (changed) ni.rightBarButtonItems = out;
+}
+// New message "To:" row: a glass capsule, with a white glass + inside.
+static void StyleToField(UIWindow *w) {
+    UILabel *to = (UILabel *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UILabel class]] && [((UILabel *)v).text isEqualToString:@"To:"] && v.window; }, 5000);
+    if (!to) return;
+    UIView *row = to;
+    while (row.superview && row.bounds.size.width < w.bounds.size.width * 0.9) row = row.superview;
+    if (!row.superview || row.bounds.size.height > 120) return;
+    for (UIView *s in row.superview.subviews) if (s != row && s.bounds.size.height <= 1.5 && s.bounds.size.width >= w.bounds.size.width * 0.8) s.hidden = YES;
+    for (UIView *s in row.subviews) if (s.bounds.size.height <= 1.5 && s.bounds.size.width >= w.bounds.size.width * 0.8) s.hidden = YES;
+    UIView *g = [row viewWithTag:GLASS_TAG + 9];
+    if (!g) { g = GlassView(row); g.tag = GLASS_TAG + 9; [row insertSubview:g atIndex:0]; }
+    CGFloat h = MIN(row.bounds.size.height - 8, 52);
+    CGRect gf = CGRectMake(16, CGRectGetMidY([to convertRect:to.bounds toView:row]) - h / 2, row.bounds.size.width - 32, h);
+    if (!CGRectEqualToRect(g.frame, gf)) { g.frame = gf; g.layer.cornerRadius = h / 2; }
+    if (CGRectGetMinX(to.frame) < 30 && to.superview == row) { CGRect f = to.frame; f.origin.x = 32; to.frame = f; }
+    UIButton *add = (UIButton *)Find(row, ^BOOL(UIView *v) { return [v isKindOfClass:[UIButton class]] && v.bounds.size.width < 60; }, 200);
+    if (add) {
+        add.tintColor = Ink(row);
+        UIView *c = [add.superview viewWithTag:GLASS_TAG + 10];
+        if (!c) { c = GlassView(add); c.tag = GLASS_TAG + 10; [add.superview insertSubview:c belowSubview:add]; }
+        CGRect af = add.frame; CGFloat d = 34;
+        CGRect cf = CGRectMake(CGRectGetMidX(af) - d / 2, CGRectGetMidY(af) - d / 2, d, d);
+        if (!CGRectEqualToRect(c.frame, cf)) { c.frame = cf; c.layer.cornerRadius = d / 2; }
+        UIImage *plus = [UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightBold]];
+        if (![[add imageForState:UIControlStateNormal].description containsString:@"plus)"]) [add setImage:plus forState:UIControlStateNormal];
+    }
+}
 static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
     TopBlur(nb);
+    @try { CancelToX(nb.topItem); } @catch (__unused id e) {}
     nb.tintColor = Ink(nb);
     // see-through bar for good (scrolling brought the gray back)
     if (!objc_getAssociatedObject(nb, "m26app")) {
@@ -734,9 +790,9 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
                 objc_setAssociatedObject(v, "m26ft", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [(UIControl *)v addTarget:[M26FaceTime shared] action:@selector(tap:) forControlEvents:UIControlEventTouchDown];
             }
-            if (left || right) { GlassBehind(v, left ? 10 : 9, right ? 9 : 7, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
+            if (left || right) { GlassBehind(v, left ? 10 : 7, right ? 7 : 7, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
         }
-        if (chat && [v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
+        if (chat && [v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && ((UILabel *)v).font.pointSize < 16 && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
             UILabel *l = (UILabel *)v;
             UIView *holder = l;
             // the label and its ">" share a small parent: cover both
@@ -805,6 +861,7 @@ static void Tick(void) {
         [w addGestureRecognizer:lp];
     }
     @try { StyleNav(w); } @catch (__unused id e) {}
+    if (gTopOn) { @try { for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) if ([sc isKindOfClass:[UIWindowScene class]]) for (UIWindow *x in ((UIWindowScene *)sc).windows) StyleToField(x); } @catch (__unused id e) {} }
     // the entry view lives in the keyboard's window too: style it wherever it is
     UIView *e = gEntry;
     if (!e.window) {
@@ -825,7 +882,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.6.2 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.7.0 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
