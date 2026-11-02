@@ -1,4 +1,5 @@
 // Messages26 0.18.8 - made by nano
+// 0.18.9: contact photo found anywhere on the page and moved up with the name
 // 0.18.8: contact page photo + name a little higher
 // 0.18.7: any swipe out of the full background view puts the messages back
 // 0.18.6: reactions slide along with a message when you swipe to reply
@@ -2231,7 +2232,24 @@ static void StyleDetails(UIWindow *w) {
               if (above && (isName || isPic)) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, -18); if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t; continue; }
               if (![row isDescendantOfView:v] && v != hc && CGRectGetMinY(r) > T) continue;
               [st2 addObjectsFromArray:v.subviews]; }
-      } }
+      }
+      // the photo can live outside that cell: biggest centered round/square view above the buttons
+      { UIView *pic = nil; CGFloat bw = 0; CGFloat midX = root.bounds.size.width / 2;
+        NSMutableArray *st3 = [NSMutableArray arrayWithObject:root]; int g3 = 0;
+        while (st3.count && g3++ < 900) { UIView *v = st3.lastObject; [st3 removeLastObject];
+            if (v.hidden || v.alpha < 0.05 || v == tabs) continue;
+            CGSize sz = v.bounds.size;
+            CGRect r = [v convertRect:v.bounds toView:row];
+            CGRect rr = [v convertRect:v.bounds toView:root];
+            BOOL ok = v != root && ![v isKindOfClass:[UILabel class]] && ![row isDescendantOfView:v] && ![v isDescendantOfView:row]
+                && CGRectGetMaxY(r) <= T + 2 && sz.width >= 50 && sz.width <= 300 && fabs(sz.width - sz.height) < sz.width * 0.12
+                && fabs(CGRectGetMidX(rr) - midX) < 30;
+            if (ok && sz.width > bw) { bw = sz.width; pic = v; }
+            if (!ok) [st3 addObjectsFromArray:v.subviews]; }
+        if (pic) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, -18);
+            for (UIView *a = pic.superview; a; a = a.superview) if (CGAffineTransformEqualToTransform(a.transform, t)) { pic = nil; break; }
+            if (pic && !CGAffineTransformEqualToTransform(pic.transform, t)) pic.transform = t; } }
+    }
     @try { StyleBgTab(vc); } @catch (__unused id e) {}
     @try { StyleBubblePill(vc); } @catch (__unused id e) {}
     gDetDebug = [NSString stringWithFormat:@"details: %@ tiles=%@ T=%.0f B=%.0f table=%@", NSStringFromClass([vc class]), [tiles.allKeys componentsJoinedByString:@","], T, B, gDetTable ? NSStringFromClass([gDetTable class]) : @"-"];
