@@ -1,4 +1,5 @@
-// Messages26 0.18.3 - made by nano
+// Messages26 0.18.4 - made by nano
+// 0.18.4: 3D reactions only (no animations), icons centered
 // 0.18.3: real 3D tapback icons (iOS 18 style) on bubbles and in the tapback picker
 // 0.18.2: Custom frames (any 3 emojis + color / match photo), Ignored Words for Spelling Fix, much richer 3D reactions
 // 0.18.1: 3D tapbacks (glossy emoji that turns) and 3D reaction bursts
@@ -4431,34 +4432,12 @@ static void Glyph3D(UIView *g, BOOL popIn) {
         UIImage *im = Glyph3DImage(type);
         mine = [CALayer layer]; mine.name = @"m26g3d"; [mine setValue:type forKey:@"m26type"];
         mine.contents = (id)im.CGImage; mine.contentsGravity = kCAGravityResizeAspect;
-        // a moving shine across the icon
-        CAGradientLayer *sh = [CAGradientLayer layer]; sh.name = @"sh";
-        sh.colors = @[(id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.7].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
-        sh.startPoint = CGPointMake(0, 0.2); sh.endPoint = CGPointMake(1, 0.8); sh.locations = @[@0.42, @0.5, @0.58];
-        CALayer *hold = [CALayer layer]; hold.name = @"hold"; CALayer *mk = [CALayer layer]; mk.contents = (id)im.CGImage; mk.contentsGravity = kCAGravityResizeAspect; hold.mask = mk;
-        [hold addSublayer:sh]; [mine addSublayer:hold];
         [g.layer addSublayer:mine];
-        CATransform3D p = CATransform3DIdentity; p.m34 = -1.0 / 90; g.layer.sublayerTransform = p;
-        CAKeyframeAnimation *ry = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.y"]; ry.values = @[@0, @0.5, @0, @-0.5, @0]; ry.duration = 3.6; ry.repeatCount = HUGE_VALF; ry.removedOnCompletion = NO; ry.calculationMode = kCAAnimationCubic;
-        CAKeyframeAnimation *rx = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.x"]; rx.values = @[@0.22, @-0.22, @0.22]; rx.duration = 2.8; rx.repeatCount = HUGE_VALF; rx.removedOnCompletion = NO; rx.calculationMode = kCAAnimationCubic;
-        [mine addAnimation:ry forKey:@"ry"]; [mine addAnimation:rx forKey:@"rx"];
-        CABasicAnimation *mv = [CABasicAnimation animationWithKeyPath:@"position.x"]; mv.duration = 1.6; mv.repeatCount = HUGE_VALF; mv.removedOnCompletion = NO; mv.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-        [sh setValue:mv forKey:@"m26mv"];
-        if (popIn) {
-            CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; pop.values = @[@0, @1.5, @0.85, @1.1, @1]; pop.duration = 0.7;
-            CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.y"]; spin.fromValue = @(-M_PI * 2); spin.toValue = @0; spin.duration = 0.7;
-            [mine addAnimation:pop forKey:@"pop"]; [mine addAnimation:spin forKey:@"spin"];
-        }
     }
     [CATransaction begin]; [CATransaction setDisableActions:YES];
-    CGRect f = CGRectMake((g.bounds.size.width - d) / 2, (g.bounds.size.height - d) / 2, d, d);
-    if (!CGRectEqualToRect(mine.frame, f)) {
-        mine.frame = f;
-        CALayer *hold = nil; for (CALayer *x in mine.sublayers) if ([x.name isEqualToString:@"hold"]) hold = x;
-        hold.frame = mine.bounds; hold.mask.frame = hold.bounds;
-        CAGradientLayer *sh = (CAGradientLayer *)hold.sublayers.firstObject; sh.frame = CGRectMake(-d, 0, d * 3, d);
-        CABasicAnimation *mv = [sh valueForKey:@"m26mv"]; mv.fromValue = @(-d * 0.5); mv.toValue = @(d * 1.5); [sh addAnimation:mv forKey:@"shine"];
-    }
+    // centered (a touch lower than the box, like Apple's own glyph sits)
+    CGRect f = CGRectMake((g.bounds.size.width - d) / 2, (g.bounds.size.height - d) / 2 + d * 0.06, d, d);
+    if (!CGRectEqualToRect(mine.frame, f)) mine.frame = f;
     [CATransaction commit];
 }
 static void Ack3D(UIView *b, id item) {
@@ -4483,7 +4462,7 @@ static void AckCfg(UIView *self, SEL _cmd, id item) {
     origAckCfg(self, _cmd, item);
     objc_setAssociatedObject(self, "m26ackitem", item, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     @try { Ack3D(self, item); } @catch (__unused id e) {}
-    if (!Opt(@"react")) return;
+    if (YES) return;   // 3D icons only, no burst
     @try {
         if (![gAckChat isEqualToString:gChatKeyNow]) { gAckChat = gChatKeyNow; gAckSeen = [NSMutableDictionary dictionary]; gAckReadyAt = [NSDate date].timeIntervalSince1970 + 1.5; }
         NSString *guid = nil; @try { guid = [item valueForKey:@"guid"]; } @catch (__unused id e) {}
@@ -4516,7 +4495,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"readtime", @"Live Read Time", @"eye.fill", UIColor.systemGreenColor, @"\"Read 7:53 PM\" becomes \"Read 2m ago\" and keeps counting."],
              @[@"spell", @"Spelling Fix", @"textformat.abc.dottedunderline", UIColor.systemBlueColor, @"While you type, a glass \"Fix typos\" chip shows up above the message box when something's misspelled. Works on your phone, nothing is sent anywhere."],
              @[@"mood", @"Mood Detection", @"face.smiling.fill", UIColor.systemYellowColor, @"A small mood pill under their name (😊 Happy, 😐 Neutral, 😢 Upset…) from their latest messages, worked out on your phone."],
-             @[@"react", @"Reaction Effects", @"heart.circle.fill", UIColor.systemRedColor, @"When a tapback lands, its emoji bursts out and floats up from the message."],
+             @[@"react", @"3D Reactions", @"heart.circle.fill", UIColor.systemRedColor, @"Tapbacks become 3D icons (glossy heart, HA HA, !!, ?) on messages and in the tapback picker."],
              @[@"save", @"Saved Messages", @"bookmark.fill", UIColor.systemOrangeColor, @"Hold a message → Save Message. Find them all here."],
              @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."]];
 }
@@ -4525,7 +4504,6 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     if (s == 0) return 1;
     NSString *k = FeatRows()[s - 1][0];
     if ([k isEqualToString:@"lock"] && Opt(@"lock")) return 3;
-    if ([k isEqualToString:@"react"] && Opt(@"react")) return 2;
     if ([k isEqualToString:@"spell"] && Opt(@"spell")) return 2;
     if ([k isEqualToString:@"save"] && Opt(@"save")) return 2;
     if ([k isEqualToString:@"remind"] && Opt(@"remind")) return 2;
@@ -4939,7 +4917,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.3 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.4 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
