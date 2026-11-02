@@ -1,4 +1,5 @@
 // Messages26 0.18.8 - made by nano
+// 0.18.14: jelly bounce on search / new message / settings / Edit / + pills, iMessage box same glass as search, smoother + menu, iOS 26 settings
 // 0.18.13: tabs centered when there are only a few; moved photo no longer cut off at the top
 // 0.18.12: contact photo moves up (its full-width avatar box); Links / Documents / Collaboration tabs only when the chat has some
 // 0.18.11: contact photo search skips the lower page so it reaches the header
@@ -420,16 +421,24 @@ static NSArray *MenuItems(void) {
     [self layoutRows:NO except:nil];
     [w addSubview:_panel];
     plus.alpha = 0;   // the glass leaves the button
-    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.6 options:0 animations:^{
+    // one smooth spring: the circle stretches into the menu, corners easing with it
+    _panel.layer.shadowOpacity = 0;
+    [UIView animateWithDuration:0.58 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.2 options:UIViewAnimationOptionAllowUserInteraction animations:^{
         self->_panel.frame = full;
+        self->_glass.layer.cornerRadius = 34;
         self->_dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25];
     } completion:nil];
-    CABasicAnimation *cr = [CABasicAnimation animationWithKeyPath:@"cornerRadius"];
-    cr.fromValue = @(pf.size.width / 2); cr.toValue = @34; cr.duration = 0.3;
-    cr.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
-    _glass.layer.cornerRadius = 34;
-    [_glass.layer addAnimation:cr forKey:@"cr"];
-    [UIView animateWithDuration:0.2 delay:0.1 options:0 animations:^{ self->_sv.alpha = 1; } completion:nil];
+    CABasicAnimation *sh = [CABasicAnimation animationWithKeyPath:@"shadowOpacity"];
+    sh.fromValue = @0; sh.toValue = @0.35; sh.duration = 0.4;
+    _panel.layer.shadowOpacity = 0.35; [_panel.layer addAnimation:sh forKey:@"sh"];
+    _sv.alpha = 1;
+    // rows float in one after another
+    NSUInteger ri = 0;
+    for (UIView *r in _rows) {
+        r.alpha = 0; r.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.94, 0.94), CGAffineTransformMakeTranslation(0, 16));
+        [UIView animateWithDuration:0.5 delay:0.07 + MIN(ri, 10) * 0.025 usingSpringWithDamping:0.78 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ r.alpha = 1; r.transform = CGAffineTransformIdentity; } completion:nil];
+        ri++;
+    }
 }
 - (void)down:(UIButton *)b { [UIView animateWithDuration:0.15 animations:^{ b.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.18]; b.transform = CGAffineTransformMakeScale(0.97, 0.97); }]; }
 - (void)up:(UIButton *)b { [UIView animateWithDuration:0.25 animations:^{ b.backgroundColor = UIColor.clearColor; b.transform = CGAffineTransformIdentity; }]; }
@@ -476,19 +485,16 @@ static NSArray *MenuItems(void) {
     _panel = nil; _dim = nil;
     if (!panel) { plus.alpha = 1; if (then) then(); return; }
     CGRect pf = [plus convertRect:plus.bounds toView:panel.superview];
-    [UIView animateWithDuration:0.12 animations:^{ sv.alpha = 0; }];
-    CABasicAnimation *cr = [CABasicAnimation animationWithKeyPath:@"cornerRadius"];
-    cr.fromValue = @34; cr.toValue = @(pf.size.width / 2); cr.duration = 0.28;
-    glass.layer.cornerRadius = pf.size.width / 2;
-    [glass.layer addAnimation:cr forKey:@"cr"];
-    [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.3 options:0 animations:^{
+    [UIView animateWithDuration:0.14 animations:^{ sv.alpha = 0; }];
+    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.88 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
         panel.frame = pf;
+        glass.layer.cornerRadius = pf.size.width / 2;
         dim.backgroundColor = UIColor.clearColor;
     } completion:^(__unused BOOL d) {
         plus.alpha = 1;
         [panel removeFromSuperview]; [dim removeFromSuperview];
         CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-        k.values = @[@1, @1.12, @0.96, @1]; k.duration = 0.35;
+        k.values = @[@1, @1.14, @0.94, @1.03, @1]; k.duration = 0.5;
         [plus.layer addAnimation:k forKey:@"m26.swallow"];
     }];
     if (then) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), then);
@@ -559,6 +565,56 @@ static void UnstyleEntry(UIView *entry, UIView *field, UIView *container) {
 }
 // iOS 26 field edge: a thin rim that's bright along the top and fades toward the
 // bottom, plus a faint sheen inside the top half.
+// Jelly press (iOS 26): squish when touched, wobble back when let go.
+static char kGlassKey;
+static NSArray *JellyParts(UIView *v) {
+    NSMutableArray *a = [NSMutableArray arrayWithObject:v];
+    for (UIView *p = v; p && a.count == 1; p = p.superview) { UIView *g = objc_getAssociatedObject(p, &kGlassKey); if (g.superview) { if (p != v) [a replaceObjectAtIndex:0 withObject:p]; [a addObject:g]; } if (p != v && p.superview && p.bounds.size.width > 200) break; }
+    return a;
+}
+static void JellyDown(UIView *v) {
+    if (!v) return;
+    for (UIView *x in JellyParts(v)) {
+        CATransform3D now = x.layer.presentationLayer ? x.layer.presentationLayer.transform : x.layer.transform;
+        [x.layer removeAnimationForKey:@"m26.jelly"];
+        x.layer.transform = now;
+        [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+            x.transform = CGAffineTransformMakeScale(1.09, 0.92);
+        } completion:nil];
+    }
+}
+static void JellyUp(UIView *v) {
+    if (!v) return;
+    for (UIView *x in JellyParts(v)) {
+        CATransform3D from = x.layer.presentationLayer ? x.layer.presentationLayer.transform : x.layer.transform;
+        [x.layer removeAllAnimations];
+        [CATransaction begin]; [CATransaction setDisableActions:YES]; x.transform = CGAffineTransformIdentity; [CATransaction commit];
+        CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform"];
+        k.values = @[[NSValue valueWithCATransform3D:from],
+                     [NSValue valueWithCATransform3D:CATransform3DMakeScale(0.93, 1.08, 1)],
+                     [NSValue valueWithCATransform3D:CATransform3DMakeScale(1.05, 0.96, 1)],
+                     [NSValue valueWithCATransform3D:CATransform3DMakeScale(0.985, 1.015, 1)],
+                     [NSValue valueWithCATransform3D:CATransform3DIdentity]];
+        k.keyTimes = @[@0, @0.25, @0.5, @0.75, @1];
+        k.timingFunctions = @[[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
+        k.duration = 0.6;
+        [x.layer addAnimation:k forKey:@"m26.jelly"];
+    }
+}
+@interface M26Jelly : NSObject
++ (instancetype)shared;
+@end
+@implementation M26Jelly
++ (instancetype)shared { static M26Jelly *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Jelly new]; }); return t; }
+- (void)down:(UIView *)b { JellyDown(b); }
+- (void)up:(UIView *)b { JellyUp(b); }
+@end
+static void AddJelly(UIControl *c) {
+    if (![c isKindOfClass:[UIControl class]] || objc_getAssociatedObject(c, "m26jelly")) return;
+    objc_setAssociatedObject(c, "m26jelly", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [c addTarget:[M26Jelly shared] action:@selector(down:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
+    [c addTarget:[M26Jelly shared] action:@selector(up:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchDragExit];
+}
 static void RimFit(UIView *v, BOOL dark) {
     CGFloat r = v.layer.cornerRadius;
     CAGradientLayer *rim = nil;
@@ -717,14 +773,12 @@ static void StyleEntry(UIView *entry) {
         [pill removeFromSuperview];
         pill = [UIView new]; pill.tag = PILL_TAG; pill.userInteractionEnabled = NO;
         pill.layer.cornerCurve = kCACornerCurveContinuous; pill.layer.borderWidth = 1;
-        CAGradientLayer *hl = [CAGradientLayer layer]; hl.name = @"m26.sheen";
-        hl.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.07].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
-        hl.startPoint = CGPointMake(0.5, 0); hl.endPoint = CGPointMake(0.5, 0.5);
-        [pill.layer addSublayer:hl];
         [pHost insertSubview:pill belowSubview:field];
     }
     if ([pHost.subviews indexOfObject:pill] > [pHost.subviews indexOfObject:field]) [pHost insertSubview:pill belowSubview:field];
-    pill.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1] : [UIColor colorWithWhite:0.96 alpha:1];
+    pill.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.97 alpha:0.97];
+    pill.layer.borderWidth = 0;
+    for (CALayer *l in [pill.layer.sublayers copy]) if ([l.name isEqualToString:@"m26.sheen"]) [l removeFromSuperlayer];
     pill.layer.borderColor = UIColor.clearColor.CGColor;
     CGRect pillIn = [entry convertRect:pillF toView:pHost];
     // in the field's space the move down is already in field's transform: follow it
@@ -784,6 +838,7 @@ static void StyleEntry(UIView *entry) {
         [plus addSubview:g];
         [plus setImage:[UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium]] forState:UIControlStateNormal];
         [plus addTarget:[M26Menu shared] action:@selector(open:) forControlEvents:UIControlEventTouchUpInside];
+        AddJelly(plus);
         UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[M26Menu shared] action:@selector(hold:)];
         lp.minimumPressDuration = 0.4;
         [plus addGestureRecognizer:lp];
@@ -847,7 +902,6 @@ static void EntryLayout(UIView *self, SEL _cmd) {
 #pragma mark - conversation top bar
 
 static NSHashTable *gStyled;   // nav things we put glass behind / changed
-static char kGlassKey;
 // What a view actually draws (its icons / text), not its whole tap area.
 static BOOL gDrewNothing;
 static CGRect DrawnRect(UIView *v) {
@@ -884,6 +938,7 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     if (!gStyled) gStyled = [NSHashTable weakObjectsHashTable];
     [gStyled addObject:v];
     UIVisualEffectView *g = objc_getAssociatedObject(v, &kGlassKey);
+    if (!inside && [v isKindOfClass:[UIControl class]]) AddJelly((UIControl *)v);
     if (!g || g.superview != host) {
         [g removeFromSuperview];
         g = GlassView(v); g.tag = GLASS_TAG;
@@ -1359,8 +1414,8 @@ static UIWindow *KeyWin(void) {
 }
 - (UISearchController *)sc { return self.list.navigationItem.searchController; }
 - (UITextField *)field { return (UITextField *)[KeyWin() viewWithTag:SEARCH_TAG + 4]; }
-- (void)down:(UIView *)b { [UIView animateWithDuration:0.18 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformMakeScale(1.06, 1.06); } completion:nil]; }
-- (void)up:(UIView *)b { [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil]; }
+- (void)down:(UIView *)b { JellyDown(b); }
+- (void)up:(UIView *)b { if (b.layer.animationKeys.count && [b.layer animationForKey:@"m26.jelly"]) return; JellyUp(b); }
 - (void)search:(UIView *)b {
     [self up:b];
     UISearchController *sc = [self sc];
@@ -3264,7 +3319,7 @@ static void OpenFramePicker(NSString *key, UIViewController *from) {
     pk.key = key; pk.name = ConvNameForKey(key);
     UINavigationController *nc = [[UINavigationController alloc] initWithRootViewController:pk];
     pk.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:pk action:@selector(m26done)];
-    if (@available(iOS 15.0, *)) { nc.sheetPresentationController.detents = @[UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent]; nc.sheetPresentationController.prefersGrabberVisible = YES; }
+    if (@available(iOS 15.0, *)) { nc.sheetPresentationController.detents = @[UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent]; nc.sheetPresentationController.prefersGrabberVisible = YES; nc.sheetPresentationController.preferredCornerRadius = 38; }
     UIViewController *top = from; while (top.presentedViewController && !top.presentedViewController.isBeingDismissed) top = top.presentedViewController;
     [top presentViewController:nc animated:YES completion:nil];
 }
@@ -4621,13 +4676,83 @@ static void AckCfg(UIView *self, SEL _cmd, id item) {
     } @catch (__unused id e) {}
 }
 
+static NSArray *FeatRows(void);
+// iOS 26 Settings look: colored rounded-square icons
+static UIImage *IconTile(NSString *sym, UIColor *c) {
+    static NSMutableDictionary *cache; if (!cache) cache = [NSMutableDictionary dictionary];
+    NSString *key = [NSString stringWithFormat:@"%@|%@", sym, c];
+    if (cache[key]) return cache[key];
+    CGFloat d = 30;
+    UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(d, d)];
+    UIImage *img = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        CGContextRef cg = ctx.CGContext;
+        UIBezierPath *p = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, d, d) cornerRadius:8];
+        CGContextSaveGState(cg); [p addClip];
+        CGFloat h, sa, b, a; if (![c getHue:&h saturation:&sa brightness:&b alpha:&a]) { h = 0; sa = 0; b = 0.5; }
+        UIColor *top = [UIColor colorWithHue:h saturation:sa * 0.82 brightness:MIN(1, b * 1.12) alpha:1];
+        UIColor *bot = [UIColor colorWithHue:h saturation:MIN(1, sa * 1.05) brightness:b * 0.86 alpha:1];
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        CGGradientRef gr = CGGradientCreateWithColors(cs, (__bridge CFArrayRef)@[(id)top.CGColor, (id)bot.CGColor], NULL);
+        CGContextDrawLinearGradient(cg, gr, CGPointMake(0, 0), CGPointMake(0, d), 0);
+        CGGradientRelease(gr); CGColorSpaceRelease(cs);
+        // glass sheen on top
+        [[UIColor colorWithWhite:1 alpha:0.16] setFill]; [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(-d * 0.3, -d * 0.75, d * 1.6, d * 1.15)] fill];
+        CGContextRestoreGState(cg);
+        UIImage *s = [[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold]] imageWithTintColor:UIColor.whiteColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+        CGSize ss = s.size; CGFloat k = MIN(1, MIN(20 / ss.width, 20 / ss.height));
+        [s drawInRect:CGRectMake((d - ss.width * k) / 2, (d - ss.height * k) / 2, ss.width * k, ss.height * k)];
+    }];
+    cache[key] = img;
+    return img;
+}
 @interface M26SettingsVC : UITableViewController
 @end
 @implementation M26SettingsVC
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Messages26";
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(done)];
+    self.title = @"Settings";
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
+    // glass checkmark (iOS 26 Done)
+    UIButton *ok = [UIButton buttonWithType:UIButtonTypeCustom];
+    ok.frame = CGRectMake(0, 0, 38, 38); ok.layer.cornerRadius = 19; ok.layer.cornerCurve = kCACornerCurveContinuous;
+    ok.backgroundColor = UIColor.systemBlueColor;
+    [ok setImage:[UIImage systemImageNamed:@"checkmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+    ok.tintColor = UIColor.whiteColor;
+    ok.layer.shadowColor = UIColor.systemBlueColor.CGColor; ok.layer.shadowOpacity = 0.35; ok.layer.shadowRadius = 8; ok.layer.shadowOffset = CGSizeMake(0, 3);
+    RimFit(ok, YES);
+    [ok addTarget:self action:@selector(done) forControlEvents:UIControlEventTouchUpInside];
+    AddJelly(ok);
+    [ok.widthAnchor constraintEqualToConstant:38].active = YES; [ok.heightAnchor constraintEqualToConstant:38].active = YES;
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:ok];
+    UITableView *tv = self.tableView;
+    tv.rowHeight = 54; tv.sectionHeaderTopPadding = 6;
+    tv.separatorInset = UIEdgeInsetsMake(0, 62, 0, 0);
+    @try { if ([tv respondsToSelector:NSSelectorFromString(@"_setSectionCornerRadius:")]) ((void (*)(id, SEL, CGFloat))objc_msgSend)(tv, NSSelectorFromString(@"_setSectionCornerRadius:"), 26); } @catch (__unused id e) {}
+    // header card: icon, name, what it is
+    UIView *hd = [[UIView alloc] initWithFrame:CGRectMake(0, 0, tv.bounds.size.width, 196)];
+    UIImageView *ic = [[UIImageView alloc] initWithImage:IconTile(@"bubble.left.and.bubble.right.fill", [UIColor colorWithRed:0.18 green:0.45 blue:1 alpha:1])];
+    ic.frame = CGRectMake(0, 18, 76, 76); ic.layer.cornerRadius = 20; ic.layer.cornerCurve = kCACornerCurveContinuous; ic.clipsToBounds = YES;
+    ic.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+    ic.center = CGPointMake(hd.bounds.size.width / 2, ic.center.y);
+    [hd addSubview:ic];
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(0, 104, hd.bounds.size.width, 32)];
+    t.text = @"Messages26"; t.font = [UIFont systemFontOfSize:26 weight:UIFontWeightBold]; t.textAlignment = NSTextAlignmentCenter;
+    t.autoresizingMask = UIViewAutoresizingFlexibleWidth; [hd addSubview:t];
+    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(30, 138, hd.bounds.size.width - 60, 40)];
+    sub.text = @"Extra features for Messages. Everything here is off until you turn it on.";
+    sub.font = [UIFont systemFontOfSize:14]; sub.textColor = UIColor.secondaryLabelColor; sub.numberOfLines = 2; sub.textAlignment = NSTextAlignmentCenter;
+    sub.autoresizingMask = UIViewAutoresizingFlexibleWidth; [hd addSubview:sub];
+    tv.tableHeaderView = hd;
+}
+- (void)tableView:(UITableView *)tv willDisplayCell:(UITableViewCell *)c forRowAtIndexPath:(NSIndexPath *)ip {
+    c.textLabel.font = [UIFont systemFontOfSize:17 weight:ip.row == 0 ? UIFontWeightMedium : UIFontWeightRegular];
+    if (ip.row > 0 && !c.imageView.image) c.indentationWidth = 46, c.indentationLevel = 1;
+}
+- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s {
+    if (s == 0) return @"Personalize";
+    NSString *k = FeatRows()[s - 1][0];
+    NSDictionary *h = @{@"lock": @"Privacy", @"fx": @"Chats", @"spell": @"Typing", @"save": @"Organize"};
+    return h[k];
 }
 - (void)viewWillAppear:(BOOL)an { [super viewWillAppear:an]; [self.tableView reloadData]; }
 - (void)done { [self dismissViewControllerAnimated:YES completion:nil]; }
@@ -4635,9 +4760,9 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     return @[@[@"lock", @"Chat Lock", @"lock.fill", UIColor.systemOrangeColor, @"Face ID before chosen chats open; their preview is hidden on the list."],
              @[@"fx", @"Keyword Effects", @"sparkles", UIColor.systemPinkColor, @"Emoji rain for words like \"love you\" ❤️, \"congrats\" 🎉, \"lol\" 😂, \"fire\" 🔥, \"good night\" 🌙."],
              @[@"readtime", @"Live Read Time", @"eye.fill", UIColor.systemGreenColor, @"\"Read 7:53 PM\" becomes \"Read 2m ago\" and keeps counting."],
-             @[@"spell", @"Spelling Fix", @"textformat.abc.dottedunderline", UIColor.systemBlueColor, @"While you type, a glass \"Fix typos\" chip shows up above the message box when something's misspelled. Works on your phone, nothing is sent anywhere."],
-             @[@"mood", @"Mood Detection", @"face.smiling.fill", UIColor.systemYellowColor, @"A small mood pill under their name (😊 Happy, 😐 Neutral, 😢 Upset…) from their latest messages, worked out on your phone."],
              @[@"react", @"3D Reactions", @"heart.circle.fill", UIColor.systemRedColor, @"Tapbacks become 3D icons (glossy heart, HA HA, !!, ?) on messages and in the tapback picker."],
+             @[@"mood", @"Mood Detection", @"face.smiling.fill", UIColor.systemYellowColor, @"A small mood pill under their name (😊 Happy, 😐 Neutral, 😢 Upset…) from their latest messages, worked out on your phone."],
+             @[@"spell", @"Spelling Fix", @"textformat.abc.dottedunderline", UIColor.systemBlueColor, @"While you type, a glass \"Fix typos\" chip shows up above the message box when something's misspelled. Works on your phone, nothing is sent anywhere."],
              @[@"save", @"Saved Messages", @"bookmark.fill", UIColor.systemOrangeColor, @"Hold a message → Save Message. Find them all here."],
              @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."]];
 }
@@ -4653,7 +4778,6 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     if ([k isEqualToString:@"sched"] && Opt(@"sched") && Scheduled().count) return 2;
     return 1;
 }
-- (NSString *)tableView:(UITableView *)tv titleForHeaderInSection:(NSInteger)s { return s == 1 ? @"Custom Features" : nil; }
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s {
     if (s == 0) return @"Animated frames around up to 3 people's photos. You can also hold a conversation and tap Set Frame.";
     NSString *f = FeatRows()[s - 1][4];
@@ -4664,14 +4788,14 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
     if (ip.section == 0) {
         c.textLabel.text = @"Contact Frames";
-        c.imageView.image = [UIImage systemImageNamed:@"person.crop.circle.badge.plus"]; c.imageView.tintColor = UIColor.systemPinkColor;
+        c.imageView.image = IconTile(@"person.crop.circle.fill", UIColor.systemPurpleColor);
         c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         return c;
     }
     NSArray *r = FeatRows()[ip.section - 1];
     if (ip.row == 0) {
         c.textLabel.text = r[1];
-        c.imageView.image = [UIImage systemImageNamed:r[2]]; c.imageView.tintColor = r[3];
+        c.imageView.image = IconTile(r[2], r[3]);
         UISwitch *sw = [UISwitch new]; sw.on = Opt(r[0]); sw.tag = ip.section;
         [sw addTarget:self action:@selector(toggle:) forControlEvents:UIControlEventValueChanged];
         c.accessoryView = sw; c.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -5065,7 +5189,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.18.13 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.18.14 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
