@@ -1,4 +1,5 @@
-// Messages26 0.17.0 - made by nano
+// Messages26 0.17.1 - made by nano
+// 0.17.1: search + smart badge removed; Message Animations (pick a send and a receive style)
 // 0.17.0: Search in Chat (tap the name on the contact page), Smart Unread Badge
 // 0.16.3: lock screen solid + hides the message bar; Cancel / 2 fails go to the list; Lock Again timer; scheduled send + auto unsend removed
 // 0.16.2: Face ID for locked chats runs in SpringBoard (no more crash)
@@ -3052,7 +3053,10 @@ static id CtxMenu(id self, SEL _cmd, UICollectionView *cv, NSIndexPath *ip, CGPo
 
 #pragma mark - extra features (all off by default, switched in Messages26 settings)
 
-static BOOL Opt(NSString *k) { if ([k isEqualToString:@"sched"] || [k isEqualToString:@"unsend"]) return NO; return gOn && [[NSUserDefaults standardUserDefaults] boolForKey:[@"m26.opt." stringByAppendingString:k]]; }
+static NSArray *AnimStyles(void);
+static NSString *AnimStyle(BOOL send);
+static void PreviewAnim(NSString *st, BOOL mine, UITableViewCell *c);
+static BOOL Opt(NSString *k) { if ([k isEqualToString:@"sched"] || [k isEqualToString:@"unsend"] || [k isEqualToString:@"search"] || [k isEqualToString:@"badge"]) return NO; return gOn && [[NSUserDefaults standardUserDefaults] boolForKey:[@"m26.opt." stringByAppendingString:k]]; }
 static void SetOpt(NSString *k, BOOL v) { [[NSUserDefaults standardUserDefaults] setBool:v forKey:[@"m26.opt." stringByAppendingString:k]]; }
 static NSArray *LockedKeys(void) { return [[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.locked"] ?: @[]; }
 __attribute__((unused)) static NSMutableSet *gUnlocked;
@@ -3700,6 +3704,81 @@ static void SmartBadge(UIWindow *w) {
     CGRect f = CGRectMake(CGRectGetMinX(nf), CGRectGetMidY(nf) - 11, wd, 22);
     if (!CGRectEqualToRect(mine.frame, f)) mine.frame = f;
 }
+
+// ---- custom send / receive animations ----
+static NSArray *AnimStyles(void) { return @[@"Pop", @"Jelly", @"Slide", @"Float", @"Drop", @"Zoom", @"Spin", @"Glow"]; }
+static NSString *AnimStyle(BOOL send) { return [[NSUserDefaults standardUserDefaults] stringForKey:send ? @"m26.animSend" : @"m26.animRecv"] ?: (send ? @"Pop" : @"Slide"); }
+static void RunAnim(CALayer *l, NSString *st, BOOL mine, CGFloat W) {
+    if (!l) return;
+    CFTimeInterval now = CACurrentMediaTime();
+    CAAnimationGroup *g = [CAAnimationGroup animation];
+    NSMutableArray *as = [NSMutableArray array];
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"]; fade.fromValue = @0; fade.toValue = @1; fade.duration = 0.18; [as addObject:fade];
+    CFTimeInterval dur = 0.6;
+    if ([st isEqualToString:@"Pop"]) {
+        CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; k.values = @[@0.3, @1.14, @0.95, @1.03, @1]; k.keyTimes = @[@0, @0.4, @0.65, @0.85, @1]; k.duration = 0.55; [as addObject:k]; dur = 0.55;
+    } else if ([st isEqualToString:@"Jelly"]) {
+        CAKeyframeAnimation *x = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"]; x.values = @[@0.5, @1.2, @0.88, @1.06, @0.98, @1]; x.duration = 0.7;
+        CAKeyframeAnimation *y = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"]; y.values = @[@1.4, @0.8, @1.1, @0.95, @1.02, @1]; y.duration = 0.7;
+        [as addObject:x]; [as addObject:y]; dur = 0.7;
+    } else if ([st isEqualToString:@"Slide"]) {
+        CASpringAnimation *sp = [CASpringAnimation animationWithKeyPath:@"transform.translation.x"]; sp.fromValue = @((mine ? 1 : -1) * W * 0.7); sp.toValue = @0; sp.damping = 14; sp.stiffness = 160; sp.mass = 1; sp.duration = sp.settlingDuration; [as addObject:sp]; dur = sp.duration;
+    } else if ([st isEqualToString:@"Float"]) {
+        CASpringAnimation *sp = [CASpringAnimation animationWithKeyPath:@"transform.translation.y"]; sp.fromValue = @90; sp.toValue = @0; sp.damping = 13; sp.stiffness = 150; sp.duration = sp.settlingDuration;
+        CABasicAnimation *sc = [CABasicAnimation animationWithKeyPath:@"transform.scale"]; sc.fromValue = @0.8; sc.toValue = @1; sc.duration = 0.45; sc.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+        [as addObject:sp]; [as addObject:sc]; dur = sp.duration;
+    } else if ([st isEqualToString:@"Drop"]) {
+        CASpringAnimation *sp = [CASpringAnimation animationWithKeyPath:@"transform.translation.y"]; sp.fromValue = @-120; sp.toValue = @0; sp.damping = 8; sp.stiffness = 180; sp.duration = sp.settlingDuration; [as addObject:sp]; dur = sp.duration;
+    } else if ([st isEqualToString:@"Zoom"]) {
+        CASpringAnimation *sp = [CASpringAnimation animationWithKeyPath:@"transform.scale"]; sp.fromValue = @1.8; sp.toValue = @1; sp.damping = 16; sp.stiffness = 200; sp.duration = sp.settlingDuration;
+        fade.duration = 0.3; [as addObject:sp]; dur = sp.duration;
+    } else if ([st isEqualToString:@"Spin"]) {
+        CASpringAnimation *r = [CASpringAnimation animationWithKeyPath:@"transform.rotation.z"]; r.fromValue = @((mine ? -1 : 1) * 0.6); r.toValue = @0; r.damping = 10; r.stiffness = 170; r.duration = r.settlingDuration;
+        CASpringAnimation *sc = [CASpringAnimation animationWithKeyPath:@"transform.scale"]; sc.fromValue = @0.4; sc.toValue = @1; sc.damping = 12; sc.stiffness = 170; sc.duration = sc.settlingDuration;
+        [as addObject:r]; [as addObject:sc]; dur = MAX(r.duration, sc.duration);
+    } else if ([st isEqualToString:@"Glow"]) {
+        CAKeyframeAnimation *sc = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; sc.values = @[@0.85, @1.05, @1]; sc.duration = 0.5; [as addObject:sc];
+        l.shadowColor = [UIColor colorWithRed:0.4 green:0.65 blue:1 alpha:1].CGColor; l.shadowOffset = CGSizeZero; l.shadowRadius = 14;
+        CAKeyframeAnimation *gl = [CAKeyframeAnimation animationWithKeyPath:@"shadowOpacity"]; gl.values = @[@0, @1, @0]; gl.duration = 1.2; [as addObject:gl]; dur = 1.2;
+    }
+    g.animations = as; g.duration = dur; g.beginTime = now; g.fillMode = kCAFillModeBackwards;
+    [l addAnimation:g forKey:@"m26msg"];
+}
+static void PreviewAnim(NSString *st, BOOL mine, UITableViewCell *c) {
+    UIView *v = c.contentView;
+    UIView *b = [[UIView alloc] initWithFrame:CGRectMake(mine ? v.bounds.size.width - 110 : 20, 6, 90, 30)];
+    b.backgroundColor = mine ? DeepBlue() : [UIColor colorWithWhite:0.25 alpha:1]; b.layer.cornerRadius = 15; b.userInteractionEnabled = NO;
+    UILabel *l = [[UILabel alloc] initWithFrame:b.bounds]; l.text = @"Hey 👋"; l.textAlignment = NSTextAlignmentCenter; l.textColor = UIColor.whiteColor; l.font = [UIFont systemFontOfSize:15]; [b addSubview:l];
+    [v addSubview:b];
+    RunAnim(b.layer, st, mine, v.bounds.size.width);
+    [UIView animateWithDuration:0.3 delay:1.3 options:0 animations:^{ b.alpha = 0; } completion:^(__unused BOOL f) { [b removeFromSuperview]; }];
+}
+static void (*origWillDisplay)(id, SEL, UICollectionView *, UICollectionViewCell *, NSIndexPath *);
+static void WillDisplay(id self, SEL _cmd, UICollectionView *cv, UICollectionViewCell *cell, NSIndexPath *ip) {
+    origWillDisplay(self, _cmd, cv, cell, ip);
+    if (!Opt(@"anim")) return;
+    @try {
+        NSArray *items = nil; @try { items = [self valueForKey:@"chatItems"]; } @catch (__unused id e) {}
+        NSInteger idx = cv.numberOfSections == 1 ? ip.item : ip.section;
+        if (![items isKindOfClass:[NSArray class]] || idx < 0 || idx >= (NSInteger)items.count) return;
+        id it = items[idx];
+        NSString *guid = nil; @try { guid = [it valueForKey:@"guid"]; } @catch (__unused id e) {}
+        if (!guid) return;
+        NSMutableSet *seen = objc_getAssociatedObject(cv, "m26seen");
+        NSNumber *ready = objc_getAssociatedObject(cv, "m26ready");
+        if (!seen) {
+            seen = [NSMutableSet set]; objc_setAssociatedObject(cv, "m26seen", seen, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ objc_setAssociatedObject(cv, "m26ready", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); });
+        }
+        BOOL isNew = ![seen containsObject:guid];
+        [seen addObject:guid];
+        if (!isNew || !ready || idx < (NSInteger)items.count - 3) return;   // only brand-new messages at the bottom
+        UIView *b = BalloonIn(cell);
+        if (!b) return;
+        BOOL mine = ItemFromMe(it);
+        RunAnim(b.layer, AnimStyle(mine), mine, cv.bounds.size.width);
+    } @catch (__unused id e) {}
+}
 static void StyleFeatures(UIWindow *w) {
     @try { CheckScheduled(); } @catch (__unused id e) {}
     @try { ChatLock(w); } @catch (__unused id e) {}
@@ -3748,14 +3827,14 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     return @[@[@"lock", @"Chat Lock", @"lock.fill", UIColor.systemOrangeColor, @"Face ID before chosen chats open; their preview is hidden on the list."],
              @[@"fx", @"Keyword Effects", @"sparkles", UIColor.systemPinkColor, @"Emoji rain for words like \"love you\" ❤️, \"congrats\" 🎉, \"lol\" 😂, \"fire\" 🔥, \"good night\" 🌙."],
              @[@"readtime", @"Live Read Time", @"eye.fill", UIColor.systemGreenColor, @"\"Read 7:53 PM\" becomes \"Read 2m ago\" and keeps counting."],
-             @[@"search", @"Search in Chat", @"magnifyingglass.circle.fill", UIColor.systemIndigoColor, @"On a contact's page, tap their name at the top to search that chat and jump to a message."],
-             @[@"badge", @"Smart Unread Badge", @"bubble.left.and.exclamationmark.bubble.right.fill", UIColor.systemTealColor, @"The back button shows who texted last, like \"Kamali · 3\"."]];
+             @[@"anim", @"Message Animations", @"wand.and.stars", UIColor.systemPurpleColor, @"Your own animation when a message is sent or arrives. Pick a style for each below."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
     if (s == 0) return 1;
     NSString *k = FeatRows()[s - 1][0];
     if ([k isEqualToString:@"lock"] && Opt(@"lock")) return 3;
+    if ([k isEqualToString:@"anim"] && Opt(@"anim")) return 3;
     if ([k isEqualToString:@"unsend"] && Opt(@"unsend")) return 2;
     if ([k isEqualToString:@"sched"] && Opt(@"sched") && Scheduled().count) return 2;
     return 1;
@@ -3782,6 +3861,27 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
         UISwitch *sw = [UISwitch new]; sw.on = Opt(r[0]); sw.tag = ip.section;
         [sw addTarget:self action:@selector(toggle:) forControlEvents:UIControlEventValueChanged];
         c.accessoryView = sw; c.selectionStyle = UITableViewCellSelectionStyleNone;
+        return c;
+    }
+    if ([r[0] isEqualToString:@"anim"]) {
+        BOOL send = ip.row == 1;
+        c.textLabel.text = send ? @"Sending" : @"Receiving"; c.selectionStyle = UITableViewCellSelectionStyleNone;
+        NSString *cur = AnimStyle(send);
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+        [b setTitle:[cur stringByAppendingString:@" ▾"] forState:UIControlStateNormal]; b.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium];
+        NSMutableArray *acts = [NSMutableArray array];
+        for (NSString *st in AnimStyles()) {
+            UIAction *a = [UIAction actionWithTitle:st image:nil identifier:nil handler:^(__unused UIAction *x) {
+                [[NSUserDefaults standardUserDefaults] setObject:st forKey:send ? @"m26.animSend" : @"m26.animRecv"];
+                [b setTitle:[st stringByAppendingString:@" ▾"] forState:UIControlStateNormal]; [b sizeToFit];
+                [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+                PreviewAnim(st, send, c);
+            }];
+            if ([st isEqualToString:cur]) a.state = UIMenuElementStateOn;
+            [acts addObject:a];
+        }
+        b.menu = [UIMenu menuWithTitle:send ? @"When you send" : @"When it arrives" children:acts]; b.showsMenuAsPrimaryAction = YES;
+        [b sizeToFit]; c.accessoryView = b;
         return c;
     }
     if ([r[0] isEqualToString:@"lock"] && ip.row == 2) {
@@ -4132,7 +4232,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.17.0 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.17.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -4228,6 +4328,8 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         MSHookMessageEx([UITextView class], @selector(setTextContainerInset:), (IMP)TVInset, (IMP *)&origTVInset);
         @try { HookThemes(); } @catch (__unused id ex) {}
         @try { HookDetailsTable(); } @catch (__unused id ex) {}
+        { Class TC = NSClassFromString(@"CKTranscriptCollectionViewController"); SEL wd = @selector(collectionView:willDisplayCell:forItemAtIndexPath:);
+          if (TC && class_getInstanceMethod(TC, wd)) MSHookMessageEx(TC, wd, (IMP)WillDisplay, (IMP *)&origWillDisplay); }
         { SEL cm = @selector(collectionView:contextMenuConfigurationForItemAtIndexPath:point:);
           Class LC = NSClassFromString(@"CKConversationListCollectionViewController");
           if (LC && class_getInstanceMethod(LC, cm)) MSHookMessageEx(LC, cm, (IMP)CtxMenu, (IMP *)&origCtxMenu); }
