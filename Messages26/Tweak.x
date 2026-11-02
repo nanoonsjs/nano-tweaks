@@ -1,4 +1,6 @@
-// Messages26 0.7.3 - made by nano
+// Messages26 0.7.4 - made by nano
+// 0.7.4: back to moving just the field row (no blur), right on the keyboard / just above the home bar;
+//        To: capsule matches the message pill, its + sits inside under the X
 // 0.7.3: the whole bar moves down (pill touches the keyboard / sits just above the home bar),
 //        iOS 26 dark field look, To: + centred in the capsule with a white plus
 // 0.7.2: row sits right on the keyboard / just above the home bar, liquid glass pill again,
@@ -506,21 +508,32 @@ static void StyleEntry(UIView *entry) {
         // pieces we moved in older builds: back in place
         NSMutableArray *rs = [NSMutableArray arrayWithArray:entry.subviews]; int gr = 0;
         while (rs.count && gr++ < 300) { UIView *v = rs.lastObject; [rs removeLastObject];
-            if (v.tag != PLUS_TAG && v.tag != PILL_TAG && !CGAffineTransformIsIdentity(v.transform) && v.tag != MENU_TAG) v.transform = CGAffineTransformIdentity;
+            if (v.tag != PLUS_TAG && v.tag != PILL_TAG && v != field && ![v isKindOfClass:[UIControl class]] && !CGAffineTransformIsIdentity(v.transform)) v.transform = CGAffineTransformIdentity;
             [rs addObjectsFromArray:v.subviews]; }
-        // The whole bar moves down: the field row lands right on the keyboard
-        // (the hidden app row's space goes under it) or just above the home bar.
-        CGAffineTransform keep = entry.transform;
-        entry.transform = CGAffineTransformIdentity;
+        if (!CGAffineTransformIsIdentity(entry.transform)) entry.transform = CGAffineTransformIdentity;
+        // The field row (text box + mic / send) moves down: onto the keyboard when it's
+        // up (where the hidden app row was), else to just above the home bar.
         UIWindow *ew = entry.window;
+        NSMutableArray *row = [NSMutableArray arrayWithObject:field];
+        for (UIView *v in @[field]) v.transform = CGAffineTransformIdentity;
+        CGRect fu = [field convertRect:field.bounds toView:entry];
+        NSMutableArray *cs = [NSMutableArray arrayWithArray:entry.subviews]; int gc = 0;
+        while (cs.count && gc++ < 300) { UIView *v = cs.lastObject; [cs removeLastObject];
+            if (v == field || v.tag == PLUS_TAG || v.tag == PILL_TAG || v == strip || [v isDescendantOfView:field]) continue;
+            if ([v isKindOfClass:[UIControl class]] && v.alpha > 0.05 && !v.hidden && v.bounds.size.width < 60) {
+                CGRect vf = [v.superview convertRect:CGRectMake(v.center.x - v.bounds.size.width / 2, v.center.y - v.bounds.size.height / 2, v.bounds.size.width, v.bounds.size.height) toView:entry];
+                if (CGRectGetMidX(vf) > CGRectGetMidX(fu) && fabs(CGRectGetMidY(vf) - CGRectGetMidY(fu)) < 26) { [row addObject:v]; continue; }
+            }
+            [cs addObjectsFromArray:v.subviews]; }
         CGRect ef = [entry convertRect:entry.bounds toView:nil];
-        CGFloat rowBottom = CGRectGetMaxY([field convertRect:field.bounds toView:nil]) + 6;
-        CGFloat target = gKbTop > 0 ? CGRectGetMaxY(ef) - 2 : ew.bounds.size.height - ew.safeAreaInsets.bottom + 4;
+        BOOL kbUp = CGRectGetMaxY(ef) < ew.bounds.size.height - 120;   // the bar rides on the keyboard
+        CGFloat rowBottom = CGRectGetMaxY([entry convertRect:fu toView:nil]) + 6;
+        CGFloat target = kbUp ? CGRectGetMaxY(ef) - 4 : ew.bounds.size.height - ew.safeAreaInsets.bottom - 2;
         shift = MAX(0, target - rowBottom);
-        entry.transform = keep;
+        gKbTop = kbUp ? CGRectGetMaxY(ef) : 0;
         CGAffineTransform rt = CGAffineTransformMakeTranslation(0, shift);
-        if (!CGAffineTransformEqualToTransform(entry.transform, rt)) entry.transform = rt;
-        gRowOut = shift > 0;
+        for (UIView *v in row) if (!CGAffineTransformEqualToTransform(v.transform, rt)) v.transform = rt;
+        gRowOut = CGRectGetMaxY(fu) + shift + 6 > entry.bounds.size.height;
     } else if (strip) { strip.alpha = 1; strip.userInteractionEnabled = YES; }
     if (container) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, shift); if (!CGAffineTransformEqualToTransform(container.transform, t)) container.transform = t; }
     // Instagram-style... no: iOS 26 field look is drawn by our pill behind it
@@ -783,6 +796,13 @@ static void CancelToX(UINavigationItem *ni) {
     }
     if (changed) ni.rightBarButtonItems = out;
 }
+@interface M26ToPlus : NSObject
++ (instancetype)shared;
+@end
+@implementation M26ToPlus
++ (instancetype)shared { static M26ToPlus *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26ToPlus new]; }); return t; }
+- (void)tap:(UIButton *)b { UIButton *add = objc_getAssociatedObject(b, "m26add"); [add sendActionsForControlEvents:UIControlEventTouchUpInside]; }
+@end
 // New message "To:" row: a glass capsule, with a white glass + inside.
 static void StyleToField(UIWindow *w) {
     UILabel *to = (UILabel *)Find(w, ^BOOL(UIView *v) { return [v isKindOfClass:[UILabel class]] && [[((UILabel *)v).text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] hasPrefix:@"To:"] && v.window && !v.hidden && v.alpha > 0.05; }, 6000);
@@ -794,7 +814,10 @@ static void StyleToField(UIWindow *w) {
     for (UIView *s in row.superview.subviews) if (s != row && s.bounds.size.height <= 1.5 && s.bounds.size.width >= w.bounds.size.width * 0.8) s.hidden = YES;
     for (UIView *s in row.subviews) if (s.bounds.size.height <= 1.5 && s.bounds.size.width >= w.bounds.size.width * 0.8) s.hidden = YES;
     UIView *g = [row viewWithTag:GLASS_TAG + 9];
-    if (!g) { g = ClearGlass(row); g.tag = GLASS_TAG + 9; [row insertSubview:g atIndex:0]; }
+    if (!g) { g = [UIView new]; g.userInteractionEnabled = NO; g.tag = GLASS_TAG + 9; g.layer.borderWidth = 1; g.layer.cornerCurve = kCACornerCurveContinuous; [row insertSubview:g atIndex:0]; }
+    { BOOL dk = IsDark(row);
+      g.backgroundColor = dk ? [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:0.96] : [UIColor colorWithWhite:0.97 alpha:0.96];
+      g.layer.borderColor = (dk ? [UIColor colorWithWhite:1 alpha:0.16] : [UIColor colorWithWhite:0 alpha:0.10]).CGColor; }
     CGFloat h = MIN(row.bounds.size.height - 8, 52);
     CGRect gf = CGRectMake(16, CGRectGetMidY([to convertRect:to.bounds toView:row]) - h / 2, row.bounds.size.width - 32, h);
     if (!CGRectEqualToRect(g.frame, gf)) { g.frame = gf; g.layer.cornerRadius = h / 2; SheenFit(g); }
@@ -805,29 +828,29 @@ static void StyleToField(UIWindow *w) {
         if ([v isKindOfClass:[UIButton class]] && !v.hidden && v.alpha > 0.05 && v.bounds.size.width < 70) { CGFloat x = [v convertPoint:CGPointZero toView:row].x; if (x > ax) { ax = x; add = (UIButton *)v; } }
         [bs addObjectsFromArray:v.subviews]; } }
     if (add) {
-        // centred inside the capsule's right end
-        CGRect au = CGRectMake(add.center.x - add.bounds.size.width / 2, add.center.y - add.bounds.size.height / 2, add.bounds.size.width, add.bounds.size.height);
-        CGRect gin = [row convertRect:g.frame toView:add.superview];
-        CGAffineTransform at = CGAffineTransformMakeTranslation(round(CGRectGetMaxX(gin) - 8 - 17 - CGRectGetMidX(au)), round(CGRectGetMidY(gin) - CGRectGetMidY(au)));
-        if (!CGAffineTransformEqualToTransform(add.transform, at)) add.transform = at;
-        for (UIView *sv in add.subviews) if (sv.alpha > 0) sv.alpha = 0;   // Apple's blue icon
-        UIView *c = [add.superview viewWithTag:GLASS_TAG + 10];
-        if (!c) { c = ClearGlass(add); c.tag = GLASS_TAG + 10; [add.superview insertSubview:c belowSubview:add]; }
-        SheenFit(c);
-        CGRect af = add.frame; CGFloat d = 34;   // (frame includes the move)
-        UIImageView *pi = (UIImageView *)[([c isKindOfClass:[UIVisualEffectView class]] ? ((UIVisualEffectView *)c).contentView : c) viewWithTag:1];
-        if (!pi) { pi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]]]; pi.tag = 1; pi.contentMode = UIViewContentModeCenter; pi.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [([c isKindOfClass:[UIVisualEffectView class]] ? ((UIVisualEffectView *)c).contentView : c) addSubview:pi]; }
-        pi.tintColor = Ink(row); pi.frame = c.bounds;
-        CGRect cf = CGRectMake(CGRectGetMidX(af) - d / 2, CGRectGetMidY(af) - d / 2, d, d);
-        if (!CGRectEqualToRect(c.frame, cf)) { c.frame = cf; c.layer.cornerRadius = d / 2; [c viewWithTag:1].frame = c.bounds; }
-        UIImage *plus = [UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightBold]];
-        UIImage *white = [plus imageWithTintColor:Ink(row) renderingMode:UIImageRenderingModeAlwaysOriginal];
-        if (!objc_getAssociatedObject(add, "m26plus")) {
-            objc_setAssociatedObject(add, "m26plus", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            for (NSNumber *st in @[@(UIControlStateNormal), @(UIControlStateHighlighted)]) [add setImage:white forState:st.unsignedIntegerValue];
+        if (add.alpha > 0) add.alpha = 0.02;   // Apple's blue one: invisible
+        if (!CGAffineTransformIsIdentity(add.transform)) add.transform = CGAffineTransformIdentity;
+        UIButton *mine = (UIButton *)[row viewWithTag:GLASS_TAG + 11];
+        if (!mine) {
+            mine = [UIButton buttonWithType:UIButtonTypeCustom]; mine.tag = GLASS_TAG + 11;
+            mine.layer.borderWidth = 1;
+            [mine setImage:[UIImage systemImageNamed:@"plus" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+            [mine addTarget:[M26ToPlus shared] action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+            [row addSubview:mine];
         }
+        objc_setAssociatedObject(mine, "m26add", add, OBJC_ASSOCIATION_ASSIGN);
+        [[row viewWithTag:GLASS_TAG + 10] removeFromSuperview];
+        BOOL dk = IsDark(row);
+        mine.tintColor = Ink(row);
+        mine.backgroundColor = dk ? [UIColor colorWithWhite:1 alpha:0.12] : [UIColor colorWithWhite:0 alpha:0.06];
+        mine.layer.borderColor = [UIColor colorWithWhite:dk ? 1 : 0 alpha:dk ? 0.18 : 0.1].CGColor;
+        CGFloat d = 32;
+        CGRect mf = CGRectMake(CGRectGetMaxX(g.frame) - 9 - d, CGRectGetMidY(g.frame) - d / 2, d, d);
+        if (!CGRectEqualToRect(mine.frame, mf)) { mine.frame = mf; mine.layer.cornerRadius = d / 2; }
+        if (row.subviews.lastObject != mine) [row bringSubviewToFront:mine];
     }
 }
+
 static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
     TopBlur(nb);
     @try { CancelToX(nb.topItem); } @catch (__unused id e) {}
@@ -980,7 +1003,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 0.7.3 debug\n %@\n %@", gDebug, gNavDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 0.7.4 debug\n %@\n %@", gDebug, gNavDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 800)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 140, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];
