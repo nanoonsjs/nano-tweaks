@@ -40,7 +40,7 @@ for deb in sys.argv[2:]:
     pkg = [l.split(': ',1)[1] for l in c.splitlines() if l.startswith('Package: ')][0]
     if os.path.exists(os.path.join(out, 'icons', pkg + '.png')):
         lines = [l for l in c.splitlines() if not l.startswith('Icon: ')]
-        lines.append('Icon: https://nanoonsjs.github.io/nano-repo/icons/%s.png' % pkg)
+        lines.append('Icon: https://nanoonsjs.github.io/nano-repo/icons/%s.png?v=%d' % (pkg, int(os.path.getmtime(os.path.join(out, 'icons', pkg + '.png')))))
         c = '\n'.join(lines)
     entries.append(c)
 pk = ('\n\n'.join(entries) + '\n').encode()
