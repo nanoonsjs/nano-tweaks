@@ -1,4 +1,6 @@
-// Control26 0.5.6 - made by nano
+// Control26 0.5.7 - made by nano
+// 0.5.7: Apple's AirPlay/play icons masked away for good, slider icons stay colored (no flicker),
+//        edit mode scrolls (swipe), hold a control to move it
 // 0.5.6: Apple's AirPlay/pause icon stays hidden after closing the big player, softer see-through edit glow,
 //        Add a Control grows out of its button and back, - badges and handles fade in
 // 0.5.5: move controls anywhere (gaps allowed, own layout), edit mode ends when Control Center closes,
@@ -194,7 +196,6 @@ static void HideOriginal(UIView *v) {
     if (!v) return;
     objc_setAssociatedObject(v, kHidByUs, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (v.alpha != 0) v.alpha = 0;
-    if (!v.layer.hidden) v.layer.hidden = YES;
 }
 static void ShowOriginal(UIView *v);
 static NSHashTable *gHiddenMusic;  // everything the music module code hid
@@ -203,6 +204,7 @@ static void HideMusic(UIView *v) {
     if (!gHiddenMusic) gHiddenMusic = [NSHashTable weakObjectsHashTable];
     [gHiddenMusic addObject:v];
     HideOriginal(v);
+    if (![v.layer.mask.name isEqualToString:@"c26.gone"]) { CALayer *m = [CALayer layer]; m.name = @"c26.gone"; m.frame = CGRectZero; v.layer.mask = m; }
 }
 static void RestoreMusic(void) {
     for (UIView *v in [gHiddenMusic allObjects]) ShowOriginal(v);
@@ -213,7 +215,7 @@ static void ShowOriginal(UIView *v) {
     if (!v || !objc_getAssociatedObject(v, kHidByUs)) return;
     objc_setAssociatedObject(v, kHidByUs, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     v.alpha = 1;
-    v.layer.hidden = NO;
+    if ([v.layer.mask.name isEqualToString:@"c26.gone"]) v.layer.mask = nil;
 }
 
 __attribute__((unused)) static void Forward(UIControl *c) {
@@ -2214,7 +2216,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.5.6 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.5.7 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2660,6 +2662,7 @@ static void RemoveModule(NSString *ident);
     CGFloat _px, _py;
     CGPoint _grab;
     NSString *_hover;
+    CGFloat _scroll0;
 }
 + (instancetype)shared { static C26EditCtl *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [C26EditCtl new]; }); return s; }
 - (void)plus:(UIButton *)b { Pop(b); [[UISelectionFeedbackGenerator new] selectionChanged]; if (gEditing) ExitEdit(YES); else EnterEdit(); }
@@ -2707,7 +2710,21 @@ static void RemoveModule(NSString *ident);
 }
 // hold and drag a control anywhere: it lands on the spot under it (gaps are fine), the ones in
 // the way step aside while you drag, and everything stays put when you let go
-- (void)move:(UIPanGestureRecognizer *)g {
+// swiping over a control while editing scrolls Control Center (with a little glide at the end)
+- (void)scroll:(UIPanGestureRecognizer *)g {
+    UIScrollView *sv = KV(gCCVC, @"overlayScrollView");
+    if (![sv isKindOfClass:[UIScrollView class]]) return;
+    CGFloat minY = -sv.adjustedContentInset.top, maxY = MAX(minY, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.size.height);
+    if (g.state == UIGestureRecognizerStateBegan) { [sv.layer removeAllAnimations]; _scroll0 = sv.contentOffset.y; return; }
+    CGFloat y = _scroll0 - [g translationInView:sv.superview].y;
+    if (y < minY) y = minY - (minY - y) * 0.35;
+    if (y > maxY) y = maxY + (y - maxY) * 0.35;
+    if (g.state == UIGestureRecognizerStateChanged) { sv.contentOffset = CGPointMake(sv.contentOffset.x, y); return; }
+    CGFloat v = [g velocityInView:sv.superview].y;
+    CGFloat end = MIN(maxY, MAX(minY, y - v * 0.22));
+    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:1 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ sv.contentOffset = CGPointMake(sv.contentOffset.x, end); } completion:^(__unused BOOL f) { UpdateEditUI(NO); }];
+}
+- (void)move:(UIGestureRecognizer *)g {
     NSString *ident = objc_getAssociatedObject(g.view, kEditIdent);
     UIView *e = EditRoot(NO), *cv = CollectionView();
     NSDictionary *mm = ModuleMap();
@@ -3007,9 +3024,13 @@ static void UpdateEditUI(BOOL animated) {
             if (!dg) {
                 dg = [[UIView alloc] initWithFrame:f]; dg.tag = 3;
                 objc_setAssociatedObject(dg, kEditIdent, ident, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                UIPanGestureRecognizer *mp = [[UIPanGestureRecognizer alloc] initWithTarget:[C26EditCtl shared] action:@selector(move:)];
-                mp.maximumNumberOfTouches = 1;
+                UILongPressGestureRecognizer *mp = [[UILongPressGestureRecognizer alloc] initWithTarget:[C26EditCtl shared] action:@selector(move:)];
+                mp.minimumPressDuration = 0.18; mp.allowableMovement = 12;
                 [dg addGestureRecognizer:mp];
+                UIPanGestureRecognizer *sp = [[UIPanGestureRecognizer alloc] initWithTarget:[C26EditCtl shared] action:@selector(scroll:)];
+                sp.maximumNumberOfTouches = 1;
+                [sp requireGestureRecognizerToFail:mp];
+                [dg addGestureRecognizer:sp];
                 [e insertSubview:dg atIndex:0];
             }
             if (!gResizing && !CGRectEqualToRect(dg.frame, f)) dg.frame = f;
@@ -3285,7 +3306,7 @@ static BOOL DPan(id self, SEL _cmd, id g) { return gEditing ? NO : origDPan(self
 static BOOL (*origDFlick)(id, SEL, id);
 static BOOL DFlick(id self, SEL _cmd, id g) { return gEditing ? NO : origDFlick(self, _cmd, g); }
 static BOOL (*origSPan)(id, SEL, id);
-static BOOL SPan(id self, SEL _cmd, id g) { return gEditing ? NO : origSPan(self, _cmd, g); }
+static BOOL SPan(id self, SEL _cmd, id g) { return gResizing ? NO : origSPan(self, _cmd, g); }
 static void (*origOVScroll)(id, SEL, id);
 static void OVScroll(id self, SEL _cmd, id sv) {
     origOVScroll(self, _cmd, sv);
