@@ -1,4 +1,7 @@
-// Control26 0.5.2 - made by nano
+// Control26 0.5.3 - made by nano
+// 0.5.3: fixed the Safe Mode crash (the grid was inside Control Center's module view), grid lines up,
+//        + / power on the status bar line, smooth shaped glow, the others make room while you drag,
+//        editing hides under Add a Control, volume can't be resized
 // 0.5.2: grid read row by row (lines up), + / power above the status bar and hidden in landscape, glow pulse
 //        instead of wiggle, sliders can't be resized, connectivity 2x2/4x4/4x6/4x8, music 2x2/4x2/4x4/4x6/4x8,
 //        more empty rows to scroll to, safer closing, debug box can be dragged
@@ -2204,7 +2207,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.5.2 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.5.3 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2424,7 +2427,7 @@ static CGRect GridCell(C26Grid g, int col, int row) {
 // what sizes each control can be (the sliders stay as they are)
 static NSArray *AllowedSizes(NSString *ident) {
     NSString *l = ident.lowercaseString;
-    if ([l hasSuffix:@"audiomodule"] || [l hasSuffix:@".displaymodule"]) return @[];
+    if ([l containsString:@"audio"] || [l containsString:@"volume"] || [l hasSuffix:@".displaymodule"] || [l containsString:@"brightness"]) return @[];
     if ([l containsString:@"connectivity"]) return @[@"2,2", @"4,4", @"4,6", @"4,8"];
     if ([l containsString:@"nowplaying"] || [l containsString:@"mediacontrols"]) return @[@"2,2", @"4,2", @"4,4", @"4,6", @"4,8"];
     return @[@"1,1", @"2,1", @"1,2", @"2,2", @"4,2", @"4,4"];
@@ -2512,6 +2515,8 @@ static void RemoveModule(NSString *ident);
 @implementation C26EditCtl {
     C26Size _start, _last;
     CGFloat _px, _py;
+    CGPoint _grab;
+    NSString *_hover;
 }
 + (instancetype)shared { static C26EditCtl *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [C26EditCtl new]; }); return s; }
 - (void)plus:(UIButton *)b { Pop(b); [[UISelectionFeedbackGenerator new] selectionChanged]; if (gEditing) ExitEdit(YES); else EnterEdit(); }
@@ -2556,52 +2561,58 @@ static void RemoveModule(NSString *ident);
     gResizing = NO;
     UpdateEditUI(YES);
 }
-// hold and drag a control onto another one: it takes that spot (the rest move along)
+// hold and drag a control: the others make room while you move it, let go to keep it there
 - (void)move:(UIPanGestureRecognizer *)g {
     NSString *ident = objc_getAssociatedObject(g.view, kEditIdent);
     UIView *e = EditRoot(NO);
     NSDictionary *mm = ModuleMap();
     UIView *mv = mm[ident];
     if (!ident || !mv || !e) return;
+    CGPoint p = [g locationInView:e];
     if (g.state == UIGestureRecognizerStateBegan) {
         gResizing = YES;
-        for (UIView *x in e.subviews) if (x.tag == 4 && [objc_getAssociatedObject(x, kEditIdent) isEqual:ident]) x.hidden = YES;
+        CGRect f = ModFrameIn(mv, e);
+        _grab = CGPointMake(p.x - CGRectGetMidX(f), p.y - CGRectGetMidY(f));
+        _hover = nil;
         mv.layer.zPosition = 500;
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-        [UIView animateWithDuration:0.25 animations:^{ mv.transform = CGAffineTransformMakeScale(1.08, 1.08); mv.alpha = 0.9; }];
-        for (UIView *x in e.subviews) if ([objc_getAssociatedObject(x, kEditIdent) isEqual:ident] && x != g.view) x.alpha = 0;
+        for (UIView *x in e.subviews) if ([objc_getAssociatedObject(x, kEditIdent) isEqual:ident] && x != g.view) x.hidden = YES;
+        [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ mv.transform = CGAffineTransformMakeScale(1.08, 1.08); } completion:nil];
         return;
     }
     if (g.state == UIGestureRecognizerStateChanged) {
-        CGPoint t = [g translationInView:e];
-        mv.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(1.08, 1.08), CGAffineTransformMakeTranslation(t.x, t.y));
+        // stay under the finger, wherever Control Center has put the control by now
+        CGRect f = ModFrameIn(mv, e);
+        CGPoint want = CGPointMake(p.x - _grab.x, p.y - _grab.y);
+        mv.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(1.08, 1.08), CGAffineTransformMakeTranslation(want.x - CGRectGetMidX(f), want.y - CGRectGetMidY(f)));
+        // over another control: take its place now, so you see how it will look
+        NSArray *order = IdList(@"orderedUserEnabledModuleIdentifiers");
+        NSString *target = nil;
+        for (NSString *k in order) {
+            UIView *v = mm[k];
+            if (!v || [k isEqualToString:ident]) continue;
+            if (CGRectContainsPoint(CGRectInset(ModFrameIn(v, e), 6, 6), p)) { target = k; break; }
+        }
+        if (target && ![target isEqualToString:_hover]) {
+            _hover = target;
+            NSMutableArray *a = [order mutableCopy];
+            NSUInteger from = [a indexOfObject:ident], to = [a indexOfObject:target];
+            if (from != NSNotFound && to != NSNotFound) {
+                [a removeObjectAtIndex:from];
+                [a insertObject:ident atIndex:MIN(to, a.count)];
+                SetUserEnabled(a);
+                [[UISelectionFeedbackGenerator new] selectionChanged];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ RelayoutCC(); });
+            }
+        } else if (!target) _hover = nil;
         return;
     }
-    // dropped: which control is under the finger?
-    CGPoint p = [g locationInView:e];
-    NSArray *order = IdList(@"orderedUserEnabledModuleIdentifiers");
-    NSString *target = nil; CGFloat bestD = CGFLOAT_MAX;
-    for (NSString *k in order) {
-        UIView *v = mm[k];
-        if (!v || [k isEqualToString:ident]) continue;
-        CGRect f = [v convertRect:v.bounds toView:e];
-        CGFloat dx = CGRectGetMidX(f) - p.x, dy = CGRectGetMidY(f) - p.y, d = sqrt(dx * dx + dy * dy);
-        if (CGRectContainsPoint(CGRectInset(f, -10, -10), p)) d = 0;
-        if (d < bestD) { bestD = d; target = k; }
-    }
-    BOOL moved = NO;
-    if (target && bestD < 90 && [order containsObject:ident]) {
-        NSMutableArray *a = [order mutableCopy];
-        NSUInteger from = [a indexOfObject:ident], to = [a indexOfObject:target];
-        [a removeObjectAtIndex:from];
-        [a insertObject:ident atIndex:MIN(to, a.count)];
-        if (![a isEqualToArray:order]) { SetUserEnabled(a); moved = YES; }
-    }
-    [[UISelectionFeedbackGenerator new] selectionChanged];
-    [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0 options:0 animations:^{ mv.transform = CGAffineTransformIdentity; mv.alpha = 1; } completion:^(__unused BOOL f) { mv.layer.zPosition = 0; for (UIView *x in e.subviews) if (x.tag == 4) x.hidden = NO; }];
-    gResizing = NO;
-    if (moved) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ RelayoutCC(); });
-    else UpdateEditUI(YES);
+    // let go: it settles into its new spot
+    gResizing = NO; _hover = nil;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ mv.transform = CGAffineTransformIdentity; } completion:^(__unused BOOL f) { mv.layer.zPosition = 0; }];
+    for (UIView *x in e.subviews) if ([objc_getAssociatedObject(x, kEditIdent) isEqual:ident]) x.hidden = NO;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ UpdateEditUI(YES); });
 }
 - (void)closeSheet:(id)x {
     UIView *sheet = [gCCVC.viewIfLoaded viewWithTag:ADDSHEET_TAG];
@@ -2609,7 +2620,7 @@ static void RemoveModule(NSString *ident);
     [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:0 animations:^{
         sheet.backgroundColor = UIColor.clearColor;
         panel.transform = CGAffineTransformMakeTranslation(0, panel.bounds.size.height + 60);
-    } completion:^(__unused BOOL f) { [sheet removeFromSuperview]; }];
+    } completion:^(__unused BOOL f) { [sheet removeFromSuperview]; UpdateEditUI(YES); }];
 }
 - (void)pick:(UIButton *)b {
     NSString *ident = objc_getAssociatedObject(b, kEditIdent);
@@ -2639,31 +2650,8 @@ static void PlaceTopButtons(UIViewController *vc) {
     UIButton *plus = (UIButton *)[host viewWithTag:TOPPLUS_TAG], *pw = (UIButton *)[host viewWithTag:TOPPOWER_TAG];
     if (!gEnabled || !gEditUI) { [plus removeFromSuperview]; [pw removeFromSuperview]; return; }
     UIView *cv = CollectionView();
-    if (!cv.window || cv.window != host.window) return;
-    BOOL landscape = host.bounds.size.width > host.bounds.size.height;
-    if (landscape) { plus.hidden = YES; pw.hidden = YES; return; }
-    C26Grid gr = GridIn(cv);
-    if (!gr.ok) return;
-    CGRect r0 = [cv convertRect:GridCell(gr, 0, 0) toView:host], r3 = [cv convertRect:GridCell(gr, 3, 0) toView:host];
-    CGFloat d = 40;
-    // above Control Center's status bar text (where iOS 18/26 puts them)
-    CGFloat textTop = CGFLOAT_MAX;
-    {
-        NSMutableArray *st = [NSMutableArray arrayWithObject:vc.view]; int n = 0;
-        while (st.count && n++ < 1500) {
-            UIView *v = st.lastObject; [st removeLastObject];
-            if (v.hidden || v.alpha < 0.05 || v == cv || v.tag == TOPPLUS_TAG || v.tag == TOPPOWER_TAG) continue;
-            if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) {
-                BOOL inBar = NO;
-                for (UIView *q = v; q && q != vc.view; q = q.superview) if ([NSStringFromClass([q class]) containsString:@"StatusBar"]) { inBar = YES; break; }
-                if (inBar) { CGRect f = [v convertRect:v.bounds toView:host]; if (CGRectGetMaxY(f) <= CGRectGetMinY(r0) + 2 && f.size.height > 4) textTop = MIN(textTop, CGRectGetMinY(f)); }
-            }
-            [st addObjectsFromArray:v.subviews];
-        }
-    }
-    CGFloat cy = textTop < CGFLOAT_MAX ? textTop - 44 : CGRectGetMinY(r0) - 110;
-    if (cy - d / 2 < 8) cy = 8 + d / 2;
-    plus.hidden = NO; pw.hidden = NO;
+    UIWindow *w = host.window;
+    if (!w || cv.window != w) return;
     if (!plus) {
         plus = GlassButton(@"plus", 17); plus.tag = TOPPLUS_TAG;
         [plus addTarget:[C26EditCtl shared] action:@selector(plus:) forControlEvents:UIControlEventTouchUpInside];
@@ -2674,29 +2662,45 @@ static void PlaceTopButtons(UIViewController *vc) {
         [pw addTarget:[C26EditCtl shared] action:@selector(power:) forControlEvents:UIControlEventTouchUpInside];
         [host addSubview:pw];
     }
-    CGRect pf = CGRectMake(CGRectGetMinX(r0), cy - d / 2, d, d), wf = CGRectMake(CGRectGetMaxX(r3) - d, cy - d / 2, d, d);
+    BOOL landscape = w.bounds.size.width > w.bounds.size.height;
+    plus.hidden = landscape; pw.hidden = landscape;
+    if (landscape) return;
+    C26Grid gr = GridIn(cv);
+    if (!gr.ok) return;
+    CGRect r0 = [cv convertRect:GridCell(gr, 0, 0) toView:nil], r3 = [cv convertRect:GridCell(gr, 3, 0) toView:nil];
+    CGFloat d = 38;
+    // on the top status bar line (where iOS 18/26 puts them), lined up with the outer columns
+    CGFloat top = w.safeAreaInsets.top;
+    CGFloat cy = top > 30 ? top - 6 : MAX(top, 20) + 6;
+    CGRect pf = [w convertRect:CGRectMake(CGRectGetMinX(r0) + 4, cy - d / 2, d, d) toView:host];
+    CGRect wf = [w convertRect:CGRectMake(CGRectGetMaxX(r3) - d - 4, cy - d / 2, d, d) toView:host];
     if (!CGRectEqualToRect(plus.frame, pf) && CGAffineTransformIsIdentity(plus.transform)) { plus.frame = pf; RoundGlass(plus); }
     if (!CGRectEqualToRect(pw.frame, wf) && CGAffineTransformIsIdentity(pw.transform)) { pw.frame = wf; RoundGlass(pw); }
     NSString *sym = gEditing ? @"checkmark" : @"plus";
     if (![objc_getAssociatedObject(plus, kEditIdent) isEqual:sym]) {
         objc_setAssociatedObject(plus, kEditIdent, sym, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [plus setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+        [UIView transitionWithView:plus duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+            [plus setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+        } completion:nil];
     }
     if (host.subviews.lastObject != pw) { [host bringSubviewToFront:plus]; [host bringSubviewToFront:pw]; }
+    if (!gEditing) gEditDebug = [NSString stringWithFormat:@"top cy=%.0f safeTop=%.0f row0=%.0f,%.0f", cy, top, r0.origin.x, r0.origin.y];
 }
 
-// the faint circles (4 across, 8 down) behind the modules
-static void BuildGrid(UIView *cv) {
-    UIView *g = [cv viewWithTag:GRID_TAG];
+// the faint circles in the empty spots. They live in our own layer: inside Control Center's
+// module view they got moved by its layout and crashed SpringBoard when it closed.
+static const void *kGridSize = &kGridSize;
+static void BuildGrid(UIView *cv, UIView *e) {
+    if (!e || !cv) return;
+    UIView *g = [e viewWithTag:GRID_TAG];
     if (!g) {
         g = [[UIView alloc] initWithFrame:CGRectZero];
-        g.tag = GRID_TAG; g.userInteractionEnabled = NO; g.alpha = 0;
-        [cv insertSubview:g atIndex:0];
+        g.tag = GRID_TAG; g.userInteractionEnabled = NO; g.clipsToBounds = NO;
+        [e insertSubview:g atIndex:0];
     }
-    if (cv.subviews.firstObject != g) [cv sendSubviewToBack:g];
+    if (e.subviews.firstObject != g) [e sendSubviewToBack:g];
     C26Grid gr = GridIn(cv);
     if (!gr.ok) return;
-    // spots taken by a control get no circle
     NSMutableSet *taken = [NSMutableSet set];
     NSDictionary *mm = ModuleMap();
     for (NSString *k in mm) {
@@ -2706,22 +2710,30 @@ static void BuildGrid(UIView *cv) {
             for (unsigned long long x = r.origin.x; x < r.origin.x + r.size.width; x++) [taken addObject:[NSString stringWithFormat:@"%llu,%llu", x, y]];
     }
     int rows = MIN(32, MAX(8, gr.rows + 4));
+    // where Control Center's content starts right now (it can scroll)
+    CGPoint o = [cv convertPoint:CGPointZero toView:e];
+    g.frame = CGRectMake(o.x, o.y, 10, 10);
     NSString *sig = [NSString stringWithFormat:@"%.1f,%.1f,%.1f,%d|%@", gr.xs[0], gr.ys[0], gr.pitch, rows, [[taken allObjects] sortedArrayUsingSelector:@selector(compare:)]];
     if ([objc_getAssociatedObject(g, kEditIdent) isEqual:sig]) return;
+    BOOL first = objc_getAssociatedObject(g, kEditIdent) == nil;
     objc_setAssociatedObject(g, kEditIdent, sig, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     for (CALayer *l in [g.layer.sublayers copy]) [l removeFromSuperlayer];
-    CGFloat maxX = cv.bounds.size.width, maxY = 0;
+    int i = 0;
     for (int y = 0; y < rows; y++) for (int x = 0; x < 4; x++) {
-        CGRect c = GridCell(gr, x, y);
-        maxY = MAX(maxY, CGRectGetMaxY(c)); maxX = MAX(maxX, CGRectGetMaxX(c));
         if ([taken containsObject:[NSString stringWithFormat:@"%d,%d", x, y]]) continue;
+        CGRect c = CGRectInset(GridCell(gr, x, y), 2, 2);
         CALayer *l = [CALayer layer];
         l.frame = c; l.cornerRadius = c.size.width / 2;
-        l.backgroundColor = [UIColor colorWithWhite:1 alpha:0.07].CGColor;
-        l.borderWidth = 1; l.borderColor = [UIColor colorWithWhite:1 alpha:0.05].CGColor;
+        l.backgroundColor = [UIColor colorWithWhite:1 alpha:0.075].CGColor;
+        l.borderWidth = 1; l.borderColor = [UIColor colorWithWhite:1 alpha:0.10].CGColor;
         [g.layer addSublayer:l];
+        if (first) {
+            CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"opacity"];
+            a.fromValue = @0; a.toValue = @1; a.duration = 0.35; a.beginTime = CACurrentMediaTime() + MIN(i, 20) * 0.012; a.fillMode = kCAFillModeBackwards;
+            [l addAnimation:a forKey:@"in"];
+        }
+        i++;
     }
-    g.frame = CGRectMake(0, 0, maxX, maxY);
 }
 
 static UIView *EditRoot(BOOL make) {
@@ -2752,25 +2764,58 @@ static UIView *HandleView(void) {
     return h;
 }
 
-// editing look: each control glows with a slow pulse (no wiggle)
-static void GlowFor(UIView *e, NSString *ident, CGRect f, BOOL circle) {
+// the control's own outline: its background's corner radius (round buttons come out round)
+static CGFloat ModuleRadius(UIView *m, CGRect f) {
+    CGFloat W = m.bounds.size.width, H = m.bounds.size.height, best = 0;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:m]; int n = 0;
+    while (st.count && n++ < 120) {
+        UIView *v = st.firstObject; [st removeObjectAtIndex:0];
+        if (v.hidden || v.alpha < 0.05) continue;
+        if (v.bounds.size.width >= W * 0.9 && v.bounds.size.height >= H * 0.9) {
+            best = MAX(best, v.layer.cornerRadius);
+            [st addObjectsFromArray:v.subviews];
+        }
+    }
+    if (best <= 0) best = MIN(W, H) * 0.28;
+    return MIN(best, MIN(W, H) / 2);
+}
+// editing look: a soft white outline around each control that slowly breathes (no wiggle)
+static void GlowFor(UIView *e, NSString *ident, CGRect f, CGFloat radius) {
+    CGRect gf = CGRectInset(f, -3, -3);
     UIView *gw = nil;
     for (UIView *x in e.subviews) if (x.tag == 4 && [objc_getAssociatedObject(x, kEditIdent) isEqual:ident]) gw = x;
+    CAShapeLayer *ring = nil, *halo = nil;
     if (!gw) {
-        gw = [[UIView alloc] initWithFrame:f]; gw.tag = 4; gw.userInteractionEnabled = NO;
+        gw = [[UIView alloc] initWithFrame:gf]; gw.tag = 4; gw.userInteractionEnabled = NO;
         objc_setAssociatedObject(gw, kEditIdent, ident, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        gw.layer.borderWidth = 2; gw.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.85].CGColor;
-        gw.layer.shadowColor = UIColor.whiteColor.CGColor; gw.layer.shadowOffset = CGSizeZero; gw.layer.shadowRadius = 12; gw.layer.shadowOpacity = 0.6;
-        gw.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
-        gw.layer.cornerCurve = kCACornerCurveContinuous;
-        CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"opacity"];
-        a.fromValue = @0.25; a.toValue = @1; a.duration = 1.1; a.autoreverses = YES; a.repeatCount = HUGE_VALF;
-        a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-        [gw.layer addAnimation:a forKey:@"c26.pulse"];
+        halo = [CAShapeLayer layer]; halo.name = @"halo";
+        halo.fillColor = UIColor.clearColor.CGColor; halo.strokeColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor; halo.lineWidth = 6;
+        halo.shadowColor = UIColor.whiteColor.CGColor; halo.shadowOffset = CGSizeZero; halo.shadowRadius = 10; halo.shadowOpacity = 0.7;
+        ring = [CAShapeLayer layer]; ring.name = @"ring";
+        ring.fillColor = UIColor.clearColor.CGColor; ring.strokeColor = [UIColor colorWithWhite:1 alpha:0.95].CGColor; ring.lineWidth = 1.6;
+        [gw.layer addSublayer:halo]; [gw.layer addSublayer:ring];
+        CABasicAnimation *b = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        b.fromValue = @0.15; b.toValue = @1; b.duration = 1.5; b.autoreverses = YES; b.repeatCount = HUGE_VALF;
+        b.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [halo addAnimation:b forKey:@"breathe"];
+        CABasicAnimation *r = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        r.fromValue = @0.55; r.toValue = @1; r.duration = 1.5; r.autoreverses = YES; r.repeatCount = HUGE_VALF;
+        r.timingFunction = b.timingFunction;
+        [ring addAnimation:r forKey:@"breathe"];
+        gw.alpha = 0;
         [e insertSubview:gw atIndex:0];
+        [UIView animateWithDuration:0.4 animations:^{ gw.alpha = 1; }];
     }
-    if (!CGRectEqualToRect(gw.frame, f)) gw.frame = f;
-    gw.layer.cornerRadius = circle ? MIN(f.size.width, f.size.height) / 2 : MIN(28, MIN(f.size.width, f.size.height) * 0.3);
+    for (CALayer *l in gw.layer.sublayers) { if ([l.name isEqualToString:@"ring"]) ring = (CAShapeLayer *)l; else if ([l.name isEqualToString:@"halo"]) halo = (CAShapeLayer *)l; }
+    if (!CGRectEqualToRect(gw.frame, gf) || ![objc_getAssociatedObject(gw, kGridSize) isEqual:@(radius)]) {
+        objc_setAssociatedObject(gw, kGridSize, @(radius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        gw.frame = gf;
+        CGPathRef path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(gw.bounds, 1, 1) cornerRadius:radius + 2].CGPath;
+        [CATransaction begin]; [CATransaction setDisableActions:YES];
+        ring.frame = gw.bounds; halo.frame = gw.bounds;
+        ring.path = path; halo.path = path;
+        [CATransaction commit];
+    }
 }
 __attribute__((unused)) static void StartWiggle(UIView *v) {
     if ([v.layer animationForKey:@"c26.wiggle"]) return;
@@ -2787,7 +2832,8 @@ static void UpdateEditUI(BOOL animated) {
     UIView *cv = CollectionView(), *e = EditRoot(gEditing);
     if (!gEditing) return;
     if (!cv.window || !e) return;
-    BuildGrid(cv);
+    [[cv viewWithTag:GRID_TAG] removeFromSuperview];   // old versions put it inside Control Center
+    BuildGrid(cv, e);
     NSSet *removable = [NSSet setWithArray:IdList(@"orderedUserEnabledModuleIdentifiers")];
     NSMutableSet *seen = [NSMutableSet set];
     NSDictionary *mm = ModuleMap();
@@ -2798,7 +2844,7 @@ static void UpdateEditUI(BOOL animated) {
         [seen addObject:ident];
         if (m.userInteractionEnabled) { m.userInteractionEnabled = NO; objc_setAssociatedObject(m, kWiggleOff, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
         CGRect f = ModFrameIn(m, e);
-        { C26Rect lr; BOOL one = LayoutRectFor(ident, &lr) && lr.size.width == 1 && lr.size.height == 1; if (m.layer.zPosition < 1) GlowFor(e, ident, f, one); }
+        if (m.layer.zPosition < 1) GlowFor(e, ident, f, ModuleRadius(m, f));
         // resize handle in the bottom-right corner
         UIView *h = nil, *mb = nil, *dg = nil;
         for (UIView *x in e.subviews) if ([objc_getAssociatedObject(x, kEditIdent) isEqual:ident]) { if (x.tag == 1) h = x; else if (x.tag == 2) mb = x; else if (x.tag == 3) dg = x; }
@@ -2851,24 +2897,27 @@ static void UpdateEditUI(BOOL animated) {
     CGRect af = CGRectMake((root.bounds.size.width - aw) / 2, root.bounds.size.height - root.safeAreaInsets.bottom - ah - 18, aw, ah);
     if (!CGRectEqualToRect(add.frame, af) && CGAffineTransformIsIdentity(add.transform)) { add.frame = af; RoundGlass(add); }
     if (add.alpha < 1 && ![add.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.3 animations:^{ add.alpha = 1; }];
-    if (e.superview.subviews.lastObject != e) [e.superview bringSubviewToFront:e];
-    gEditDebug = [NSString stringWithFormat:@"editing mods=%lu sizes=%@", (unsigned long)mods.count, [SavedSizes() description]];
+    UIView *sheet = [root viewWithTag:ADDSHEET_TAG];
+    e.hidden = sheet != nil;
+    if (!sheet && e.superview.subviews.lastObject != e) [e.superview bringSubviewToFront:e];
+    gEditDebug = [NSString stringWithFormat:@"editing mods=%lu saved=%lu", (unsigned long)mods.count, (unsigned long)SavedSizes().count];
 }
 
 static void EnterEdit(void) {
     if (gEditing || !gCCVC) return;
     gEditing = YES;
-    UIView *cv = CollectionView();
-    BuildGrid(cv);
-    [UIView animateWithDuration:0.3 animations:^{ [cv viewWithTag:GRID_TAG].alpha = 1; }];
+    [[UISelectionFeedbackGenerator new] selectionChanged];
     UpdateEditUI(YES);
+    UIView *e = EditRoot(NO);
+    e.alpha = 0;
+    [UIView animateWithDuration:0.35 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ e.alpha = 1; } completion:nil];
     PlaceTopButtons(gCCVC);
 }
 static void ExitEdit(BOOL animated) {
     if (!gEditing) return;
     @try {
     gEditing = NO; gResizing = NO;
-    UIView *cv = CollectionView(), *e = EditRoot(NO), *g = [cv viewWithTag:GRID_TAG];
+    UIView *cv = CollectionView(), *e = EditRoot(NO), *g = [cv viewWithTag:GRID_TAG];   // g: only from old versions
     for (UIView *m in ModuleMap().allValues) {
         [m.layer removeAnimationForKey:@"c26.wiggle"]; m.layer.zPosition = 0;
         if (objc_getAssociatedObject(m, kWiggleOff)) { m.userInteractionEnabled = YES; objc_setAssociatedObject(m, kWiggleOff, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
@@ -2916,6 +2965,7 @@ static void ShowAddSheet(void) {
     }
     [items sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]]; }];
 
+    EditRoot(NO).hidden = YES;
     UIView *sheet = [[UIView alloc] initWithFrame:root.bounds];
     sheet.tag = ADDSHEET_TAG; sheet.backgroundColor = UIColor.clearColor;
     sheet.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -3062,6 +3112,11 @@ static BOOL (*origDFlick)(id, SEL, id);
 static BOOL DFlick(id self, SEL _cmd, id g) { return gEditing ? NO : origDFlick(self, _cmd, g); }
 static BOOL (*origSPan)(id, SEL, id);
 static BOOL SPan(id self, SEL _cmd, id g) { return gEditing ? NO : origSPan(self, _cmd, g); }
+static void (*origOVScroll)(id, SEL, id);
+static void OVScroll(id self, SEL _cmd, id sv) {
+    origOVScroll(self, _cmd, sv);
+    if (gEditing && !gResizing && !gClosing) { @try { UpdateEditUI(NO); } @catch (__unused id e) {} }
+}
 static void (*origOVLayout)(id, SEL);
 static void OVLayout(UIViewController *self, SEL _cmd) {
     origOVLayout(self, _cmd);
@@ -3085,6 +3140,7 @@ static void TryEditHooks(void) {
     if (!gEditHooked && OV) {
         gEditHooked = YES;
         EH(OV, @selector(viewWillLayoutSubviews), OVLayout, origOVLayout);
+        EH(OV, @selector(scrollViewDidScroll:), OVScroll, origOVScroll);
         EH(OV, NSSelectorFromString(@"_dismissalTapGestureRecognizerShouldBegin:"), DTap, origDTap);
         EH(OV, NSSelectorFromString(@"_dismissalPanGestureRecognizerShouldBegin:"), DPan, origDPan);
         EH(OV, NSSelectorFromString(@"_dismissalFlickGestureRecognizerShouldBegin:"), DFlick, origDFlick);
