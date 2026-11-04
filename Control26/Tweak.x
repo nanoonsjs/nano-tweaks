@@ -2445,6 +2445,7 @@ static void Pop(UIView *v) {
 
 static void EnterEdit(void);
 static void ExitEdit(BOOL animated);
+static UIView *EditRoot(BOOL make);
 static void ShowPowerOff(void);
 static void ShowAddSheet(void);
 static void RemoveModule(NSString *ident);
