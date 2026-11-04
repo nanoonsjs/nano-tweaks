@@ -1,4 +1,6 @@
-// Control26 0.6.2 - made by nano
+// Control26 0.6.3 - made by nano
+// 0.6.3: moving controls works again in edit mode, copies of Connectivity / Music for other pages (Add a Control),
+//        Control Center stops scrolling into removed pages
 // 0.6.2: pages are separate: only the page you're on shows, the others fade out as you swipe
 // 0.6.1: real pages (4 x 7 each, up to 6): add one with + by the page icons while editing, empty pages
 //        go away, swipes snap to pages, slide along the icons to zoom out and jump; connectivity / music
@@ -2229,7 +2231,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.6.2 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.6.3 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2314,6 +2316,9 @@ static int PagesWanted(void);
 static int PageCount(void);
 static void CompactPages(void);
 static void ApplyPageVisibility(void);
+static void StyleCopies(void);
+static int CurrentPage(void);
+static void AddCopy(NSString *kind);
 static void PlacePresetButton(UIView *e);
 static void StyleBigModules(void);
 static void PlaceDots(void);
@@ -2392,6 +2397,14 @@ static UIView *CollectionView(void) {
     return v;
 }
 // Where every module is: id -> view, and its spot in Control Center's grid.
+#define COPY_PREFIX @"c26.copy."
+#define COPYROOT_TAG 0x43323655
+static BOOL IsCopy(NSString *k) { return [k isKindOfClass:[NSString class]] && [k hasPrefix:COPY_PREFIX]; }
+static NSArray *SavedCopies(void) { NSArray *a = [LayoutDefaults() arrayForKey:@"copies"]; return [a isKindOfClass:[NSArray class]] ? a : @[]; }
+static C26Size CopyDefaultSize(NSString *k) { C26Size s = {4, [k containsString:@"connectivity"] ? 4 : 2}; return s; }
+static __weak UIView *gCopyRoot;
+static NSMutableDictionary *gCopyViews;     // copy id -> our view
+static BOOL gNeedRelayout;
 static NSDictionary *ModuleMap(void) {
     UIViewController *c = CollectionVC();
     NSMutableDictionary *out = [NSMutableDictionary dictionary];
@@ -2401,6 +2414,7 @@ static NSDictionary *ModuleMap(void) {
         id vcs = KV(c, @"moduleViewControllerByIdentifier");
         if ([vcs isKindOfClass:[NSDictionary class]]) for (id k in vcs) { id vc = vcs[k]; UIView *v = [vc isKindOfClass:[UIViewController class]] ? ((UIViewController *)vc).viewIfLoaded : nil; if (v && [k isKindOfClass:[NSString class]]) out[k] = v; }
     }
+    for (NSString *k in SavedCopies()) { UIView *v = gCopyViews[k]; if (v.window && !v.hidden) out[k] = v; }
     return out;
 }
 static BOOL LayoutRectFor(NSString *ident, C26Rect *out) {
@@ -2431,7 +2445,7 @@ static C26Grid GridIn(UIView *cv) {
     NSMutableArray *items = [NSMutableArray array];
     for (NSString *k in mm) {
         UIView *v = mm[k]; C26Rect r;
-        if (!v.window || v.hidden || !LayoutRectFor(k, &r)) continue;
+        if (IsCopy(k) || !v.window || v.hidden || !LayoutRectFor(k, &r)) continue;
         CGRect f = ModFrameIn(v, cv);
         if (edge <= 0 && r.size.width == 1 && r.size.height == 1) edge = f.size.width;
         [items addObject:@[@(r.origin.x), @(r.origin.y), @(r.size.width), @(r.size.height), [NSValue valueWithCGRect:f]]];
@@ -2463,6 +2477,7 @@ static CGRect GridCell(C26Grid g, int col, int row) {
 // what sizes each control can be (the sliders stay as they are)
 static NSArray *AllowedSizes(NSString *ident) {
     NSString *l = ident.lowercaseString;
+    if (IsCopy(ident)) return [l containsString:@"connectivity"] ? @[@"4,4", @"4,6", @"4,7"] : @[@"4,2", @"4,4", @"4,6", @"4,7"];
     if ([l containsString:@"audio"] || [l containsString:@"volume"] || [l hasSuffix:@".displaymodule"] || [l containsString:@"brightness"]) return @[];
     if ([l containsString:@"connectivity"]) return @[@"2,2", @"4,4", @"4,6", @"4,7"];
     if ([l containsString:@"nowplaying"] || [l containsString:@"mediacontrols"]) return @[@"2,2", @"4,2", @"4,4", @"4,6", @"4,7"];
@@ -2498,6 +2513,7 @@ static void RelayoutCC(void) {
             UIView *cv = CollectionView();
             [cv setNeedsLayout]; [cv layoutIfNeeded];
             [ov.viewIfLoaded setNeedsLayout]; [ov.viewIfLoaded layoutIfNeeded];
+            StyleCopies();
             UpdateEditUI(NO);
         } @catch (__unused id e) {}
     } completion:nil];
@@ -2510,7 +2526,14 @@ static NSDictionary *SavedPos(void) { NSDictionary *d = [LayoutDefaults() dictio
 static NSArray *SavedPosOrder(void) { NSArray *a = [LayoutDefaults() arrayForKey:@"posOrder"]; return [a isKindOfClass:[NSArray class]] ? a : @[]; }
 static NSDictionary *FreeLayout(NSArray *ids, NSArray *sizes, int cols, int *outRows) {
     NSDictionary *pos = SavedPos();
-    if ((!pos.count && PagesWanted() <= 1) || ids.count != sizes.count) return nil;
+    NSArray *cps = SavedCopies();
+    if ((!pos.count && PagesWanted() <= 1 && !cps.count) || ids.count != sizes.count) return nil;
+    if (cps.count) {
+        NSMutableArray *i2 = [ids mutableCopy], *s2 = [sizes mutableCopy];
+        NSDictionary *ss = SavedSizes();
+        for (NSString *c in cps) { C26Size sz; if (!ParseSize(ss[c], &sz)) sz = CopyDefaultSize(c); [i2 addObject:c]; [s2 addObject:[NSValue valueWithBytes:&sz objCType:@encode(C26Size)]]; }
+        ids = i2; sizes = s2;
+    }
     enum { MR = 64 };
     static BOOL occ[MR][8];
     memset(occ, 0, sizeof(occ));
@@ -2815,6 +2838,7 @@ static void RemoveModule(NSString *ident);
     NSString *ident = objc_getAssociatedObject(b, kEditIdent);
     if (!ident) return;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    if ([ident hasPrefix:@"copy:"]) { NSString *kind = [ident substringFromIndex:5]; [self closeSheet:nil]; dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ AddCopy(kind); }); return; }
     NSMutableArray *a = [IdList(@"orderedUserEnabledModuleIdentifiers") mutableCopy];
     if (![a containsObject:ident]) [a addObject:ident];
     SetUserEnabled(a);
@@ -2824,6 +2848,15 @@ static void RemoveModule(NSString *ident);
 @end
 
 static void RemoveModule(NSString *ident) {
+    if (IsCopy(ident)) {
+        NSMutableArray *c = [SavedCopies() mutableCopy]; [c removeObject:ident]; [LayoutDefaults() setObject:c forKey:@"copies"];
+        NSMutableDictionary *p = [SavedPos() mutableCopy]; [p removeObjectForKey:ident]; [LayoutDefaults() setObject:p forKey:@"pos"];
+        UIView *v = gCopyViews[ident];
+        [UIView animateWithDuration:0.25 animations:^{ v.alpha = 0; v.transform = CGAffineTransformMakeScale(0.8, 0.8); } completion:^(__unused BOOL f) { [v removeFromSuperview]; }];
+        [gCopyViews removeObjectForKey:ident];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ RelayoutCC(); });
+        return;
+    }
     NSMutableArray *a = [IdList(@"orderedUserEnabledModuleIdentifiers") mutableCopy];
     if (![a containsObject:ident]) return;
     [a removeObject:ident];
@@ -3033,7 +3066,7 @@ static void UpdateEditUI(BOOL animated) {
     if (!cv.window || !e) return;
     [[cv viewWithTag:GRID_TAG] removeFromSuperview];   // old versions put it inside Control Center
     BuildGrid(cv, e);
-    NSSet *removable = [NSSet setWithArray:IdList(@"orderedUserEnabledModuleIdentifiers")];
+    NSSet *removable = [NSSet setWithArray:[IdList(@"orderedUserEnabledModuleIdentifiers") arrayByAddingObjectsFromArray:SavedCopies()]];
     NSMutableSet *seen = [NSMutableSet set];
     NSDictionary *mm = ModuleMap();
     NSArray *mods = mm.allValues;
@@ -3181,6 +3214,9 @@ static void ShowAddSheet(void) {
         [items addObject:@{@"id": ident, @"name": ModuleName(ident, b), @"icon": icon ?: [NSNull null]}];
     }
     [items sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]]; }];
+    // a second Connectivity / Music for another page
+    [items insertObject:@{@"id": @"copy:nowplaying", @"name": @"Music", @"icon": [UIImage systemImageNamed:@"music.note"]} atIndex:0];
+    [items insertObject:@{@"id": @"copy:connectivity", @"name": @"Connectivity", @"icon": [UIImage systemImageNamed:@"antenna.radiowaves.left.and.right"]} atIndex:0];
 
     EditRoot(NO).hidden = YES;
     UIView *sheet = [[UIView alloc] initWithFrame:root.bounds];
@@ -3336,12 +3372,19 @@ static BOOL DPan(id self, SEL _cmd, id g) { return gEditing ? NO : origDPan(self
 static BOOL (*origDFlick)(id, SEL, id);
 static BOOL DFlick(id self, SEL _cmd, id g) { return gEditing ? NO : origDFlick(self, _cmd, g); }
 static BOOL (*origSPan)(id, SEL, id);
-static BOOL SPan(id self, SEL _cmd, id g) { return gResizing ? NO : origSPan(self, _cmd, g); }
+static BOOL SPan(id self, SEL _cmd, id g) {
+    if (gResizing) return NO;
+    if (gEditing) {
+        UIView *e = EditRoot(NO);
+        if (e && !e.hidden && [g isKindOfClass:[UIGestureRecognizer class]]) { UIView *h = [e hitTest:[(UIGestureRecognizer *)g locationInView:e] withEvent:nil]; if (h) return NO; }
+    }
+    return origSPan(self, _cmd, g);
+}
 static void (*origOVScroll)(id, SEL, id);
 static void OVScroll(id self, SEL _cmd, id sv) {
     origOVScroll(self, _cmd, sv);
     if (gEditing && !gResizing && !gClosing) { @try { UpdateEditUI(NO); } @catch (__unused id e) {} }
-    if (!gClosing) { @try { ApplyPageVisibility(); PlaceDots(); } @catch (__unused id e) {} }
+    if (!gClosing) { @try { StyleCopies(); ApplyPageVisibility(); PlaceDots(); } @catch (__unused id e) {} }
 }
 static void (*origOVLayout)(id, SEL);
 static void OVLayout(UIViewController *self, SEL _cmd) {
@@ -3735,7 +3778,7 @@ static void StyleBigModules(void) {
     for (NSString *k in mm) {
         NSString *l = k.lowercaseString;
         BOOL conn = [l containsString:@"connectivity"], music = [l containsString:@"nowplaying"] || [l containsString:@"mediacontrols"];
-        if (!conn && !music) continue;
+        if ((!conn && !music) || IsCopy(k)) continue;
         UIView *m = mm[k];
         C26Rect r;
         BOOL big = gEnabled && gEditUI && m.window && LayoutRectFor(k, &r) && r.size.width >= 4 && !ModuleExpanded(m) && (conn ? r.size.height >= 4 : r.size.height >= 2);
@@ -3754,6 +3797,73 @@ static void StyleBigModules(void) {
         if (conn) { C26BigConn *c = (C26BigConn *)bv; c.rows = (int)r.size.height; c.apple = m; [c refresh]; }
         else { C26BigPlayer *p = (C26BigPlayer *)bv; int md = r.size.height >= 6 ? 6 : (r.size.height >= 4 ? 4 : 2); if (p.mode != md) { p.mode = md; [p setNeedsLayout]; objc_setAssociatedObject(p.play, kLastValue, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); } [p refresh]; }
     }
+}
+
+// A second Connectivity / Music on another page: drawn by us, it works the real one.
+static void StyleCopies(void) {
+    UIView *root = gCCVC.viewIfLoaded, *cv = CollectionView();
+    NSArray *cps = SavedCopies();
+    if (!gCopyViews) gCopyViews = [NSMutableDictionary dictionary];
+    for (NSString *k in [gCopyViews allKeys]) if (![cps containsObject:k] || !root) { [gCopyViews[k] removeFromSuperview]; [gCopyViews removeObjectForKey:k]; }
+    if (!root || !cv.window || !cps.count || !gEnabled || !gEditUI) { [gCopyRoot removeFromSuperview]; return; }
+    UIView *cr = gCopyRoot;
+    if (!cr || cr.superview != root) {
+        [cr removeFromSuperview];
+        cr = [[C26PassView alloc] initWithFrame:root.bounds];
+        cr.tag = COPYROOT_TAG; gCopyRoot = cr;
+        UIView *content = KV(gCCVC, @"overlayContainerView");
+        if ([content isKindOfClass:[UIView class]] && content.superview == root) [root insertSubview:cr aboveSubview:content]; else [root addSubview:cr];
+    }
+    if (!CGRectEqualToRect(cr.frame, root.bounds)) cr.frame = root.bounds;
+    UIView *e = EditRoot(NO);
+    if (e && [root.subviews indexOfObject:cr] > [root.subviews indexOfObject:e]) [root insertSubview:cr belowSubview:e];
+    C26Grid gr = GridIn(cv);
+    UIView *realConn = nil;
+    NSDictionary *mm = ModuleMap();
+    for (NSString *k in mm) if (!IsCopy(k) && [k.lowercaseString containsString:@"connectivity"]) realConn = mm[k];
+    for (NSString *k in cps) {
+        C26Rect r;
+        if (!gr.ok || !LayoutRectFor(k, &r)) { [gCopyViews[k] setHidden:YES]; continue; }
+        BOOL conn = [k containsString:@"connectivity"];
+        UIView *v = gCopyViews[k];
+        if (!v) {
+            v = conn ? [[C26BigConn alloc] initWithFrame:CGRectZero] : [[C26BigPlayer alloc] initWithFrame:CGRectZero];
+            v.alpha = 0; [cr addSubview:v]; gCopyViews[k] = v;
+            [UIView animateWithDuration:0.35 animations:^{ v.alpha = 1; }];
+        }
+        v.hidden = NO;
+        CGRect a = GridCell(gr, (int)r.origin.x, (int)r.origin.y), b = GridCell(gr, (int)(r.origin.x + r.size.width - 1), (int)(r.origin.y + r.size.height - 1));
+        CGRect f = [cv convertRect:CGRectUnion(a, b) toView:cr];
+        if (CGAffineTransformIsIdentity(v.transform)) { if (!CGRectEqualToRect(v.frame, f)) v.frame = f; }
+        else { v.bounds = CGRectMake(0, 0, f.size.width, f.size.height); v.center = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f)); }
+        if (gEditing) v.userInteractionEnabled = NO;
+        if (conn) { C26BigConn *c = (C26BigConn *)v; c.rows = (int)r.size.height; c.apple = realConn; [c refresh]; }
+        else { C26BigPlayer *p = (C26BigPlayer *)v; int md = r.size.height >= 6 ? 6 : (r.size.height >= 4 ? 4 : 2); if (p.mode != md) { p.mode = md; [p setNeedsLayout]; objc_setAssociatedObject(p.play, kLastValue, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); } [p refresh]; }
+    }
+}
+// a new copy goes in the first free spot on the page you're looking at
+static void AddCopy(NSString *kind) {
+    if (!SavedPos().count) FreezeLayout();
+    NSString *ident = [NSString stringWithFormat:@"%@%@.%llu", COPY_PREFIX, kind, (unsigned long long)([NSDate date].timeIntervalSince1970 * 1000)];
+    C26Size sz = CopyDefaultSize(ident);
+    int page = CurrentPage();
+    BOOL occ[PAGE_ROWS][4]; memset(occ, 0, sizeof(occ));
+    for (NSString *k in ModuleMap()) {
+        C26Rect r;
+        if (!LayoutRectFor(k, &r) || (int)r.origin.y / PAGE_ROWS != page) continue;
+        for (unsigned long long y = r.origin.y; y < r.origin.y + r.size.height; y++) for (unsigned long long x = r.origin.x; x < r.origin.x + r.size.width && x < 4; x++) { int yy = (int)y - page * PAGE_ROWS; if (yy >= 0 && yy < PAGE_ROWS) occ[yy][x] = YES; }
+    }
+    int fx = -1, fy = -1;
+    for (int y = 0; y + (int)sz.height <= PAGE_ROWS && fx < 0; y++) for (int x = 0; x + (int)sz.width <= 4 && fx < 0; x++) {
+        BOOL ok = YES;
+        for (int yy = y; yy < y + (int)sz.height && ok; yy++) for (int xx = x; xx < x + (int)sz.width; xx++) if (occ[yy][xx]) { ok = NO; break; }
+        if (ok) { fx = x; fy = y; }
+    }
+    NSMutableArray *cps = [SavedCopies() mutableCopy];
+    [cps addObject:ident];
+    [LayoutDefaults() setObject:cps forKey:@"copies"];
+    if (fx >= 0) SetPos(ident, fx, page * PAGE_ROWS + fy);
+    RelayoutCC();
 }
 
 // ---- pages: Control Center becomes pages of 4 x 7 spots; swipe up / down between them ----
@@ -3818,7 +3928,9 @@ static void InstallPaging(UIViewController *vc) {
 static void CompactPages(void) {
     NSDictionary *pos = SavedPos();
     int used = UsedPages();
+    BOOL fewer = used < PagesWanted();
     [LayoutDefaults() setInteger:used forKey:@"pages"];
+    if (fewer) { if (gClosing) gNeedRelayout = YES; else RelayoutCC(); }
     if (!pos.count) return;
     NSMutableSet *busy = [NSMutableSet set];
     for (NSString *k in ModuleMap()) { C26Rect r; if (LayoutRectFor(k, &r)) [busy addObject:@((int)r.origin.y / PAGE_ROWS)]; }
@@ -3833,7 +3945,7 @@ static void CompactPages(void) {
             if (y >= (p + 1) * PAGE_ROWS) { np[k] = [NSString stringWithFormat:@"%@,%d", xy[0], y - PAGE_ROWS]; changed = YES; }
         }
     }
-    if (changed) { [LayoutDefaults() setObject:np forKey:@"pos"]; RelayoutCC(); }
+    if (changed) { [LayoutDefaults() setObject:np forKey:@"pos"]; if (gClosing) gNeedRelayout = YES; else RelayoutCC(); }
 }
 static const void *kPageMask = &kPageMask;
 static void ApplyPageVisibility(void) {
@@ -4153,7 +4265,7 @@ static void Tick(void) {
     // edit mode / top buttons
     @try {
         if (!gCCVC) for (UIView *s in [gSliders allObjects]) { UIViewController *o = s.window ? FindCCVC(s) : nil; if (o) { gCCVC = o; break; } }
-        if (gCCVC.viewIfLoaded.window && !gClosing) { PlaceTopButtons(gCCVC); if (gEditing && !gResizing) UpdateEditUI(NO); StyleBigModules(); PlaceDots(); ApplyPageVisibility(); }
+        if (gCCVC.viewIfLoaded.window && !gClosing) { PlaceTopButtons(gCCVC); if (gEditing && !gResizing) UpdateEditUI(NO); StyleBigModules(); StyleCopies(); PlaceDots(); ApplyPageVisibility(); if (gNeedRelayout) { gNeedRelayout = NO; RelayoutCC(); } }
     } @catch (__unused id e) {}
     NSMutableArray *cdbg = [NSMutableArray array], *expanded = [NSMutableArray array];
     for (UIView *b in [gConnButtons allObjects]) {
