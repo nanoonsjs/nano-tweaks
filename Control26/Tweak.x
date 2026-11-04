@@ -83,6 +83,7 @@
 #import <dlfcn.h>
 #import <AVKit/AVKit.h>
 #import <objc/message.h>
+#import <substrate.h>
 
 @interface MRUNowPlayingView : UIView @end
 @interface CCUIBaseSliderView : UIView @end
@@ -106,6 +107,7 @@
 #define CARD_PRESSED 0.34
 
 static BOOL gNoAuto = YES;
+static BOOL gEditUI = YES;
 static __weak UIViewController *gCCVC;   // Control Center (edit mode)
 static NSString *gEditDebug = @"-";
 static void StopAutoBrightness(void);
@@ -2250,7 +2252,6 @@ typedef struct { C26Point origin; C26Size size; } C26Rect;
 #define ADDSHEET_TAG 0x43323645
 #define POWERUI_TAG  0x43323646
 
-static BOOL gEditUI = YES;
 static BOOL gEditing = NO, gResizing = NO;
 static __weak id gSettingsMgr;
 static NSMutableDictionary *gProto;          // module id -> "w,h" (Apple's size)
