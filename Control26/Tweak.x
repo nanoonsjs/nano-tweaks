@@ -1,4 +1,5 @@
-// Control26 1.0.3 - made by nano
+// Control26 1.0.4 - made by nano
+// 1.0.4: tap the cover to open the playing app (Music, Spotify, ...), page icons no longer react to taps (hold and slide)
 // 1.0.3: no more freeze when jumping pages, progress bar no longer flashes full while sliding, 4x2 player buttons centered
 // 1.0.2: music sliders no longer flicker, Wi-Fi / Bluetooth arrows on the big Connectivity open their settings
 // 1.0.1: Apple's AirDrop glyph, smoother page icons and page scrolling (controls shrink, header and + / power stay put),
@@ -140,7 +141,7 @@
 
 static BOOL gNoAuto = YES;
 static BOOL gEditUI = YES;
-// gCCVC: Control Center (edit mode), declared above
+static __weak UIViewController *gCCVC;   // Control Center (edit mode)
 static NSString *gEditDebug = @"-";
 static void StopAutoBrightness(void);
 static BOOL gEnabled = YES, gMusic = YES, gColors = YES, gBounce = YES, gDebug = NO, gJelly = YES, gConn = YES;
@@ -753,12 +754,42 @@ static void AnimateLayer(CALayer *l, CGPoint from, CGPoint to, CGFloat s0, CGFlo
 }
 @end
 
+// tap the cover: open the app that's playing (Music, Spotify, ...) and close Control Center
+@interface C26AppOpener : NSObject
++ (instancetype)shared;
+- (void)open:(id)sender;
+@end
+@implementation C26AppOpener
++ (instancetype)shared { static C26AppOpener *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [C26AppOpener new]; }); return s; }
+- (void)open:(id)sender {
+    NSString *bid = gNPApp.length ? gNPApp : @"com.apple.Music";
+    if ([sender isKindOfClass:[UIGestureRecognizer class]]) {
+        UIView *v = ((UIGestureRecognizer *)sender).view;
+        [UIView animateWithDuration:0.12 animations:^{ v.transform = CGAffineTransformMakeScale(0.94, 0.94); } completion:^(__unused BOOL f) {
+            [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0 options:0 animations:^{ v.transform = CGAffineTransformIdentity; } completion:nil];
+        }];
+    }
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    Class W = NSClassFromString(@"LSApplicationWorkspace");
+    id ws = [W respondsToSelector:@selector(defaultWorkspace)] ? ((id (*)(id, SEL))objc_msgSend)(W, @selector(defaultWorkspace)) : nil;
+    SEL op = NSSelectorFromString(@"openApplicationWithBundleID:");
+    if ([ws respondsToSelector:op]) ((BOOL (*)(id, SEL, id))objc_msgSend)(ws, op, bid);
+    UIViewController *cc = gCCVC;
+    SEL d = @selector(dismissAnimated:withCompletionHandler:);
+    if ([cc respondsToSelector:d]) ((void (*)(id, SEL, BOOL, id))objc_msgSend)(cc, d, YES, nil);
+}
+@end
+static void MakeCoverTappable(UIImageView *art) {
+    art.userInteractionEnabled = YES;
+    [art addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:[C26AppOpener shared] action:@selector(open:)]];
+}
 static C26PassView *BuildOverlay(UIView *module) {
     C26PassView *o = [C26PassView new];
     o.tag = OVERLAY_TAG;
 
     UIImageView *art = [UIImageView new];
     art.tag = 1;
+    MakeCoverTappable(art);
     art.contentMode = UIViewContentModeScaleAspectFill;
     art.clipsToBounds = YES;
     art.layer.cornerCurve = kCACornerCurveContinuous;
@@ -1785,7 +1816,6 @@ static UIColor *ConnOnColor(NSString *key) {
 }
 
 // Settings > Wi-Fi / Bluetooth from Control Center (Control Center closes)
-static __weak UIViewController *gCCVC;
 static void OpenSettingsPane(NSString *pane) {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     NSURL *u = [NSURL URLWithString:[@"prefs:root=" stringByAppendingString:pane]];
@@ -2293,7 +2323,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 1.0.3 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 1.0.4 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -3727,6 +3757,7 @@ static void SeekTo(double t) {
     [self addSubview:_card];
     _art = [UIImageView new]; _art.contentMode = UIViewContentModeScaleAspectFill; _art.clipsToBounds = YES;
     _art.layer.cornerCurve = kCACornerCurveContinuous; _art.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    MakeCoverTappable(_art);
     [self addSubview:_art];
     _title = [UILabel new]; _title.textColor = UIColor.whiteColor; _title.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
     _artist = [UILabel new]; _artist.textColor = [UIColor colorWithWhite:1 alpha:0.62]; _artist.font = [UIFont systemFontOfSize:16];
@@ -4313,7 +4344,7 @@ static void PlaceDots(void) {
             b.tag = 100 + p;
             [b setImage:[UIImage systemImageNamed:PageSymbol(p) withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
             b.frame = CGRectMake(0, p * 54, 36, 44);
-            [b addTarget:[C26PageCtl shared] action:@selector(dot:) forControlEvents:UIControlEventTouchUpInside];
+            b.userInteractionEnabled = NO;   // tapping an icon is off; hold and slide along them instead
             [dots addSubview:b];
         }
         if (gEditing && n < 6) {
