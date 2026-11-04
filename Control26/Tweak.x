@@ -1,4 +1,6 @@
-// Control26 0.6.3 - made by nano
+// Control26 0.6.4 - made by nano
+// 0.6.4: controls drop in one by one when Control Center opens (iOS 26), Settings > Control Center redesigned
+//        like iOS 18 (Customize card with animated phone, Access Within Apps, Reset Control Center)
 // 0.6.3: moving controls works again in edit mode, copies of Connectivity / Music for other pages (Add a Control),
 //        Control Center stops scrolling into removed pages
 // 0.6.2: pages are separate: only the page you're on shows, the others fade out as you swipe
@@ -161,6 +163,7 @@ static BOOL PrefBool(NSDictionary *f, NSString *key, BOOL def) {
     if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM); if (cf) v = (__bridge_transfer id)cf; }
     return v ? [v boolValue] : def;
 }
+static BOOL gDropIn = YES, gCCPage = YES;
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSDictionary *f = ReadPrefsFile();
@@ -173,6 +176,8 @@ static void LoadPrefs(void) {
     gConn    = PrefBool(f, @"conn", YES);
     gNoAuto  = PrefBool(f, @"noauto", YES);
     gEditUI  = PrefBool(f, @"editui", YES);
+    gDropIn  = PrefBool(f, @"dropin", YES);
+    gCCPage  = PrefBool(f, @"ccsettings", YES);
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ LoadPrefs(); @try { StopAutoBrightness(); } @catch (__unused id e) {} });
@@ -3411,10 +3416,13 @@ static id BeginDismiss(id self, SEL _cmd, BOOL animated, BOOL interactive) { Sta
 static void (*origDismissAnim)(id, SEL, BOOL, id);
 static void DismissAnim(id self, SEL _cmd, BOOL animated, id done) { StartClosing(); origDismissAnim(self, _cmd, animated, done); }
 static id (*origBeginPresent)(id, SEL, BOOL, BOOL);
+static void DropInModules(UIViewController *ov);
 static id BeginPresent(id self, SEL _cmd, BOOL animated, BOOL interactive) {
     gClosing = NO;
     @try { if (gEditing) ExitEdit(NO); } @catch (__unused id e) {}
-    return origBeginPresent(self, _cmd, animated, interactive);
+    id r = origBeginPresent(self, _cmd, animated, interactive);
+    @try { DropInModules(self); } @catch (__unused id e) {}
+    return r;
 }
 static void (*origWillDismiss)(id, SEL);
 static void WillDismiss(id self, SEL _cmd) {
@@ -4454,10 +4462,486 @@ static void StopAutoBrightness(void) {
         ((void (*)(id, SEL, id, id))objc_msgSend)(client, set, @NO, @"DisplayBrightnessAuto");
 }
 
+#pragma mark - opening animation (iOS 26 drop-in)
+
+// Each control drops in from above, one after another, top row first.
+// Additive layer animations only, so nothing fights Apple's own transforms.
+static CFTimeInterval gLastDrop;
+static void DropInModules(UIViewController *ov) {
+    if (!gEnabled || !gDropIn) return;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - gLastDrop < 0.6) return;
+    gLastDrop = now;
+    UIView *root = [ov isKindOfClass:[UIViewController class]] ? ov.viewIfLoaded : nil;
+    if (!root) return;
+    NSDictionary *mods = ModuleMap();
+    NSMutableArray *items = [NSMutableArray array];
+    CGFloat top = CGFLOAT_MAX, bottom = 0;
+    for (NSString *k in mods) {
+        UIView *v = mods[k];
+        if (!v.window || v.hidden || v.alpha < 0.01) continue;
+        CGRect f = [v convertRect:v.bounds toView:root];
+        if (CGRectIsEmpty(f) || !CGRectIntersectsRect(f, root.bounds)) continue;
+        [items addObject:@[v, [NSValue valueWithCGRect:f]]];
+        top = MIN(top, CGRectGetMinY(f)); bottom = MAX(bottom, CGRectGetMinY(f));
+    }
+    if (!items.count) return;
+    CGFloat span = MAX(1, bottom - top), W = MAX(1, root.bounds.size.width);
+    for (NSArray *it in items) {
+        UIView *v = it[0]; CGRect f = [it[1] CGRectValue];
+        CFTimeInterval delay = 0.30 * (CGRectGetMinY(f) - top) / span + 0.06 * CGRectGetMinX(f) / W;
+        CALayer *l = v.layer;
+        CFTimeInterval begin = [l convertTime:CACurrentMediaTime() fromLayer:nil] + delay;
+        CASpringAnimation *t = [CASpringAnimation animationWithKeyPath:@"transform.translation.y"];
+        t.additive = YES; t.fromValue = @(-46); t.toValue = @0;
+        t.mass = 1; t.stiffness = 210; t.damping = 17; t.initialVelocity = 0;
+        t.duration = t.settlingDuration;
+        CASpringAnimation *sc = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+        sc.additive = YES; sc.fromValue = @(-0.14); sc.toValue = @0;
+        sc.mass = 1; sc.stiffness = 210; sc.damping = 15; sc.duration = sc.settlingDuration;
+        CABasicAnimation *o = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        o.additive = YES; o.fromValue = @(-1); o.toValue = @0; o.duration = 0.26;
+        o.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+        for (CAAnimation *a in @[t, sc, o]) { a.beginTime = begin; a.fillMode = kCAFillModeBackwards; a.removedOnCompletion = YES; }
+        [l addAnimation:t forKey:@"c26.drop.y"];
+        [l addAnimation:sc forKey:@"c26.drop.s"];
+        [l addAnimation:o forKey:@"c26.drop.o"];
+    }
+}
+
+#pragma mark - reset (from Settings > Control Center)
+
+static void ResetNote(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @try {
+            NSUserDefaults *d = LayoutDefaults();
+            for (NSString *k in @[@"pos", @"posOrder", @"sizes", @"copies", @"pages"]) [d removeObjectForKey:k];
+            [d synchronize];
+            Class P = NSClassFromString(@"CCSModuleSettingsProvider");
+            SEL s = NSSelectorFromString(@"_defaultUserEnabledModuleIdentifiers");
+            id def = [P respondsToSelector:s] ? ((id (*)(id, SEL))objc_msgSend)(P, s) : nil;
+            if ([def isKindOfClass:[NSOrderedSet class]]) def = [def array];
+            if ([def isKindOfClass:[NSSet class]]) def = [def allObjects];
+            if ([def isKindOfClass:[NSArray class]] && [def count]) SetUserEnabled(def);
+            if (gEditing) ExitEdit(NO);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ @try { RelayoutCC(); StyleCopies(); } @catch (__unused id e) {} });
+        } @catch (__unused id e) {}
+    });
+}
+
+#pragma mark - Settings > Control Center redesign (runs in the Settings app)
+
+@interface NSObject (C26PS)
++ (id)emptyGroupSpecifier;
++ (id)preferenceSpecifierNamed:(NSString *)n target:(id)t set:(SEL)s get:(SEL)g detail:(Class)d cell:(NSInteger)c edit:(Class)e;
++ (NSInteger)cellTypeFromString:(NSString *)s;
+- (id)propertyForKey:(NSString *)k;
+- (void)setButtonAction:(SEL)a;
+- (NSInteger)cellType;
+- (void)setIdentifier:(NSString *)i;
+- (UITableView *)table;
+- (void)setSpecifiers:(id)s;
+@end
+
+static void SP(id spec, id v, NSString *k) { ((void (*)(id, SEL, id, id))objc_msgSend)(spec, @selector(setProperty:forKey:), v, k); }
+static NSInteger PSType(NSString *name, NSInteger fallback) {
+    Class C = NSClassFromString(@"PSTableCell");
+    if ([C respondsToSelector:@selector(cellTypeFromString:)]) return [C cellTypeFromString:name];
+    return fallback;
+}
+
+// the little phone on the card: swipe down from the top-right, then Control Center pages
+@interface C26MiniPhone : UIView
+@end
+@implementation C26MiniPhone {
+    UIView *_screen, *_dot, *_cc, *_strip;
+    NSMutableArray<NSArray<UIView *> *> *_pageTiles;
+    NSArray<UIView *> *_pips;
+    NSUInteger _gen;
+}
+- (instancetype)initWithFrame:(CGRect)f {
+    if ((self = [super initWithFrame:f])) {
+        self.userInteractionEnabled = NO;
+        self.layer.cornerRadius = 15; self.layer.cornerCurve = kCACornerCurveContinuous;
+        self.layer.borderWidth = 3;
+        _screen = [[UIView alloc] init];
+        _screen.layer.cornerRadius = 11; _screen.layer.cornerCurve = kCACornerCurveContinuous;
+        _screen.clipsToBounds = YES;
+        [self addSubview:_screen];
+        _cc = [[UIView alloc] init];
+        _cc.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.78];
+        [_screen addSubview:_cc];
+        _strip = [[UIView alloc] init];
+        [_cc addSubview:_strip];
+        UIView *island = [[UIView alloc] init];
+        island.backgroundColor = UIColor.blackColor; island.tag = 7;
+        [_screen addSubview:island];
+        _dot = [[UIView alloc] init];
+        _dot.backgroundColor = UIColor.systemBlueColor;
+        [_screen addSubview:_dot];
+        NSMutableArray *pips = [NSMutableArray array];
+        for (int i = 0; i < 3; i++) { UIView *p = [UIView new]; p.backgroundColor = UIColor.whiteColor; [_cc addSubview:p]; [pips addObject:p]; }
+        _pips = pips;
+        _pageTiles = [NSMutableArray array];
+        [self updateColors];
+    }
+    return self;
+}
+- (void)updateColors {
+    BOOL dark = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+    self.layer.borderColor = (dark ? [UIColor colorWithWhite:0.42 alpha:1] : [UIColor colorWithWhite:0.80 alpha:1]).CGColor;
+    _screen.backgroundColor = dark ? [UIColor colorWithRed:0.17 green:0.20 blue:0.30 alpha:1] : [UIColor colorWithRed:0.62 green:0.72 blue:0.92 alpha:1];
+}
+- (void)traitCollectionDidChange:(UITraitCollection *)p { [super traitCollectionDidChange:p]; [self updateColors]; }
+static UIView *Tile(UIView *page, CGRect r, CGFloat radius, UIColor *c) {
+    UIView *v = [[UIView alloc] initWithFrame:r];
+    v.backgroundColor = c; v.layer.cornerRadius = radius; v.layer.cornerCurve = kCACornerCurveContinuous;
+    [page addSubview:v];
+    return v;
+}
+- (void)buildPages {
+    for (UIView *v in [_strip.subviews copy]) [v removeFromSuperview];
+    [_pageTiles removeAllObjects];
+    CGSize S = _screen.bounds.size;
+    _strip.frame = CGRectMake(0, 0, S.width, S.height * 3);
+    CGFloat pad = 6, gap = 3.2;
+    CGFloat cell = (S.width - pad * 2 - gap * 3) / 4;
+    UIColor *g = [UIColor colorWithWhite:1 alpha:0.30], *w = [UIColor colorWithWhite:1 alpha:0.92];
+    CGFloat y0 = 16;
+    CGRect (^R)(int, int, int, int) = ^CGRect(int x, int y, int ww, int hh) {
+        return CGRectMake(pad + x * (cell + gap), y0 + y * (cell + gap), ww * cell + (ww - 1) * gap, hh * cell + (hh - 1) * gap);
+    };
+    for (int p = 0; p < 3; p++) {
+        UIView *page = [[UIView alloc] initWithFrame:CGRectMake(0, p * S.height, S.width, S.height)];
+        [_strip addSubview:page];
+        NSMutableArray *tiles = [NSMutableArray array];
+        if (p == 0) {
+            // connectivity, music, two small, two sliders, a row of circles
+            UIView *conn = Tile(page, R(0, 0, 2, 2), cell * 0.42, g); [tiles addObject:conn];
+            CGFloat d = cell * 0.62;
+            for (int i = 0; i < 4; i++) {
+                CGRect rr = conn.bounds; CGFloat cx = rr.size.width * (i % 2 ? 0.72 : 0.28), cy = rr.size.height * (i / 2 ? 0.72 : 0.28);
+                UIView *c = Tile(conn, CGRectMake(cx - d / 2, cy - d / 2, d, d), d / 2, i == 0 ? UIColor.systemOrangeColor : (i < 3 ? UIColor.systemBlueColor : g));
+                (void)c;
+            }
+            [tiles addObject:Tile(page, R(2, 0, 2, 2), cell * 0.42, g)];
+            [tiles addObject:Tile(page, R(0, 2, 1, 1), cell / 2, g)];
+            [tiles addObject:Tile(page, R(1, 2, 1, 1), cell / 2, w)];
+            [tiles addObject:Tile(page, R(2, 2, 1, 2), cell / 2, g)];
+            [tiles addObject:Tile(page, R(3, 2, 1, 2), cell / 2, g)];
+            [tiles addObject:Tile(page, R(0, 3, 2, 1), cell / 2, g)];
+            for (int i = 0; i < 4; i++) [tiles addObject:Tile(page, R(i, 4, 1, 1), cell / 2, i == 1 ? w : g)];
+        } else if (p == 1) {
+            // a big music player
+            UIView *m = Tile(page, R(0, 0, 4, 4), cell * 0.5, g); [tiles addObject:m];
+            CGFloat a = m.bounds.size.width * 0.34;
+            Tile(m, CGRectMake(m.bounds.size.width * 0.12, m.bounds.size.width * 0.12, a, a), 4, UIColor.systemPinkColor);
+            Tile(m, CGRectMake(m.bounds.size.width * 0.12, m.bounds.size.height * 0.62, m.bounds.size.width * 0.76, 2.5), 1.25, w);
+            for (int i = 0; i < 3; i++) Tile(m, CGRectMake(m.bounds.size.width * (0.26 + i * 0.2), m.bounds.size.height * 0.75, 6, 6), 3, w);
+            for (int i = 0; i < 4; i++) [tiles addObject:Tile(page, R(i, 4, 1, 1), cell / 2, g)];
+        } else {
+            // a page of round buttons, like a keypad
+            for (int y = 0; y < 5; y++) for (int x = 0; x < 4; x++)
+                [tiles addObject:Tile(page, R(x, y, 1, 1), cell / 2, (x + y) % 5 == 0 ? w : g)];
+        }
+        [_pageTiles addObject:tiles];
+    }
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGRect sr = CGRectInset(self.bounds, 5, 5);
+    if (!CGRectEqualToRect(_screen.frame, sr)) {
+        _screen.frame = sr;
+        _cc.frame = _screen.bounds;
+        [_screen viewWithTag:7].frame = CGRectMake(sr.size.width / 2 - 9, 4, 18, 5);
+        [_screen viewWithTag:7].layer.cornerRadius = 2.5;
+        _dot.bounds = CGRectMake(0, 0, 7, 7); _dot.layer.cornerRadius = 3.5;
+        for (NSUInteger i = 0; i < _pips.count; i++) { _pips[i].frame = CGRectMake(sr.size.width - 4, sr.size.height / 2 - 8 + i * 6, 2.6, 2.6); _pips[i].layer.cornerRadius = 1.3; }
+        [self buildPages];
+        [self restart];
+    }
+}
+- (void)didMoveToWindow { [super didMoveToWindow]; [self restart]; }
+- (void)restart {
+    _gen++;
+    if (!self.window || CGRectIsEmpty(_screen.bounds)) return;
+    [self loop:_gen];
+}
+- (void)after:(CGFloat)t gen:(NSUInteger)g do:(void (^)(void))b {
+    __weak C26MiniPhone *ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(t * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ C26MiniPhone *s = ws; if (s && s->_gen == g && s.window) b(); });
+}
+- (void)showPage:(NSUInteger)p {
+    CGFloat H = _screen.bounds.size.height;
+    for (NSUInteger i = 0; i < _pips.count; i++) _pips[i].alpha = i == p ? 0.95 : 0.35;
+    [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:0 animations:^{ self->_strip.transform = CGAffineTransformMakeTranslation(0, -H * p); } completion:nil];
+    NSArray *tiles = _pageTiles[p];
+    for (NSUInteger i = 0; i < tiles.count; i++) {
+        UIView *t = tiles[i];
+        t.alpha = 0; t.transform = CGAffineTransformMakeTranslation(0, -7);
+        [UIView animateWithDuration:0.45 delay:0.12 + i * 0.025 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:0 animations:^{ t.alpha = 1; t.transform = CGAffineTransformIdentity; } completion:nil];
+    }
+}
+- (void)loop:(NSUInteger)g {
+    CGSize S = _screen.bounds.size;
+    _cc.alpha = 0; _strip.transform = CGAffineTransformIdentity;
+    _dot.center = CGPointMake(S.width - 9, 7); _dot.alpha = 0; _dot.transform = CGAffineTransformIdentity;
+    [self after:0.35 gen:g do:^{
+        [UIView animateWithDuration:0.2 animations:^{ self->_dot.alpha = 1; }];
+        [UIView animateWithDuration:0.55 delay:0.2 options:UIViewAnimationOptionCurveEaseInOut animations:^{ self->_dot.center = CGPointMake(S.width - 9, 40); } completion:nil];
+        [UIView animateWithDuration:0.2 delay:0.65 options:0 animations:^{ self->_dot.alpha = 0; self->_dot.transform = CGAffineTransformMakeScale(0.4, 0.4); } completion:nil];
+    }];
+    [self after:1.05 gen:g do:^{
+        [UIView animateWithDuration:0.3 animations:^{ self->_cc.alpha = 1; }];
+        [self showPage:0];
+    }];
+    [self after:2.8 gen:g do:^{ [self showPage:1]; }];
+    [self after:4.4 gen:g do:^{ [self showPage:2]; }];
+    [self after:6.0 gen:g do:^{ [UIView animateWithDuration:0.4 animations:^{ self->_cc.alpha = 0; }]; }];
+    [self after:6.8 gen:g do:^{ [self loop:g]; }];
+}
+@end
+
+// the card cell is made at runtime as a subclass of PSTableCell, so SpringBoard never needs Preferences.framework
+static const void *kCardBuilt = &kCardBuilt;
+static void CardBuild(UITableViewCell *self) {
+    if (objc_getAssociatedObject(self, kCardBuilt)) return;
+    objc_setAssociatedObject(self, kCardBuilt, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    self.selectionStyle = UITableViewCellSelectionStyleNone;
+    UILabel *t = [UILabel new]; t.tag = 0xC2601;
+    t.text = @"Customize Control Center";
+    t.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
+    t.textColor = UIColor.labelColor; t.numberOfLines = 0;
+    UILabel *b = [UILabel new]; b.tag = 0xC2602;
+    b.text = @"Swipe down from the top-right edge to open Control Center. Add, rearrange, and resize any control.";
+    b.font = [UIFont systemFontOfSize:15]; b.textColor = UIColor.secondaryLabelColor; b.numberOfLines = 0;
+    C26MiniPhone *ph = [[C26MiniPhone alloc] initWithFrame:CGRectMake(0, 0, 66, 132)]; ph.tag = 0xC2603;
+    [self.contentView addSubview:t]; [self.contentView addSubview:b]; [self.contentView addSubview:ph];
+}
+static void CardLayout(UITableViewCell *self, SEL _cmd) {
+    struct objc_super sup = { self, class_getSuperclass(object_getClass(self)) };
+    ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
+    CardBuild(self);
+    self.textLabel.hidden = YES; self.detailTextLabel.hidden = YES; self.imageView.hidden = YES;
+    self.accessoryType = UITableViewCellAccessoryNone;
+    UIView *cv = self.contentView;
+    CGFloat W = cv.bounds.size.width, H = cv.bounds.size.height, m = 18;
+    UIView *ph = [cv viewWithTag:0xC2603];
+    ph.frame = CGRectMake(W - 66 - 22, (H - 132) / 2, 66, 132);
+    CGFloat tw = CGRectGetMinX(ph.frame) - m - 16;
+    UILabel *t = (UILabel *)[cv viewWithTag:0xC2601], *b = (UILabel *)[cv viewWithTag:0xC2602];
+    CGFloat th = ceil([t sizeThatFits:CGSizeMake(tw, CGFLOAT_MAX)].height);
+    CGFloat bh = ceil([b sizeThatFits:CGSizeMake(tw, CGFLOAT_MAX)].height);
+    CGFloat y = MAX(12, (H - th - 6 - bh) / 2);
+    t.frame = CGRectMake(m, y, tw, th);
+    b.frame = CGRectMake(m, y + th + 6, tw, bh);
+}
+static Class CardCellClass(void) {
+    static Class c;
+    if (c) return c;
+    Class sup = NSClassFromString(@"PSTableCell");
+    if (!sup) return nil;
+    c = objc_getClass("C26CCCardCell");
+    if (!c) {
+        c = objc_allocateClassPair(sup, "C26CCCardCell", 0);
+        class_addMethod(c, @selector(layoutSubviews), (IMP)CardLayout, "v@:");
+        objc_registerClassPair(c);
+    }
+    return c;
+}
+
+static void CCResetTap(UIViewController *self, SEL _cmd, id spec) {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:nil message:@"This will reset your Control Center layout to factory defaults." preferredStyle:UIAlertControllerStyleActionSheet];
+    [a addAction:[UIAlertAction actionWithTitle:@"Reset Control Center" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *x) {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.nano.control26/reset"), NULL, NULL, YES);
+        [[UINotificationFeedbackGenerator new] notificationOccurred:UINotificationFeedbackTypeSuccess];
+    }]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    UIPopoverPresentationController *pop = a.popoverPresentationController;
+    if (pop) { pop.sourceView = self.view; pop.sourceRect = CGRectMake(self.view.bounds.size.width / 2, self.view.bounds.size.height / 2, 1, 1); }
+    [self presentViewController:a animated:YES completion:nil];
+}
+
+static NSMutableDictionary *gCCClassIs;
+static BOOL IsCCSettings(Class cls) {
+    if (!cls) return NO;
+    NSString *name = NSStringFromClass(cls);
+    if (!gCCClassIs) gCCClassIs = [NSMutableDictionary dictionary];
+    NSNumber *c = gCCClassIs[name];
+    if (c) return c.boolValue;
+    NSString *bp = [NSBundle bundleForClass:cls].bundlePath ?: @"";
+    BOOL yes = [bp.lastPathComponent hasPrefix:@"ControlCenterSettings"] || [name hasPrefix:@"CCSModuleSettings"] || [name hasPrefix:@"CCUIModuleSettings"]
+        || ([name rangeOfString:@"ControlCenter"].location != NSNotFound && ![name hasPrefix:@"PS"]);
+    gCCClassIs[name] = @(yes);
+    return yes;
+}
+
+// Apple's list: a switch group (Access Within Apps, Show Home Controls), INCLUDED CONTROLS, MORE CONTROLS.
+// Ours: the card, Access Within Apps, Reset.
+static NSArray *FilterCCSpecs(UIViewController *ctl, NSArray *arr) {
+    if (![arr isKindOfClass:[NSArray class]]) return arr;
+    for (id s in arr) if ([[s propertyForKey:@"c26"] boolValue]) return arr;
+    NSInteger SW = PSType(@"PSSwitchCell", 6), GR = PSType(@"PSGroupCell", 0);
+    id sw = nil; NSUInteger other = 0;
+    for (id s in arr) {
+        if (![s respondsToSelector:@selector(cellType)]) continue;
+        NSInteger t = [s cellType];
+        if (t == SW) { if (!sw) sw = s; }
+        else if (t != GR) other++;
+    }
+    if (other < 3) return arr;   // not the page we think it is
+    Class S = NSClassFromString(@"PSSpecifier");
+    if (!S) return arr;
+    NSMutableArray *out = [NSMutableArray array];
+    id g0 = [S emptyGroupSpecifier];
+    SP(g0, @YES, @"c26");
+    [out addObject:g0];
+    Class cardC = CardCellClass();
+    if (cardC) {
+        id card = [S preferenceSpecifierNamed:@"" target:ctl set:NULL get:NULL detail:Nil cell:PSType(@"PSStaticTextCell", -1) edit:Nil];
+        SP(card, cardC, @"cellClass");
+        SP(card, @164, @"height");
+        SP(card, @YES, @"c26");
+        [card setIdentifier:@"C26_CARD"];
+        [out addObject:card];
+    }
+    if (sw) {
+        id g1 = [S emptyGroupSpecifier];
+        SP(g1, @"Allow access to Control Center within apps. When disabled, you can still access Control Center from the Home Screen.", @"footerText");
+        SP(g1, @YES, @"c26");
+        [out addObject:g1];
+        [out addObject:sw];
+    }
+    id g2 = [S emptyGroupSpecifier];
+    SP(g2, @"This will reset your Control Center layout to factory defaults.", @"footerText");
+    SP(g2, @YES, @"c26");
+    [out addObject:g2];
+    id reset = [S preferenceSpecifierNamed:@"Reset Control Center" target:ctl set:NULL get:NULL detail:Nil cell:PSType(@"PSButtonCell", 13) edit:Nil];
+    SP(reset, @YES, @"c26");
+    [reset setIdentifier:@"C26_RESET"];
+    if ([reset respondsToSelector:@selector(setButtonAction:)]) [reset setButtonAction:NSSelectorFromString(@"c26ResetControlCenter:")];
+    [out addObject:reset];
+    Ivar iv = class_getInstanceVariable(NSClassFromString(@"PSListController"), "_specifiers");
+    if (iv) object_setIvarWithStrongDefault(ctl, iv, out);
+    return out;
+}
+
+static NSArray *(*origPSSpecs)(id, SEL);
+static NSArray *PSSpecs(id self, SEL _cmd) {
+    NSArray *a = origPSSpecs(self, _cmd);
+    if (!IsCCSettings(object_getClass(self))) return a;
+    @try { return FilterCCSpecs(self, a); } @catch (__unused id e) { return a; }
+}
+static NSArray *(*origCCSpecs)(id, SEL);
+static NSArray *CCSpecs(id self, SEL _cmd) {
+    NSArray *a = origCCSpecs(self, _cmd);
+    @try { return FilterCCSpecs(self, a); } @catch (__unused id e) { return a; }
+}
+static NSInteger CCNoEditStyle(id s, SEL c, id tv, id ip) { return UITableViewCellEditingStyleNone; }
+static BOOL CCNo(id s, SEL c, id tv, id ip) { return NO; }
+static void CCNoop3(id s, SEL c, id a, id b, id d) {}
+
+static void UnEdit(UIViewController *self) {
+    UITableView *tv = [self respondsToSelector:@selector(table)] ? [self table] : nil;
+    if (![tv isKindOfClass:[UITableView class]]) return;
+    tv.allowsSelectionDuringEditing = YES;
+    if (tv.editing) [tv setEditing:NO animated:NO];
+}
+
+static void EnsureFiltered(UIViewController *self) {
+    Ivar iv = class_getInstanceVariable(NSClassFromString(@"PSListController"), "_specifiers");
+    NSArray *cur = iv ? object_getIvar(self, iv) : nil;
+    if (![cur isKindOfClass:[NSArray class]] || !cur.count) return;
+    for (id s in cur) if ([[s propertyForKey:@"c26"] boolValue]) return;
+    NSArray *f = FilterCCSpecs(self, cur);
+    if (f != cur && [self respondsToSelector:@selector(setSpecifiers:)]) [(id)self setSpecifiers:[f mutableCopy]];
+}
+
+static NSMutableSet *gCCPrepared;
+static void PrepareCCClass(Class cls) {
+    if (!gCCPrepared) gCCPrepared = [NSMutableSet set];
+    NSString *n = NSStringFromClass(cls);
+    if ([gCCPrepared containsObject:n]) return;
+    [gCCPrepared addObject:n];
+    Class PS = NSClassFromString(@"PSListController");
+    // methods this class itself defines (not inherited)
+    NSMutableSet *own = [NSMutableSet set];
+    unsigned int cnt = 0; Method *ml = class_copyMethodList(cls, &cnt);
+    for (unsigned int i = 0; i < cnt; i++) [own addObject:NSStringFromSelector(method_getName(ml[i]))];
+    free(ml);
+    if ([own containsObject:@"specifiers"] && !origCCSpecs)
+        MSHookMessageEx(cls, @selector(specifiers), (IMP)CCSpecs, (IMP *)&origCCSpecs);
+    // the page's own table code expects its module sections; send everything back to the plain PSListController code
+    for (NSString *sn in @[@"numberOfSectionsInTableView:", @"tableView:numberOfRowsInSection:", @"tableView:cellForRowAtIndexPath:",
+                           @"tableView:heightForRowAtIndexPath:", @"tableView:estimatedHeightForRowAtIndexPath:",
+                           @"tableView:titleForHeaderInSection:", @"tableView:titleForFooterInSection:",
+                           @"tableView:viewForHeaderInSection:", @"tableView:viewForFooterInSection:",
+                           @"tableView:heightForHeaderInSection:", @"tableView:heightForFooterInSection:",
+                           @"tableView:didSelectRowAtIndexPath:", @"tableView:willSelectRowAtIndexPath:",
+                           @"tableView:shouldHighlightRowAtIndexPath:", @"tableView:willDisplayCell:forRowAtIndexPath:",
+                           @"tableView:targetIndexPathForMoveFromRowAtIndexPath:toProposedIndexPath:",
+                           @"tableView:moveRowAtIndexPath:toIndexPath:", @"tableView:commitEditingStyle:forRowAtIndexPath:"]) {
+        if (![own containsObject:sn]) continue;
+        SEL s = NSSelectorFromString(sn);
+        Method pm = PS ? class_getInstanceMethod(PS, s) : NULL;
+        Method cm = class_getInstanceMethod(cls, s);
+        if (pm) class_replaceMethod(cls, s, method_getImplementation(pm), method_getTypeEncoding(pm));
+        else if ([sn hasPrefix:@"tableView:willDisplayCell"] || [sn hasPrefix:@"tableView:moveRow"] || [sn hasPrefix:@"tableView:commitEditing"])
+            class_replaceMethod(cls, s, (IMP)CCNoop3, method_getTypeEncoding(cm));
+    }
+    class_replaceMethod(cls, @selector(tableView:editingStyleForRowAtIndexPath:), (IMP)CCNoEditStyle, "q@:@@");
+    class_replaceMethod(cls, @selector(tableView:canEditRowAtIndexPath:), (IMP)CCNo, "B@:@@");
+    class_replaceMethod(cls, @selector(tableView:canMoveRowAtIndexPath:), (IMP)CCNo, "B@:@@");
+    class_replaceMethod(cls, @selector(tableView:shouldIndentWhileEditingRowAtIndexPath:), (IMP)CCNo, "B@:@@");
+    class_addMethod(cls, NSSelectorFromString(@"c26ResetControlCenter:"), (IMP)CCResetTap, "v@:@");
+}
+
+static void (*origPSLoadView)(id, SEL);
+static void PSLoadView(id self, SEL _cmd) {
+    BOOL cc = IsCCSettings(object_getClass(self));
+    if (cc) @try { PrepareCCClass(object_getClass(self)); } @catch (__unused id e) {}
+    origPSLoadView(self, _cmd);
+    if (cc) @try { UnEdit(self); } @catch (__unused id e) {}
+}
+static void (*origPSWillAppear)(id, SEL, BOOL);
+static void PSWillAppear(id self, SEL _cmd, BOOL a) {
+    BOOL cc = IsCCSettings(object_getClass(self));
+    if (cc) @try { PrepareCCClass(object_getClass(self)); } @catch (__unused id e) {}
+    origPSWillAppear(self, _cmd, a);
+    if (cc) {
+        @try { EnsureFiltered(self); UnEdit(self); } @catch (__unused id e) {}
+        __weak id ws = self;
+        dispatch_async(dispatch_get_main_queue(), ^{ @try { UnEdit(ws); } @catch (__unused id e) {} });
+    }
+}
+static void (*origPSDidAppear)(id, SEL, BOOL);
+static void PSDidAppear(id self, SEL _cmd, BOOL a) {
+    origPSDidAppear(self, _cmd, a);
+    if (IsCCSettings(object_getClass(self))) @try { UnEdit(self); } @catch (__unused id e) {}
+}
+
+static void InstallCCSettingsHooks(void) {
+    Class PS = NSClassFromString(@"PSListController");
+    if (!PS) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ InstallCCSettingsHooks(); });
+        return;
+    }
+    MSHookMessageEx(PS, @selector(specifiers), (IMP)PSSpecs, (IMP *)&origPSSpecs);
+    MSHookMessageEx(PS, @selector(loadView), (IMP)PSLoadView, (IMP *)&origPSLoadView);
+    MSHookMessageEx(PS, @selector(viewWillAppear:), (IMP)PSWillAppear, (IMP *)&origPSWillAppear);
+    MSHookMessageEx(PS, @selector(viewDidAppear:), (IMP)PSDidAppear, (IMP *)&origPSDidAppear);
+}
+
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+    if ([bid isEqualToString:@"com.apple.Preferences"]) {
+        LoadPrefs();
+        if (gEnabled && gCCPage) InstallCCSettingsHooks();
+        return;
+    }
     if (![bid isEqualToString:@"com.apple.springboard"]) return;
     LoadPrefs();
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, ResetNote, CFSTR("com.nano.control26/reset"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
     %init;
     // Control Center's frameworks can load after SpringBoard starts. Check once

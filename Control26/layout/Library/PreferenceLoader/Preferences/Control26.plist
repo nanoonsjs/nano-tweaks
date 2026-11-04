@@ -78,6 +78,27 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
+			<key>label</key><string>Extras</string>
+			<key>footerText</key><string>Opening Animation: controls drop in one by one when Control Center opens. Settings Page: Settings &gt; Control Center gets the iOS 18 look with a Reset button (the + button in edit mode replaces the old control lists).</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Opening Animation</string>
+			<key>key</key><string>dropin</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>New Settings Page</string>
+			<key>key</key><string>ccsettings</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
 			<key>label</key><string>Debug</string>
 			<key>footerText</key><string>Shows a purple box with what Control26 found. Send a screenshot if something looks off, then turn it off.</string>
 		</dict>
