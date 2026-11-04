@@ -1,4 +1,5 @@
-// Control26 0.5.3 - made by nano
+// Control26 0.5.4 - made by nano
+// 0.5.4: + and power can be tapped again (they moved out of the content area that gets the touches)
 // 0.5.3: fixed the Safe Mode crash (the grid was inside Control Center's module view), grid lines up,
 //        + / power on the status bar line, smooth shaped glow, the others make room while you drag,
 //        editing hides under Add a Control, volume can't be resized
@@ -2207,7 +2208,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.5.3 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.5.4 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2645,8 +2646,10 @@ static void RemoveModule(NSString *ident) {
 // + (top left) and power (top right), between the status bar and the first row
 static void PlaceTopButtons(UIViewController *vc) {
     if (!vc.isViewLoaded) return;
-    UIView *host = KV(vc, @"overlayContainerView");
-    if (![host isKindOfClass:[UIView class]]) host = vc.view;
+    // they sit above Control Center's content area, so they live in its root view (taps outside
+    // the content area never reached them before)
+    UIView *host = vc.view;
+    { UIView *old = KV(vc, @"overlayContainerView"); if ([old isKindOfClass:[UIView class]] && old != host) { [[old viewWithTag:TOPPLUS_TAG] removeFromSuperview]; [[old viewWithTag:TOPPOWER_TAG] removeFromSuperview]; } }
     UIButton *plus = (UIButton *)[host viewWithTag:TOPPLUS_TAG], *pw = (UIButton *)[host viewWithTag:TOPPOWER_TAG];
     if (!gEnabled || !gEditUI) { [plus removeFromSuperview]; [pw removeFromSuperview]; return; }
     UIView *cv = CollectionView();
@@ -2683,6 +2686,10 @@ static void PlaceTopButtons(UIViewController *vc) {
             [plus setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
         } completion:nil];
     }
+    // fade with Control Center's content (it fades in and out when opening / closing)
+    CGFloat a = 1;
+    for (UIView *q = cv; q && q != host; q = q.superview) a *= q.alpha;
+    if (fabs(plus.alpha - a) > 0.01) { plus.alpha = a; pw.alpha = a; }
     if (host.subviews.lastObject != pw) { [host bringSubviewToFront:plus]; [host bringSubviewToFront:pw]; }
     if (!gEditing) gEditDebug = [NSString stringWithFormat:@"top cy=%.0f safeTop=%.0f row0=%.0f,%.0f", cy, top, r0.origin.x, r0.origin.y];
 }
