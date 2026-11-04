@@ -1,4 +1,5 @@
-// Control26 0.6.5 - made by nano
+// Control26 0.6.6 - made by nano
+// 0.6.6: Big Music / Connectivity and their copies disappear at once when Control Center closes
 // 0.6.5: hold and drag works from anywhere on a control in edit mode, Apple's AirPlay / pause stay hidden after opening the player
 // 0.6.4: controls drop in one by one when Control Center opens (iOS 26), Settings > Control Center redesigned
 //        like iOS 18 (Customize card with animated phone, Access Within Apps, Reset Control Center)
@@ -3457,8 +3458,23 @@ static void HideTopButtons(BOOL animated) {
     if (animated) [UIView animateWithDuration:0.15 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ a.alpha = 0; b.alpha = 0; } completion:nil];
     else { a.alpha = 0; b.alpha = 0; }
 }
+// our own Big Music / Big Connectivity views and the copies go away at once when Control Center closes
+static void HideOurModules(BOOL hide) {
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    @try {
+        NSMutableArray *vs = [NSMutableArray array];
+        if (gCopyRoot) [vs addObject:gCopyRoot];
+        for (UIView *m in ModuleMap().allValues) { UIView *bv = [m viewWithTag:BIG_TAG]; if (bv) [vs addObject:bv]; }
+        for (UIView *v in vs) {
+            if (hide) { [v.layer removeAllAnimations]; v.alpha = 0; }
+            else if (v.alpha < 1 && ![v.layer animationForKey:@"opacity"]) v.alpha = 1;
+        }
+    } @catch (__unused id e) {}
+    [CATransaction commit];
+}
 static void StartClosing(void) {
     gClosing = YES; gClosingAt = CACurrentMediaTime();
+    HideOurModules(YES);
     HideTopButtons(YES);
     @try { if (gEditing) ExitEdit(NO); } @catch (__unused id e) {}
     @try { ApplyPageVisibility(); } @catch (__unused id e) {}
@@ -3473,6 +3489,7 @@ static void DropInModules(UIViewController *ov);
 static id BeginPresent(id self, SEL _cmd, BOOL animated, BOOL interactive) {
     gClosing = NO;
     @try { if (gEditing) ExitEdit(NO); } @catch (__unused id e) {}
+    HideOurModules(NO);
     id r = origBeginPresent(self, _cmd, animated, interactive);
     @try { DropInModules(self); } @catch (__unused id e) {}
     return r;
@@ -3835,6 +3852,8 @@ static BOOL ModuleExpanded(UIView *moduleView) {
     return [x respondsToSelector:@selector(boolValue)] && [x boolValue];
 }
 static void StyleBigModules(void) {
+    if (gClosing) { HideOurModules(YES); return; }
+    HideOurModules(NO);
     NSDictionary *mm = ModuleMap();
     for (NSString *k in mm) {
         NSString *l = k.lowercaseString;
@@ -3862,6 +3881,7 @@ static void StyleBigModules(void) {
 
 // A second Connectivity / Music on another page: drawn by us, it works the real one.
 static void StyleCopies(void) {
+    if (gClosing) { if (gCopyRoot) gCopyRoot.alpha = 0; return; }
     UIView *root = gCCVC.viewIfLoaded, *cv = CollectionView();
     NSArray *cps = SavedCopies();
     if (!gCopyViews) gCopyViews = [NSMutableDictionary dictionary];
