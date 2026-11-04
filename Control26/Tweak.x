@@ -1,4 +1,5 @@
-// Control26 1.0.1 - made by nano
+// Control26 1.0.2 - made by nano
+// 1.0.2: music sliders no longer flicker, Wi-Fi / Bluetooth arrows on the big Connectivity open their settings
 // 1.0.1: Apple's AirDrop glyph, smoother page icons and page scrolling (controls shrink, header and + / power stay put),
 //        music sliders move from where they are like Apple's (grow while held, stretch at the ends)
 // 1.0: first official release
@@ -138,7 +139,7 @@
 
 static BOOL gNoAuto = YES;
 static BOOL gEditUI = YES;
-static __weak UIViewController *gCCVC;   // Control Center (edit mode)
+// gCCVC: Control Center (edit mode), declared above
 static NSString *gEditDebug = @"-";
 static void StopAutoBrightness(void);
 static BOOL gEnabled = YES, gMusic = YES, gColors = YES, gBounce = YES, gDebug = NO, gJelly = YES, gConn = YES;
@@ -1782,6 +1783,21 @@ static UIColor *ConnOnColor(NSString *key) {
     return UIColor.systemBlueColor;
 }
 
+// Settings > Wi-Fi / Bluetooth from Control Center (Control Center closes)
+static __weak UIViewController *gCCVC;
+static void OpenSettingsPane(NSString *pane) {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    NSURL *u = [NSURL URLWithString:[@"prefs:root=" stringByAppendingString:pane]];
+    BOOL ok = NO;
+    Class W = NSClassFromString(@"LSApplicationWorkspace");
+    id ws = [W respondsToSelector:@selector(defaultWorkspace)] ? ((id (*)(id, SEL))objc_msgSend)(W, @selector(defaultWorkspace)) : nil;
+    SEL os = NSSelectorFromString(@"openSensitiveURL:withOptions:");
+    if ([ws respondsToSelector:os]) ok = ((BOOL (*)(id, SEL, id, id))objc_msgSend)(ws, os, u, nil);
+    if (!ok) [[UIApplication sharedApplication] openURL:u options:@{} completionHandler:nil];
+    UIViewController *cc = gCCVC;
+    SEL d = @selector(dismissAnimated:withCompletionHandler:);
+    if ([cc respondsToSelector:d]) ((void (*)(id, SEL, BOOL, id))objc_msgSend)(cc, d, YES, nil);
+}
 @interface C26ConnCard : UIControl
 @property (nonatomic, copy) NSString *key;
 @property (nonatomic, weak) UIControl *target;   // Apple's round button
@@ -2048,6 +2064,11 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
 }
 - (void)cancel { [self relax:0]; }
 - (void)fire {
+    // the network name / arrows: open Wi-Fi or Bluetooth settings instead of switching it
+    if (([_key isEqualToString:@"wifi"] || [_key isEqualToString:@"bt"]) && _chevron && !_pill) {
+        CGRect zone = CGRectInset(CGRectUnion(_sub.frame, _chevron.frame), -14, -14);
+        if (CGRectContainsPoint(zone, _touchStart)) { [self relax:0.4]; OpenSettingsPane([_key isEqualToString:@"wifi"] ? @"WIFI" : @"Bluetooth"); return; }
+    }
     [self relax:_pill ? 0.9 : 1.6];
     // The icon circle does its own little pop as the state flips.
     C26Spring *c = SpringFor(_circle);
@@ -3605,8 +3626,21 @@ static void SeekTo(double t) {
 @property (nonatomic) BOOL dragging;
 @property (nonatomic, strong) UIView *track, *fill;
 @property (nonatomic, copy) void (^changed)(float v, BOOL done);
+- (void)setLiveValue:(float)v;
 @end
-@implementation C26Bar { float _startV; CGFloat _startX, _over; }
+@implementation C26Bar { float _startV; CGFloat _startX, _over; CFTimeInterval _hold; }
+// updates from the system: ignored while you hold it and for a moment after (until the new value
+// comes back), and tiny wobbles don't redraw it
+- (void)setLiveValue:(float)v {
+    if (_dragging || CACurrentMediaTime() < _hold || !isfinite(v)) return;
+    v = MAX(0, MIN(1, v));
+    if (fabsf(v - _value) < 0.003) return;
+    _value = v;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    CGFloat fw = _track.bounds.size.width * _value;
+    if (fabs(_fill.frame.size.width - fw) > 0.25) _fill.frame = CGRectMake(0, 0, fw, _track.bounds.size.height);
+    [CATransaction commit];
+}
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
     _track = [UIView new]; _track.userInteractionEnabled = NO; _track.backgroundColor = [UIColor colorWithWhite:1 alpha:0.25]; _track.clipsToBounds = YES;
@@ -3647,7 +3681,7 @@ static void SeekTo(double t) {
     return YES;
 }
 - (void)endTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
-    _dragging = NO; _over = 0;
+    _dragging = NO; _over = 0; _hold = CACurrentMediaTime() + 1.6;
     if (_changed) _changed(_value, YES);
     [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ [self layoutSubviews]; } completion:nil];
 }
@@ -3809,11 +3843,11 @@ static void SeekTo(double t) {
     }
     if (!_progress.dragging) {
         double e = NowElapsed();
-        _progress.value = gNPDuration > 0 ? e / gNPDuration : 0;
+        [_progress setLiveValue:gNPDuration > 0 ? e / gNPDuration : 0];
         _elapsed.text = gNPTitle ? TimeText(e) : @"--:--";
         _remain.text = gNPDuration > 0 ? [@"-" stringByAppendingString:TimeText(gNPDuration - e)] : @"--:--";
     }
-    if (!_volume.dragging) _volume.value = GetVolume();
+    if (!_volume.dragging) [_volume setLiveValue:GetVolume()];
 }
 @end
 
