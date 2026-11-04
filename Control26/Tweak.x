@@ -1,4 +1,5 @@
-// Control26 1.0.4 - made by nano
+// Control26 1.1 - made by nano
+// 1.1: cover tap removed again; public release
 // 1.0.4: tap the cover to open the playing app (Music, Spotify, ...), page icons no longer react to taps (hold and slide)
 // 1.0.3: no more freeze when jumping pages, progress bar no longer flashes full while sliding, 4x2 player buttons centered
 // 1.0.2: music sliders no longer flicker, Wi-Fi / Bluetooth arrows on the big Connectivity open their settings
@@ -779,7 +780,7 @@ static void AnimateLayer(CALayer *l, CGPoint from, CGPoint to, CGFloat s0, CGFlo
     if ([cc respondsToSelector:d]) ((void (*)(id, SEL, BOOL, id))objc_msgSend)(cc, d, YES, nil);
 }
 @end
-static void MakeCoverTappable(UIImageView *art) {
+__attribute__((unused)) static void MakeCoverTappable(UIImageView *art) {
     art.userInteractionEnabled = YES;
     [art addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:[C26AppOpener shared] action:@selector(open:)]];
 }
@@ -789,7 +790,6 @@ static C26PassView *BuildOverlay(UIView *module) {
 
     UIImageView *art = [UIImageView new];
     art.tag = 1;
-    MakeCoverTappable(art);
     art.contentMode = UIViewContentModeScaleAspectFill;
     art.clipsToBounds = YES;
     art.layer.cornerCurve = kCACornerCurveContinuous;
@@ -2323,7 +2323,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 1.0.4 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 1.1 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -3757,7 +3757,6 @@ static void SeekTo(double t) {
     [self addSubview:_card];
     _art = [UIImageView new]; _art.contentMode = UIViewContentModeScaleAspectFill; _art.clipsToBounds = YES;
     _art.layer.cornerCurve = kCACornerCurveContinuous; _art.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
-    MakeCoverTappable(_art);
     [self addSubview:_art];
     _title = [UILabel new]; _title.textColor = UIColor.whiteColor; _title.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
     _artist = [UILabel new]; _artist.textColor = [UIColor colorWithWhite:1 alpha:0.62]; _artist.font = [UIFont systemFontOfSize:16];
