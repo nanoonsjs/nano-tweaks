@@ -38,6 +38,14 @@ for deb in sys.argv[2:]:
     if 'SileoDepiction:' not in c and os.path.exists(os.path.join(out, 'depictions', _pk + '.json')):
         c += '\nSileoDepiction: https://nanoonsjs.github.io/nano-repo/depictions/%s.json' % _pk
     pkg = [l.split(': ',1)[1] for l in c.splitlines() if l.startswith('Package: ')][0]
+    # the big banner Sileo / Zebra show on the package page and in search
+    _dj = os.path.join(out, 'depictions', pkg + '.json')
+    if 'Header:' not in c and os.path.exists(_dj):
+        import json as _json
+        try:
+            _h = _json.load(open(_dj)).get('headerImage')
+            if _h: c += '\nHeader: ' + _h
+        except Exception: pass
     if os.path.exists(os.path.join(out, 'icons', pkg + '.png')):
         lines = [l for l in c.splitlines() if not l.startswith('Icon: ')]
         lines.append('Icon: https://nanoonsjs.github.io/nano-repo/icons/%s.png?v=%d' % (pkg, int(os.path.getmtime(os.path.join(out, 'icons', pkg + '.png')))))
@@ -48,8 +56,8 @@ open(os.path.join(out, 'Packages'), 'wb').write(pk)
 open(os.path.join(out, 'Packages.gz'), 'wb').write(gzip.compress(pk))
 open(os.path.join(out, 'Packages.bz2'), 'wb').write(bz2.compress(pk))
 open(os.path.join(out, 'Packages.xz'), 'wb').write(lzma.compress(pk))
-rel = ['Origin: nano', 'Label: nano', 'Suite: stable', 'Version: 1.0', 'Codename: ios',
-       'Architectures: iphoneos-arm iphoneos-arm64 iphoneos-arm64e', 'Components: main', 'Description: Tweaks by nano']
+rel = ['Origin: nano', 'Label: nano repo', 'Suite: stable', 'Version: 1.0', 'Codename: ios',
+       'Architectures: iphoneos-arm iphoneos-arm64 iphoneos-arm64e', 'Components: main', 'Description: iOS 26 style tweaks for iOS 15 and 16 by nano']
 for algo, key in (('md5', 'MD5Sum'), ('sha256', 'SHA256')):
     rel.append(key + ':')
     for f in ('Packages', 'Packages.gz', 'Packages.bz2', 'Packages.xz'):
