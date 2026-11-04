@@ -1,0 +1,9 @@
+Package: com.nano.ios26packages
+Name: iOS 26 Packages
+Version: 1.0
+Architecture: iphoneos-arm64
+Description: All of nano's iOS 26 style tweaks in one install: Control26, Messages26, MusicPill and Photos26. Remove this package any time; the tweaks stay until you remove them too.
+Maintainer: nano
+Author: nano
+Section: Tweaks
+Depends: com.nano.control26 (>= 1.1), com.nano.messages26 (>= 1.2), com.nano.musicpill (>= 1.2.71), com.nano.photos26
