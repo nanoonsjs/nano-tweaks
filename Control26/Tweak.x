@@ -1,4 +1,5 @@
-// Control26 0.6.4 - made by nano
+// Control26 0.6.5 - made by nano
+// 0.6.5: hold and drag works from anywhere on a control in edit mode, Apple's AirPlay / pause stay hidden after opening the player
 // 0.6.4: controls drop in one by one when Control Center opens (iOS 26), Settings > Control Center redesigned
 //        like iOS 18 (Customize card with animated phone, Access Within Apps, Reset Control Center)
 // 0.6.3: moving controls works again in edit mode, copies of Connectivity / Music for other pages (Add a Control),
@@ -1036,6 +1037,8 @@ static void StyleModule(UIView *module) {
     if (o.superview != module) o = BuildOverlay(module);
     [module bringSubviewToFront:o];
     SetFrame(o, module.bounds);
+    // everything of Apple's under our overlay stays hidden, also what it brings back after the player was opened
+    for (UIView *v in module.subviews) if (v != o) HideMusic(v);
 
     CGFloat s = S.width / 163.0, m = 14 * s;
     UIImageView *art = (UIImageView *)[o viewWithTag:1];
@@ -2713,6 +2716,53 @@ static void RemoveModule(NSString *ident);
 @interface C26EditCtl : NSObject
 + (instancetype)shared;
 @end
+static NSString *gMoveIdent;
+static const void *kPageMask;
+// the control under a point (edit layer space): the smallest one, on the page you're looking at
+static NSString *ModuleAtPoint(CGPoint p) {
+    UIView *e = EditRoot(NO);
+    if (!e) return nil;
+    NSDictionary *mm = ModuleMap();
+    NSString *best = nil; CGFloat area = CGFLOAT_MAX;
+    for (NSString *k in mm) {
+        UIView *m = mm[k];
+        if (!m.window || m.hidden) continue;
+        CALayer *pm = objc_getAssociatedObject(m, kPageMask);
+        if (pm && m.layer.mask == pm && pm.opacity < 0.5) continue;
+        CGRect f = ModFrameIn(m, e);
+        if (!CGRectContainsPoint(CGRectInset(f, -4, -4), p)) continue;
+        if (f.size.width * f.size.height < area) { area = f.size.width * f.size.height; best = k; }
+    }
+    return best;
+}
+@interface C26MoveGate : NSObject <UIGestureRecognizerDelegate>
+@end
+@implementation C26MoveGate
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g {
+    if (!gEditing || gClosing) return NO;
+    UIView *root = gCCVC.viewIfLoaded, *e = EditRoot(NO);
+    if (!root || !e || e.hidden) return NO;
+    if ([root viewWithTag:ADDSHEET_TAG] || [root viewWithTag:PRESET_TAG] || [root viewWithTag:POWERUI_TAG]) return NO;
+    CGPoint p = [g locationInView:e];
+    UIView *h = [root hitTest:[g locationInView:root] withEvent:nil];
+    for (UIView *x = h; x && x != root; x = x.superview) {
+        if ([x isKindOfClass:[UIControl class]]) return NO;              // + / power / page icons / badges
+        if (x.superview == e && (x.tag == 1 || x.tag == 2)) return NO;    // resize handle, minus badge
+    }
+    return ModuleAtPoint(p) != nil;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return NO; }
+@end
+static void InstallMoveGesture(void) {
+    UIView *root = gCCVC.viewIfLoaded;
+    if (!root) return;
+    for (UIGestureRecognizer *x in root.gestureRecognizers) if ([x.name isEqualToString:@"c26.move"]) { x.enabled = YES; return; }
+    static C26MoveGate *gate; if (!gate) gate = [C26MoveGate new];
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[C26EditCtl shared] action:@selector(move:)];
+    lp.name = @"c26.move"; lp.minimumPressDuration = 0.2; lp.allowableMovement = 14;
+    lp.cancelsTouchesInView = YES; lp.delegate = gate;
+    [root addGestureRecognizer:lp];
+}
 @implementation C26EditCtl {
     C26Size _start, _last;
     CGFloat _px, _py;
@@ -2768,6 +2818,7 @@ static void RemoveModule(NSString *ident);
 // the way step aside while you drag, and everything stays put when you let go
 // swiping over a control while editing scrolls Control Center (with a little glide at the end)
 - (void)scroll:(UIPanGestureRecognizer *)g {
+    if (gResizing) return;
     UIScrollView *sv = KV(gCCVC, @"overlayScrollView");
     if (![sv isKindOfClass:[UIScrollView class]]) return;
     CGFloat minY = -sv.adjustedContentInset.top, maxY = MAX(minY, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.size.height);
@@ -2782,6 +2833,11 @@ static void RemoveModule(NSString *ident);
 }
 - (void)move:(UIGestureRecognizer *)g {
     NSString *ident = objc_getAssociatedObject(g.view, kEditIdent);
+    if (!ident) {
+        if (g.state == UIGestureRecognizerStateBegan) gMoveIdent = ModuleAtPoint([g locationInView:EditRoot(NO)]);
+        ident = gMoveIdent;
+        if (g.state != UIGestureRecognizerStateBegan && g.state != UIGestureRecognizerStateChanged) gMoveIdent = nil;
+    }
     UIView *e = EditRoot(NO), *cv = CollectionView();
     NSDictionary *mm = ModuleMap();
     UIView *mv = mm[ident];
@@ -3090,12 +3146,8 @@ static void UpdateEditUI(BOOL animated) {
             if (!dg) {
                 dg = [[UIView alloc] initWithFrame:f]; dg.tag = 3;
                 objc_setAssociatedObject(dg, kEditIdent, ident, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                UILongPressGestureRecognizer *mp = [[UILongPressGestureRecognizer alloc] initWithTarget:[C26EditCtl shared] action:@selector(move:)];
-                mp.minimumPressDuration = 0.18; mp.allowableMovement = 12;
-                [dg addGestureRecognizer:mp];
                 UIPanGestureRecognizer *sp = [[UIPanGestureRecognizer alloc] initWithTarget:[C26EditCtl shared] action:@selector(scroll:)];
                 sp.maximumNumberOfTouches = 1;
-                [sp requireGestureRecognizerToFail:mp];
                 [dg addGestureRecognizer:sp];
                 [e insertSubview:dg atIndex:0];
             }
@@ -3152,6 +3204,7 @@ static void EnterEdit(void) {
     gEditing = YES;
     [[UISelectionFeedbackGenerator new] selectionChanged];
     UpdateEditUI(YES);
+    @try { InstallMoveGesture(); } @catch (__unused id ex) {}
     UIView *e = EditRoot(NO);
     e.alpha = 0;
     [UIView animateWithDuration:0.35 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ e.alpha = 1; } completion:nil];
