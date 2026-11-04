@@ -1,4 +1,5 @@
-// Control26 0.6.1 - made by nano
+// Control26 0.6.2 - made by nano
+// 0.6.2: pages are separate: only the page you're on shows, the others fade out as you swipe
 // 0.6.1: real pages (4 x 7 each, up to 6): add one with + by the page icons while editing, empty pages
 //        go away, swipes snap to pages, slide along the icons to zoom out and jump; connectivity / music
 //        drawn like iOS 26 (no outer box, cards; player card with star + AirPlay pill)
@@ -2228,7 +2229,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.6.1 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.6.2 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2312,6 +2313,7 @@ typedef struct { C26Point origin; C26Size size; } C26Rect;
 static int PagesWanted(void);
 static int PageCount(void);
 static void CompactPages(void);
+static void ApplyPageVisibility(void);
 static void PlacePresetButton(UIView *e);
 static void StyleBigModules(void);
 static void PlaceDots(void);
@@ -2920,7 +2922,7 @@ static void BuildGrid(UIView *cv, UIView *e) {
         if ([taken containsObject:[NSString stringWithFormat:@"%d,%d", x, y]]) continue;
         CGRect c = CGRectInset(GridCell(gr, x, y), 2, 2);
         CALayer *l = [CALayer layer];
-        l.frame = c; l.cornerRadius = c.size.width / 2;
+        l.frame = c; l.cornerRadius = c.size.width / 2; l.name = [NSString stringWithFormat:@"p%d", y / PAGE_ROWS];
         l.backgroundColor = [UIColor colorWithWhite:1 alpha:0.075].CGColor;
         l.borderWidth = 1; l.borderColor = [UIColor colorWithWhite:1 alpha:0.10].CGColor;
         [g.layer addSublayer:l];
@@ -3339,6 +3341,7 @@ static void (*origOVScroll)(id, SEL, id);
 static void OVScroll(id self, SEL _cmd, id sv) {
     origOVScroll(self, _cmd, sv);
     if (gEditing && !gResizing && !gClosing) { @try { UpdateEditUI(NO); } @catch (__unused id e) {} }
+    if (!gClosing) { @try { ApplyPageVisibility(); PlaceDots(); } @catch (__unused id e) {} }
 }
 static void (*origOVLayout)(id, SEL);
 static void OVLayout(UIViewController *self, SEL _cmd) {
@@ -3357,6 +3360,7 @@ static void StartClosing(void) {
     gClosing = YES; gClosingAt = CACurrentMediaTime();
     HideTopButtons(YES);
     @try { if (gEditing) ExitEdit(NO); } @catch (__unused id e) {}
+    @try { ApplyPageVisibility(); } @catch (__unused id e) {}
     @try { [[gCCVC.viewIfLoaded viewWithTag:PAGEDOTS_TAG] setAlpha:0]; [[gCCVC.viewIfLoaded viewWithTag:PRESET_TAG] removeFromSuperview]; } @catch (__unused id e) {}
 }
 static id (*origBeginDismiss)(id, SEL, BOOL, BOOL);
@@ -3831,6 +3835,50 @@ static void CompactPages(void) {
     }
     if (changed) { [LayoutDefaults() setObject:np forKey:@"pos"]; RelayoutCC(); }
 }
+static const void *kPageMask = &kPageMask;
+static void ApplyPageVisibility(void) {
+    UIScrollView *sv = CCScroll();
+    if (!sv) return;
+    int n = PageCount();
+    BOOL on = gEnabled && gEditUI && n > 1 && !gClosing;
+    CGFloat f = 0;
+    if (on) { CGFloat o0 = PageOffset(0), o1 = PageOffset(1), ph = o1 - o0; if (ph > 1) f = (sv.contentOffset.y - o0) / ph; else on = NO; }
+    NSDictionary *mm = ModuleMap();
+    NSMutableDictionary *alphaById = [NSMutableDictionary dictionary];
+    for (NSString *k in mm) {
+        UIView *m = mm[k]; C26Rect r;
+        int q = LayoutRectFor(k, &r) ? (int)r.origin.y / PAGE_ROWS : 0;
+        CGFloat a = on ? MAX(0, MIN(1, 1 - fabs(q - f) * 1.4)) : 1;
+        alphaById[k] = @(a);
+        if (ModuleExpanded(m)) a = 1;
+        CALayer *mk = objc_getAssociatedObject(m, kPageMask);
+        if (a >= 0.999) {
+            if (mk && m.layer.mask == mk) m.layer.mask = nil;
+            objc_setAssociatedObject(m, kPageMask, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        } else {
+            if (!mk) { mk = [CALayer layer]; mk.backgroundColor = UIColor.blackColor.CGColor; objc_setAssociatedObject(m, kPageMask, mk, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+            if (m.layer.mask != mk && !m.layer.mask) m.layer.mask = mk;
+            [CATransaction begin]; [CATransaction setDisableActions:YES];
+            mk.frame = CGRectInset(m.bounds, -40, -40); mk.opacity = a;
+            [CATransaction commit];
+        }
+        // half-hidden controls of the next page can't be tapped by accident
+        if (!gEditing) m.userInteractionEnabled = a > 0.5;
+    }
+    // the edit layer (glow, handles, badges, circles) follows the same pages
+    UIView *e = gEditing ? EditRoot(NO) : nil;
+    for (UIView *x in e.subviews) {
+        NSString *i = objc_getAssociatedObject(x, kEditIdent);
+        if (x.tag < 1 || x.tag > 4 || ![i isKindOfClass:[NSString class]]) continue;
+        NSNumber *a = alphaById[i];
+        if (a && fabs(x.alpha - a.doubleValue) > 0.01 && ![x.layer animationForKey:@"opacity"]) x.alpha = a.doubleValue;
+        x.userInteractionEnabled = !a || a.doubleValue > 0.5;
+    }
+    UIView *g = [e viewWithTag:GRID_TAG];
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    for (CALayer *l in g.layer.sublayers) { int q = [[l.name substringFromIndex:1] intValue]; l.opacity = on ? MAX(0, MIN(1, 1 - fabs(q - f) * 1.4)) : 1; }
+    [CATransaction commit];
+}
 // the page icons on the right: tap one, or slide your finger along them
 @interface C26PageCtl : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
@@ -4105,7 +4153,7 @@ static void Tick(void) {
     // edit mode / top buttons
     @try {
         if (!gCCVC) for (UIView *s in [gSliders allObjects]) { UIViewController *o = s.window ? FindCCVC(s) : nil; if (o) { gCCVC = o; break; } }
-        if (gCCVC.viewIfLoaded.window && !gClosing) { PlaceTopButtons(gCCVC); if (gEditing && !gResizing) UpdateEditUI(NO); StyleBigModules(); PlaceDots(); }
+        if (gCCVC.viewIfLoaded.window && !gClosing) { PlaceTopButtons(gCCVC); if (gEditing && !gResizing) UpdateEditUI(NO); StyleBigModules(); PlaceDots(); ApplyPageVisibility(); }
     } @catch (__unused id e) {}
     NSMutableArray *cdbg = [NSMutableArray array], *expanded = [NSMutableArray array];
     for (UIView *b in [gConnButtons allObjects]) {
