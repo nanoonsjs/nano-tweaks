@@ -1,4 +1,5 @@
-// Control26 0.6.6 - made by nano
+// Control26 1.0 - made by nano
+// 1.0: first official release
 // 0.6.6: Big Music / Connectivity and their copies disappear at once when Control Center closes
 // 0.6.5: hold and drag works from anywhere on a control in edit mode, Apple's AirPlay / pause stay hidden after opening the player
 // 0.6.4: controls drop in one by one when Control Center opens (iOS 26), Settings > Control Center redesigned
