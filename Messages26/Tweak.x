@@ -1,4 +1,5 @@
-// Messages26 1.1 - made by nano
+// Messages26 1.2 - made by nano
+// 1.2: "iOS 26 Contact Photo" switch (glass back / FaceTime work without the bigger photo), Messages26 icon in its settings
 // 1.1: public release of 1.0.1-1.0.3 (name capsule fixes, smoother on older iPhones)
 // 1.0.3: the small original name no longer peeks out above the name capsule
 // 1.0.2: smoother on older iPhones (8 / 8 Plus / X): fewer screen checks, none while touching or scrolling
@@ -142,7 +143,9 @@ static void SendEvent(UIApplication *self, SEL _cmd, UIEvent *e) {
 static void HookSendControl(UIView *v);
 static void LockPreview(UIView *avatar, NSString *key);
 
+#include "IconData.h"
 #define DOM CFSTR("com.nano.messages26")
+static BOOL gBigPfp = YES;
 static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
 static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
     id v = file[key];
@@ -163,6 +166,7 @@ static void LoadPrefs(void) {
     gBarOn = gOn && PrefBool(file, @"bar", YES);
     gMenuOn = gOn && PrefBool(file, @"menu", YES);
     gTopOn = gOn && PrefBool(file, @"topbar", YES);
+    gBigPfp = gTopOn && PrefBool(file, @"bigphoto", YES);
     gSearchOn = gOn && PrefBool(file, @"searchpill", YES);
     gBubblesOn = gOn && PrefBool(file, @"bubbles", YES);
     gSwipeOn = gOn && PrefBool(file, @"swipereply", YES);
@@ -1286,7 +1290,7 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
             }
             if (left || right) { GlassBehind(v, left ? 10 : 7, right ? 7 : 7, right); [found addObject:[NSString stringWithFormat:@"%@%@", left ? @"L:" : @"R:", cn]]; continue; }
         }
-        if (chat && [v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && ((UILabel *)v).font.pointSize < 16 && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
+        if (chat && gBigPfp && [v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length && ((UILabel *)v).font.pointSize < 16 && fabs(CGRectGetMidX(f) - W / 2) < W * 0.25 && f.size.height < 30) {
             UILabel *l = (UILabel *)v;
             UIView *holder = l;
             // the label and its ">" share a small parent: cover both
@@ -1317,8 +1321,8 @@ static void Crisp(UIView *root, CGFloat s) {
 static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     UIView *name = gNameNow, *oldA = gAvatarV;
     UIView *av = nil;
-    if (SlowDevice() && chat && gTopOn && oldA.window && oldA.window == name.window) av = oldA;
-    else if (chat && gTopOn && name.window && nb) {
+    if (SlowDevice() && chat && gBigPfp && oldA.window && oldA.window == name.window) av = oldA;
+    else if (chat && gBigPfp && name.window && nb) {
         // the photo: a square right above the name, in the middle (searched in the whole window)
         UIWindow *win = name.window;
         CGRect nw = [name convertRect:name.bounds toView:nil];
@@ -1346,7 +1350,7 @@ static void ScaleTitle(BOOL chat, UINavigationBar *nb) {
     gAvatarV = av;
     CGFloat s = TITLE_SCALE;
     if (!av) {
-        if (name && !(chat && gTopOn)) { name.layer.sublayerTransform = CATransform3DIdentity; gNameTy = 0; name.layer.mask = nil; }
+        if (name && !(chat && gBigPfp)) { name.layer.sublayerTransform = CATransform3DIdentity; gNameTy = 0; name.layer.mask = nil; }
         gTitleDebug = [NSString stringWithFormat:@"title: no photo; near: %@", gTitleNear];
         return;
     }
@@ -1422,7 +1426,12 @@ static void StyleNav(UIWindow *w) {
         [st addObjectsFromArray:v.subviews];
     }
     // name glass left from another conversation / the list title: gone
-    for (UIView *h in [gNameGlass allObjects]) if (!chat || h != gNameNow) {
+    if (!gBigPfp && gNameNow) {   // iOS 26 photo turned off: the name goes back to normal
+        UIView *nm = gNameNow;
+        nm.layer.sublayerTransform = CATransform3DIdentity; nm.layer.mask = nil; gNameTy = 0; gNameTx = 0;
+        gNameNow = nil;
+    }
+    for (UIView *h in [gNameGlass allObjects]) if (!chat || !gBigPfp || h != gNameNow) {
         [objc_getAssociatedObject(h, &kGlassKey) removeFromSuperview];
         objc_setAssociatedObject(h, &kGlassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [gNameGlass removeObject:h];
@@ -4790,7 +4799,8 @@ static UIImage *IconTile(NSString *sym, UIColor *c) {
     @try { if ([tv respondsToSelector:NSSelectorFromString(@"_setSectionCornerRadius:")]) ((void (*)(id, SEL, CGFloat))objc_msgSend)(tv, NSSelectorFromString(@"_setSectionCornerRadius:"), 26); } @catch (__unused id e) {}
     // header card: icon, name, what it is
     UIView *hd = [[UIView alloc] initWithFrame:CGRectMake(0, 0, tv.bounds.size.width, 196)];
-    UIImageView *ic = [[UIImageView alloc] initWithImage:IconTile(@"bubble.left.and.bubble.right.fill", [UIColor colorWithRed:0.18 green:0.45 blue:1 alpha:1])];
+    UIImage *m26 = [UIImage imageWithData:[NSData dataWithBytesNoCopy:(void *)kM26IconPNG length:sizeof(kM26IconPNG) freeWhenDone:NO] scale:3];
+    UIImageView *ic = [[UIImageView alloc] initWithImage:m26 ?: IconTile(@"bubble.left.and.bubble.right.fill", [UIColor colorWithRed:0.18 green:0.45 blue:1 alpha:1])];
     ic.frame = CGRectMake(0, 18, 76, 76); ic.layer.cornerRadius = 20; ic.layer.cornerCurve = kCACornerCurveContinuous; ic.clipsToBounds = YES;
     ic.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
     ic.center = CGPointMake(hd.bounds.size.width / 2, ic.center.y);

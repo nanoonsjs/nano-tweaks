@@ -49,12 +49,20 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
-			<key>footerText</key><string>Glass back, name and FaceTime buttons at the top of a conversation, without the bar background.</string>
+			<key>footerText</key><string>Glass Top Bar: glass back and FaceTime buttons at the top of a conversation, without the bar background. iOS 26 Contact Photo: the bigger photo with the name in a glass capsule under it (turn it off to keep the normal small photo and name).</string>
 		</dict>
 		<dict>
 			<key>cell</key><string>PSSwitchCell</string>
 			<key>label</key><string>Glass Top Bar</string>
 			<key>key</key><string>topbar</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.nano.messages26</string>
+			<key>PostNotification</key><string>com.nano.messages26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>iOS 26 Contact Photo</string>
+			<key>key</key><string>bigphoto</string>
 			<key>default</key><true/>
 			<key>defaults</key><string>com.nano.messages26</string>
 			<key>PostNotification</key><string>com.nano.messages26/prefschanged</string>
