@@ -1,4 +1,5 @@
-// Control26 1.0.2 - made by nano
+// Control26 1.0.3 - made by nano
+// 1.0.3: no more freeze when jumping pages, progress bar no longer flashes full while sliding, 4x2 player buttons centered
 // 1.0.2: music sliders no longer flicker, Wi-Fi / Bluetooth arrows on the big Connectivity open their settings
 // 1.0.1: Apple's AirDrop glyph, smoother page icons and page scrolling (controls shrink, header and + / power stay put),
 //        music sliders move from where they are like Apple's (grow while held, stretch at the ends)
@@ -2292,7 +2293,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.6.3 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 1.0.3 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -3491,11 +3492,16 @@ static BOOL SPan(id self, SEL _cmd, id g) {
     }
     return origSPan(self, _cmd, g);
 }
+static BOOL gScrOn;
 static void (*origOVScroll)(id, SEL, id);
 static void OVScroll(id self, SEL _cmd, id sv) {
     origOVScroll(self, _cmd, sv);
-    if (gEditing && !gResizing && !gClosing) { @try { UpdateEditUI(NO); } @catch (__unused id e) {} }
-    if (!gClosing) { @try { StyleCopies(); ApplyPageVisibility(); PlaceDots(); } @catch (__unused id e) {} }
+    static CFTimeInterval lastHeavy;
+    CFTimeInterval now = CACurrentMediaTime();
+    BOOL heavy = !gScrOn || now - lastHeavy > 0.25;   // the full refresh at most 4 times a second while a page glides
+    if (heavy) lastHeavy = now;
+    if (heavy && gEditing && !gResizing && !gClosing) { @try { UpdateEditUI(NO); } @catch (__unused id e) {} }
+    if (!gClosing) { @try { StyleCopies(); ApplyPageVisibility(); if (heavy) PlaceDots(); } @catch (__unused id e) {} }
 }
 static void (*origOVLayout)(id, SEL);
 static void OVLayout(UIViewController *self, SEL _cmd) {
@@ -3658,7 +3664,6 @@ static void SeekTo(double t) {
     _track.frame = CGRectMake(x - grow, (self.bounds.size.height - h) / 2, w + grow * 2, h);
     _track.layer.cornerRadius = h / 2;
     CGFloat fw = _track.bounds.size.width * MAX(0, MIN(1, _value));
-    if (_over > 0) fw = _track.bounds.size.width;
     _fill.frame = CGRectMake(0, 0, fw, h);
 }
 - (void)setValue:(float)v { _value = v; [self setNeedsLayout]; }
@@ -3673,7 +3678,8 @@ static void SeekTo(double t) {
     float v = MAX(0, MIN(1, raw));
     BOOL hitEnd = (v == 0 || v == 1) && _value != v;
     _value = v;
-    CGFloat o = raw - v;
+    CGFloat o = raw - (CGFloat)v;
+    if (fabs(o) < 0.001) o = 0;
     _over = o == 0 ? 0 : (o > 0 ? 1 : -1) * (1 - 1 / (fabs(o) * 3 + 1)) * 0.5;   // eases off the further you pull
     [self layoutSubviews];
     if (hitEnd) [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
@@ -3780,7 +3786,11 @@ static void SeekTo(double t) {
         _route.frame = CGRectMake(S.width - pad - 38, pad, 38, 38); _route.alpha = 1; _route.layer.cornerRadius = 19;
         _route.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14];
         CGFloat cy = pad + a * 0.66;
-        _prev.frame = CGRectMake(x - 4, cy - 22, 44, 44); _play.frame = CGRectMake(x + (w - 50) / 2, cy - 25, 50, 50); _next.frame = CGRectMake(S.width - pad - 44 - 30, cy - 22, 44, 44);
+        // three evenly spaced buttons, play/pause in the middle of the text column
+        CGFloat third = w / 3;
+        _prev.frame = CGRectMake(x + third * 0.5 - 22, cy - 22, 44, 44);
+        _play.frame = CGRectMake(x + third * 1.5 - 25, cy - 25, 50, 50);
+        _next.frame = CGRectMake(x + third * 2.5 - 22, cy - 22, 44, 44);
         _progress.frame = CGRectMake(x, S.height - pad - 10, w, 14);
         _elapsed.hidden = _remain.hidden = _volume.hidden = _volLo.hidden = _volHi.hidden = _star.hidden = _airCap.hidden = YES;
         return;
@@ -4059,7 +4069,7 @@ static int CurrentPage(void) {
 // One frame-by-frame spring driver: page scrolling (so every frame updates the fades and copies,
 // not just the end) and shrinking the controls while you scrub the page icons.
 static double gShrink = 1, gShrinkV, gShrinkT = 1;
-static double gScrY, gScrV, gScrT; static BOOL gScrOn;
+static double gScrY, gScrV, gScrT;
 static void ApplyShrink(double s) {
     CATransform3D t = fabs(s - 1) < 0.0005 ? CATransform3DIdentity : CATransform3DMakeScale(s, s, 1);
     [CATransaction begin]; [CATransaction setDisableActions:YES];
@@ -4078,11 +4088,11 @@ static void ApplyShrink(double s) {
     if (_dl) return;
     _last = 0;
     _dl = [CADisplayLink displayLinkWithTarget:self selector:@selector(step:)];
-    if (@available(iOS 15.0, *)) _dl.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+    if (@available(iOS 15.0, *)) _dl.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 60);
     [_dl addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 - (void)step:(CADisplayLink *)d {
-    double dt = _last ? MIN(1 / 30.0, d.timestamp - _last) : 1 / 60.0;
+    double dt = _last ? MIN(0.05, d.timestamp - _last) : 1 / 60.0;
     _last = d.timestamp;
     BOOL busy = NO;
     @try {
