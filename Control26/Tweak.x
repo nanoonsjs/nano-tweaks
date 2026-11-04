@@ -1,4 +1,6 @@
-// Control26 0.5.5 - made by nano
+// Control26 0.5.6 - made by nano
+// 0.5.6: Apple's AirPlay/pause icon stays hidden after closing the big player, softer see-through edit glow,
+//        Add a Control grows out of its button and back, - badges and handles fade in
 // 0.5.5: move controls anywhere (gaps allowed, own layout), edit mode ends when Control Center closes,
 //        + / power vanish as soon as it starts closing
 // 0.5.4: + and power can be tapped again (they moved out of the content area that gets the touches)
@@ -192,6 +194,7 @@ static void HideOriginal(UIView *v) {
     if (!v) return;
     objc_setAssociatedObject(v, kHidByUs, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (v.alpha != 0) v.alpha = 0;
+    if (!v.layer.hidden) v.layer.hidden = YES;
 }
 static void ShowOriginal(UIView *v);
 static NSHashTable *gHiddenMusic;  // everything the music module code hid
@@ -210,6 +213,7 @@ static void ShowOriginal(UIView *v) {
     if (!v || !objc_getAssociatedObject(v, kHidByUs)) return;
     objc_setAssociatedObject(v, kHidByUs, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     v.alpha = 1;
+    v.layer.hidden = NO;
 }
 
 __attribute__((unused)) static void Forward(UIControl *c) {
@@ -2210,7 +2214,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.5.5 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.5.6 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2645,6 +2649,7 @@ static void ExitEdit(BOOL animated);
 static UIView *EditRoot(BOOL make);
 static void ShowPowerOff(void);
 static void ShowAddSheet(void);
+static CGAffineTransform SheetFromButton(UIView *panel);
 static void RemoveModule(NSString *ident);
 
 @interface C26EditCtl : NSObject
@@ -2752,9 +2757,13 @@ static void RemoveModule(NSString *ident);
 - (void)closeSheet:(id)x {
     UIView *sheet = [gCCVC.viewIfLoaded viewWithTag:ADDSHEET_TAG];
     UIView *panel = [sheet viewWithTag:2];
-    [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:0 animations:^{
+    if (!sheet || objc_getAssociatedObject(sheet, kEditIdent)) return;
+    objc_setAssociatedObject(sheet, kEditIdent, @"closing", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGAffineTransform to = SheetFromButton(panel);
+    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.92 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
         sheet.backgroundColor = UIColor.clearColor;
-        panel.transform = CGAffineTransformMakeTranslation(0, panel.bounds.size.height + 60);
+        panel.transform = to;
+        panel.alpha = 0;
     } completion:^(__unused BOOL f) { [sheet removeFromSuperview]; UpdateEditUI(YES); }];
 }
 - (void)pick:(UIButton *)b {
@@ -2934,13 +2943,13 @@ static void GlowFor(UIView *e, NSString *ident, CGRect f, CGFloat radius) {
         gw = [[UIView alloc] initWithFrame:gf]; gw.tag = 4; gw.userInteractionEnabled = NO;
         objc_setAssociatedObject(gw, kEditIdent, ident, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         halo = [CAShapeLayer layer]; halo.name = @"halo";
-        halo.fillColor = UIColor.clearColor.CGColor; halo.strokeColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor; halo.lineWidth = 6;
-        halo.shadowColor = UIColor.whiteColor.CGColor; halo.shadowOffset = CGSizeZero; halo.shadowRadius = 10; halo.shadowOpacity = 0.7;
+        halo.fillColor = UIColor.clearColor.CGColor; halo.strokeColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor; halo.lineWidth = 3;
+        halo.shadowColor = UIColor.whiteColor.CGColor; halo.shadowOffset = CGSizeZero; halo.shadowRadius = 9; halo.shadowOpacity = 0.45;
         ring = [CAShapeLayer layer]; ring.name = @"ring";
-        ring.fillColor = UIColor.clearColor.CGColor; ring.strokeColor = [UIColor colorWithWhite:1 alpha:0.95].CGColor; ring.lineWidth = 1.6;
+        ring.fillColor = UIColor.clearColor.CGColor; ring.strokeColor = UIColor.clearColor.CGColor; ring.lineWidth = 0;
         [gw.layer addSublayer:halo]; [gw.layer addSublayer:ring];
         CABasicAnimation *b = [CABasicAnimation animationWithKeyPath:@"opacity"];
-        b.fromValue = @0.15; b.toValue = @1; b.duration = 1.5; b.autoreverses = YES; b.repeatCount = HUGE_VALF;
+        b.fromValue = @0.2; b.toValue = @0.85; b.duration = 1.6; b.autoreverses = YES; b.repeatCount = HUGE_VALF;
         b.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
         [halo addAnimation:b forKey:@"breathe"];
         CABasicAnimation *r = [CABasicAnimation animationWithKeyPath:@"opacity"];
@@ -3020,8 +3029,10 @@ static void UpdateEditUI(BOOL animated) {
         }
         if (!canRemove && mb) { [mb removeFromSuperview]; mb = nil; }
         CGPoint bc = CGPointMake(CGRectGetMinX(f) + 6, CGRectGetMinY(f) + 6);
-        void (^place)(void) = ^{ h.center = hc; h.alpha = 1; mb.center = bc; mb.alpha = 1; };
-        if (animated) [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:place completion:nil];
+        BOOL fresh = (h && h.alpha < 1) || (mb && mb.alpha < 1);
+        if (fresh) { if (h.alpha < 1) h.center = hc; if (mb.alpha < 1) { mb.center = bc; mb.transform = CGAffineTransformMakeScale(0.6, 0.6); } }
+        void (^place)(void) = ^{ h.center = hc; h.alpha = 1; mb.center = bc; mb.alpha = 1; mb.transform = CGAffineTransformIdentity; };
+        if (animated || fresh) [UIView animateWithDuration:fresh ? 0.45 : 0.35 delay:fresh ? 0.08 : 0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:place completion:nil];
         else place();
     }
     for (UIView *x in [e.subviews copy]) {
@@ -3075,6 +3086,16 @@ static void ExitEdit(BOOL animated) {
     } @catch (__unused id ex) { gEditing = NO; }
 }
 
+// where the Add a Control button is: the sheet grows out of it and shrinks back into it
+static CGAffineTransform SheetFromButton(UIView *panel) {
+    UIView *root = panel.superview.superview ?: panel.superview;
+    UIView *add = [EditRoot(NO) viewWithTag:ADDBTN_TAG];
+    CGRect b = add ? [add.superview convertRect:add.frame toView:panel.superview] : CGRectMake(CGRectGetMidX(root.bounds) - 100, CGRectGetMaxY(root.bounds) - 90, 200, 50);
+    CGRect p = panel.frame;
+    if (p.size.width < 1 || p.size.height < 1) return CGAffineTransformIdentity;
+    CGFloat sx = b.size.width / p.size.width, sy = b.size.height / p.size.height;
+    return CGAffineTransformConcat(CGAffineTransformMakeScale(sx, sy), CGAffineTransformMakeTranslation(CGRectGetMidX(b) - CGRectGetMidX(p), CGRectGetMidY(b) - CGRectGetMidY(p)));
+}
 // Add a Control: every control that isn't in Control Center yet
 static NSString *ModuleName(NSString *ident, NSBundle *b) {
     NSString *n = [b objectForInfoDictionaryKey:@"CFBundleDisplayName"] ?: [b objectForInfoDictionaryKey:@"CFBundleName"];
@@ -3172,11 +3193,19 @@ static void ShowAddSheet(void) {
     }
     sv.contentSize = CGSizeMake(sv.bounds.size.width, 16 + ceil(items.count / cols) * tileH + 20);
     [root addSubview:sheet];
-    panel.transform = CGAffineTransformMakeTranslation(0, H + 60);
-    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:0 animations:^{
+    panel.transform = SheetFromButton(panel);
+    panel.alpha = 0.2;
+    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:0 animations:^{
         sheet.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3];
         panel.transform = CGAffineTransformIdentity;
+        panel.alpha = 1;
     } completion:nil];
+    NSUInteger k = 0;
+    for (UIView *tile in sv.subviews) {
+        tile.alpha = 0; tile.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.85, 0.85), CGAffineTransformMakeTranslation(0, 14));
+        [UIView animateWithDuration:0.45 delay:0.12 + MIN(k, 24) * 0.018 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ tile.alpha = 1; tile.transform = CGAffineTransformIdentity; } completion:nil];
+        k++;
+    }
 }
 
 // Slide to power off (iOS 26 look)
