@@ -1,0 +1,37 @@
+name: Clean up old builds
+
+# Keeps only the newest build release; every older one (and its tag) is deleted.
+# Runs after each build finishes, and when this file changes.
+on:
+  workflow_run:
+    workflows: ["Build tweaks"]
+    types: [completed]
+  push:
+    branches: [main]
+    paths: [".github/workflows/cleanup.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cleanup-builds
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete every build release except the newest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          newest=$(gh api "repos/$REPO/releases/latest" -q .tag_name)
+          echo "keeping $newest"
+          gh api --paginate "repos/$REPO/releases?per_page=100" -q '.[].tag_name' | grep '^build-' | grep -vx "$newest" > old.txt || true
+          echo "deleting $(wc -l < old.txt) old builds"
+          while read -r tag; do
+            gh release delete "$tag" --repo "$REPO" --cleanup-tag --yes || echo "::warning::could not delete $tag"
+          done < old.txt
