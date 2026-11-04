@@ -1,4 +1,6 @@
-// Control26 1.0 - made by nano
+// Control26 1.0.1 - made by nano
+// 1.0.1: Apple's AirDrop glyph, smoother page icons and page scrolling (controls shrink, header and + / power stay put),
+//        music sliders move from where they are like Apple's (grow while held, stretch at the ends)
 // 1.0: first official release
 // 0.6.6: Big Music / Connectivity and their copies disappear at once when Control Center closes
 // 0.6.5: hold and drag works from anywhere on a control in edit mode, Apple's AirPlay / pause stay hidden after opening the player
@@ -1731,8 +1733,36 @@ static UIImage *BluetoothImage(CGFloat side) {
     return img;
 }
 
+// Apple's AirDrop glyph: rings open at the bottom. Their private symbol when it's there, else drawn the same way.
+static UIImage *AirDropImage(CGFloat side) {
+    static UIImage *img;
+    if (img) return img;
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold];
+    SEL ps = NSSelectorFromString(@"_systemImageNamed:withConfiguration:");
+    if ([UIImage respondsToSelector:ps]) {
+        for (NSString *n in @[@"airdrop", @"airdrop.fill"]) {
+            UIImage *i = ((UIImage *(*)(id, SEL, NSString *, id))objc_msgSend)([UIImage class], ps, n, cfg);
+            if (i) { img = [i imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]; return img; }
+        }
+    }
+    UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(side, side)];
+    img = [r imageWithActions:^(__unused UIGraphicsImageRendererContext *c) {
+        CGPoint o = CGPointMake(side / 2, side / 2 + side * 0.02);
+        CGFloat R = side * 0.46, lw = side * 0.095;
+        CGFloat gap = 34 * M_PI / 180;   // half of the opening at the bottom
+        for (NSNumber *f in @[@0.30, @0.64, @0.98]) {
+            CGFloat rr = R * f.doubleValue - lw / 2;
+            UIBezierPath *p = [UIBezierPath bezierPathWithArcCenter:o radius:rr startAngle:M_PI_2 + gap endAngle:M_PI_2 - gap + 2 * M_PI clockwise:YES];
+            p.lineWidth = lw; p.lineCapStyle = kCGLineCapRound;
+            [UIColor.blackColor setStroke]; [p stroke];
+        }
+    }];
+    img = [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    return img;
+}
 static UIImage *ConnIcon(NSString *key) {
     UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold];
+    if ([key isEqualToString:@"airdrop"]) return AirDropImage(24);
     NSArray *names = @{ @"air": @[@"airplane"], @"wifi": @[@"wifi"], @"airdrop": @[@"airdrop", @"dot.radiowaves.left.and.right"],
                         @"cell": @[@"cellularbars", @"antenna.radiowaves.left.and.right"],
                         @"hotspot": @[@"personalhotspot", @"link"],
@@ -3473,8 +3503,11 @@ static void HideOurModules(BOOL hide) {
     } @catch (__unused id e) {}
     [CATransaction commit];
 }
+static void ApplyShrink(double s);
+static double gShrink, gShrinkV, gShrinkT;
 static void StartClosing(void) {
     gClosing = YES; gClosingAt = CACurrentMediaTime();
+    if (gShrink != 1) { gShrink = gShrinkT = 1; gShrinkV = 0; @try { ApplyShrink(1); } @catch (__unused id e) {} }
     HideOurModules(YES);
     HideTopButtons(YES);
     @try { if (gEditing) ExitEdit(NO); } @catch (__unused id e) {}
@@ -3573,7 +3606,7 @@ static void SeekTo(double t) {
 @property (nonatomic, strong) UIView *track, *fill;
 @property (nonatomic, copy) void (^changed)(float v, BOOL done);
 @end
-@implementation C26Bar
+@implementation C26Bar { float _startV; CGFloat _startX, _over; }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
     _track = [UIView new]; _track.userInteractionEnabled = NO; _track.backgroundColor = [UIColor colorWithWhite:1 alpha:0.25]; _track.clipsToBounds = YES;
@@ -3583,24 +3616,40 @@ static void SeekTo(double t) {
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat h = _dragging ? 12 : 7;
-    _track.frame = CGRectMake(0, (self.bounds.size.height - h) / 2, self.bounds.size.width, h);
+    CGFloat W = self.bounds.size.width, h = _dragging ? 13 : 7;
+    // past either end the bar stretches a little that way (rubber band), like Apple's
+    CGFloat extra = MIN(W * 0.06, fabs(_over) * W * 0.35);
+    CGFloat x = _over < 0 ? -extra : 0, w = W + extra + (_dragging ? 0 : 0);
+    CGFloat grow = _dragging ? 4 : 0;   // a touch wider while held
+    _track.frame = CGRectMake(x - grow, (self.bounds.size.height - h) / 2, w + grow * 2, h);
     _track.layer.cornerRadius = h / 2;
-    _fill.frame = CGRectMake(0, 0, self.bounds.size.width * MAX(0, MIN(1, _value)), h);
+    CGFloat fw = _track.bounds.size.width * MAX(0, MIN(1, _value));
+    if (_over > 0) fw = _track.bounds.size.width;
+    _fill.frame = CGRectMake(0, 0, fw, h);
 }
 - (void)setValue:(float)v { _value = v; [self setNeedsLayout]; }
-- (float)valueAt:(UITouch *)t { return MAX(0, MIN(1, [t locationInView:self].x / MAX(1, self.bounds.size.width))); }
 - (BOOL)beginTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
-    _dragging = YES;
-    [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:0 animations:^{ [self layoutSubviews]; } completion:nil];
+    // no jump to the finger: it moves from where it is, by how far you slide
+    _dragging = YES; _startV = _value; _startX = [t locationInView:self].x; _over = 0;
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ [self layoutSubviews]; } completion:nil];
     return YES;
 }
-- (BOOL)continueTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e { self.value = [self valueAt:t]; [self layoutSubviews]; if (_changed) _changed(_value, NO); return YES; }
+- (BOOL)continueTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
+    CGFloat raw = _startV + ([t locationInView:self].x - _startX) / MAX(1, self.bounds.size.width);
+    float v = MAX(0, MIN(1, raw));
+    BOOL hitEnd = (v == 0 || v == 1) && _value != v;
+    _value = v;
+    CGFloat o = raw - v;
+    _over = o == 0 ? 0 : (o > 0 ? 1 : -1) * (1 - 1 / (fabs(o) * 3 + 1)) * 0.5;   // eases off the further you pull
+    [self layoutSubviews];
+    if (hitEnd) [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    if (_changed) _changed(_value, NO);
+    return YES;
+}
 - (void)endTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
-    if (t) self.value = [self valueAt:t];
-    _dragging = NO;
+    _dragging = NO; _over = 0;
     if (_changed) _changed(_value, YES);
-    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:0 animations:^{ [self layoutSubviews]; } completion:nil];
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.62 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ [self layoutSubviews]; } completion:nil];
 }
 - (void)cancelTrackingWithEvent:(UIEvent *)e { [self endTrackingWithTouch:nil withEvent:e]; }
 @end
@@ -3973,11 +4022,68 @@ static int CurrentPage(void) {
     for (int p = 0; p < PageCount(); p++) { CGFloat d = fabs(PageOffset(p) - sv.contentOffset.y); if (d < bd) { bd = d; best = p; } }
     return best;
 }
+// One frame-by-frame spring driver: page scrolling (so every frame updates the fades and copies,
+// not just the end) and shrinking the controls while you scrub the page icons.
+static double gShrink = 1, gShrinkV, gShrinkT = 1;
+static double gScrY, gScrV, gScrT; static BOOL gScrOn;
+static void ApplyShrink(double s) {
+    CATransform3D t = fabs(s - 1) < 0.0005 ? CATransform3DIdentity : CATransform3DMakeScale(s, s, 1);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    for (UIView *m in ModuleMap().allValues) if (!CATransform3DEqualToTransform(m.layer.sublayerTransform, t)) m.layer.sublayerTransform = t;
+    UIView *e = gEditing ? EditRoot(NO) : nil;
+    for (UIView *x in e.subviews) if (x.tag == 4) x.layer.sublayerTransform = t;   // the glow follows its control
+    [CATransaction commit];
+}
+@interface C26Springs : NSObject
++ (instancetype)shared;
+- (void)kick;
+@end
+@implementation C26Springs { CADisplayLink *_dl; CFTimeInterval _last; }
++ (instancetype)shared { static C26Springs *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [C26Springs new]; }); return s; }
+- (void)kick {
+    if (_dl) return;
+    _last = 0;
+    _dl = [CADisplayLink displayLinkWithTarget:self selector:@selector(step:)];
+    if (@available(iOS 15.0, *)) _dl.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+    [_dl addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+- (void)step:(CADisplayLink *)d {
+    double dt = _last ? MIN(1 / 30.0, d.timestamp - _last) : 1 / 60.0;
+    _last = d.timestamp;
+    BOOL busy = NO;
+    @try {
+        if (gShrink != gShrinkT || gShrinkV != 0) {
+            double k = 300, c = 2 * sqrt(k) * 0.78;
+            gShrinkV += (k * (gShrinkT - gShrink) - c * gShrinkV) * dt;
+            gShrink += gShrinkV * dt;
+            if (fabs(gShrinkT - gShrink) < 0.0004 && fabs(gShrinkV) < 0.003) { gShrink = gShrinkT; gShrinkV = 0; } else busy = YES;
+            ApplyShrink(gShrink);
+        }
+        if (gScrOn) {
+            UIScrollView *sv = CCScroll();
+            if (!sv || sv.tracking || gClosing) gScrOn = NO;
+            else {
+                double k = 190, c = 2 * sqrt(k) * 0.92;
+                gScrV += (k * (gScrT - gScrY) - c * gScrV) * dt;
+                gScrY += gScrV * dt;
+                if (fabs(gScrT - gScrY) < 0.4 && fabs(gScrV) < 6) { gScrY = gScrT; gScrOn = NO; }
+                else busy = YES;
+                sv.contentOffset = CGPointMake(sv.contentOffset.x, gScrY);
+                if (!gScrOn && gEditing) UpdateEditUI(NO);
+            }
+        }
+    } @catch (__unused id e) { busy = NO; }
+    if (!busy) { [_dl invalidate]; _dl = nil; }
+}
+@end
+static void SetShrink(double target) { gShrinkT = target; [[C26Springs shared] kick]; }
 static void ScrollToPage(int p) {
     UIScrollView *sv = CCScroll();
     if (!sv) return;
     CGFloat y = PageOffset(MAX(0, MIN(PageCount() - 1, p)));
-    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.88 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ sv.contentOffset = CGPointMake(sv.contentOffset.x, y); } completion:^(__unused BOOL f) { if (gEditing) UpdateEditUI(NO); }];
+    if (!gScrOn) { [sv setContentOffset:sv.contentOffset animated:NO]; gScrY = sv.contentOffset.y; gScrV = 0; }
+    gScrT = y; gScrOn = YES;
+    [[C26Springs shared] kick];
 }
 // a swipe always lands on a page
 static void (*origWillEnd)(id, SEL, id, CGPoint, CGPoint *);
@@ -4089,30 +4195,34 @@ static void ApplyPageVisibility(void) {
     RelayoutCC();
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ ScrollToPage(n - 1); });
 }
-- (void)scrub:(UIPanGestureRecognizer *)g {
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldReceiveTouch:(UITouch *)t {
+    // the + (add page) button keeps its own tap
+    for (UIView *v = t.view; v && v != g.view; v = v.superview) if ([v isKindOfClass:[UIButton class]] && (v.tag < 100 || v.tag >= 110)) return NO;
+    return YES;
+}
+- (void)scrub:(UIGestureRecognizer *)g {
     UIView *dots = g.view;
     UIScrollView *sv = CCScroll();
+    if (sv && !CGAffineTransformIsIdentity(sv.transform)) sv.transform = CGAffineTransformIdentity;   // older versions scaled it
     int n = PageCount();
     CGFloat y = [g locationInView:dots].y;
     int idx = MAX(0, MIN(n - 1, (int)floor(y / 54)));
-    if (g.state == UIGestureRecognizerStateBegan) {
-        _hover = -1;
-        [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ sv.transform = CGAffineTransformMakeScale(0.86, 0.86); } completion:nil];
+    BOOL live = g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged;
+    if (g.state == UIGestureRecognizerStateBegan) { _hover = -1; SetShrink(0.9); }
+    // magnify like the Dock: the icon under your finger the most, its neighbours a bit
+    for (UIView *b in dots.subviews) if (b.tag >= 100 && b.tag < 110) {
+        CGFloat t = live ? MAX(0, 1 - fabs(y - b.center.y) / 80) : 0;
+        t = t * t * (3 - 2 * t);
+        CGAffineTransform want = CGAffineTransformScale(CGAffineTransformMakeTranslation(-10 * t, 0), 1 + 0.6 * t, 1 + 0.6 * t);
+        if (g.state == UIGestureRecognizerStateBegan || !live)
+            [UIView animateWithDuration:live ? 0.3 : 0.45 delay:0 usingSpringWithDamping:live ? 0.8 : 0.72 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = want; } completion:nil];
+        else b.transform = want;
     }
-    if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
-        if (idx != _hover) {
-            _hover = idx;
-            [[UISelectionFeedbackGenerator new] selectionChanged];
-            ScrollToPage(idx);
-            for (UIView *b in dots.subviews) if (b.tag >= 100 && b.tag < 110) {
-                BOOL on = b.tag - 100 == idx;
-                [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ b.transform = on ? CGAffineTransformMakeScale(1.55, 1.55) : CGAffineTransformIdentity; } completion:nil];
-            }
-        }
+    if (live) {
+        if (idx != _hover) { _hover = idx; [[UISelectionFeedbackGenerator new] selectionChanged]; ScrollToPage(idx); }
         return;
     }
-    for (UIView *b in dots.subviews) [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
-    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ sv.transform = CGAffineTransformIdentity; } completion:nil];
+    SetShrink(1);
 }
 @end
 static NSString *PageSymbol(int p) {
@@ -4139,7 +4249,10 @@ static void PlaceDots(void) {
     BOOL show = gEnabled && gEditUI && !landscape && !gClosing && (n > 1 || gEditing);
     if (!dots) {
         dots = [[UIView alloc] initWithFrame:CGRectZero]; dots.tag = PAGEDOTS_TAG; dots.alpha = 0;
-        UIPanGestureRecognizer *pg = [[UIPanGestureRecognizer alloc] initWithTarget:[C26PageCtl shared] action:@selector(scrub:)];
+        // starts as soon as you rest a finger on the icons (no need to move first)
+        UILongPressGestureRecognizer *pg = [[UILongPressGestureRecognizer alloc] initWithTarget:[C26PageCtl shared] action:@selector(scrub:)];
+        pg.minimumPressDuration = 0.12; pg.allowableMovement = CGFLOAT_MAX;
+        pg.delegate = (id<UIGestureRecognizerDelegate>)[C26PageCtl shared];
         [dots addGestureRecognizer:pg];
         [root addSubview:dots];
     }
