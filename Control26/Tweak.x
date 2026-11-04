@@ -1,4 +1,6 @@
-// Control26 0.5.7 - made by nano
+// Control26 0.6.0 - made by nano
+// 0.6.0: big layouts (connectivity 4x4/4x6/4x8 labeled tiles, music 4x2 strip / 4x4 player / 4x6+ big artwork),
+//        pages on the right (Favorites / Connectivity / Music, swipe up and down), saved layouts + reset
 // 0.5.7: Apple's AirPlay/play icons masked away for good, slider icons stay colored (no flicker),
 //        edit mode scrolls (swipe), hold a control to move it
 // 0.5.6: Apple's AirPlay/pause icon stays hidden after closing the big player, softer see-through edit glow,
@@ -263,6 +265,8 @@ static CFTimeInterval gLastFetch;
 typedef Boolean (*MRSendFn)(int, CFDictionaryRef);
 typedef void (*MRIsPlayingFn)(dispatch_queue_t, void (^)(Boolean));
 static BOOL gIsPlaying;
+static double gNPElapsed, gNPDuration, gNPRate;   // song position (for the big player)
+static NSDate *gNPStamp;
 static NSString *gNPApp;           // bundle id of the app that is playing
 static NSString *gCmdDebug = @"-";
 static NSNumber *gNPLiked;   // loved? (from Music's Love command state)
@@ -368,6 +372,11 @@ static void FetchNowPlaying(void) {
         NSData *data = d[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
         gNPTitle = [title isKindOfClass:[NSString class]] && title.length ? title : nil;
         gNPArtist = [artist isKindOfClass:[NSString class]] ? artist : nil;
+        id el = d[@"kMRMediaRemoteNowPlayingInfoElapsedTime"], du = d[@"kMRMediaRemoteNowPlayingInfoDuration"], ra = d[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"], ts = d[@"kMRMediaRemoteNowPlayingInfoTimestamp"];
+        gNPElapsed = [el respondsToSelector:@selector(doubleValue)] ? [el doubleValue] : 0;
+        gNPDuration = [du respondsToSelector:@selector(doubleValue)] ? [du doubleValue] : 0;
+        gNPRate = [ra respondsToSelector:@selector(doubleValue)] ? [ra doubleValue] : 1;
+        gNPStamp = [ts isKindOfClass:[NSDate class]] ? ts : [NSDate date];
         id liked = d[@"kMRMediaRemoteNowPlayingInfoIsLiked"];
         if ([liked respondsToSelector:@selector(boolValue)]) gNPLiked = @([liked boolValue]);
         if (gDebug) {
@@ -2216,7 +2225,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.5.7 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.6.0 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2291,6 +2300,17 @@ typedef struct { C26Point origin; C26Size size; } C26Rect;
 #define ADDBTN_TAG   0x43323644
 #define ADDSHEET_TAG 0x43323645
 #define POWERUI_TAG  0x43323646
+#define BIG_TAG      0x43323650
+#define PAGES_TAG    0x43323651
+#define PAGEDOTS_TAG 0x43323652
+#define PRESET_TAG   0x43323653
+#define PRESETBTN_TAG 0x43323654
+static int gPage = 0;                        // 0 = Control Center, 1 = Connectivity, 2 = Music
+static void ShowPage(int page, BOOL animated);
+static void PlacePresetButton(UIView *e);
+static void StyleBigModules(void);
+static void PlaceDots(void);
+static void RefreshPage(void);
 
 static BOOL gEditing = NO, gResizing = NO, gClosing = NO;
 static CFTimeInterval gClosingAt;
@@ -3074,7 +3094,8 @@ static void UpdateEditUI(BOOL animated) {
     CGRect af = CGRectMake((root.bounds.size.width - aw) / 2, root.bounds.size.height - root.safeAreaInsets.bottom - ah - 18, aw, ah);
     if (!CGRectEqualToRect(add.frame, af) && CGAffineTransformIsIdentity(add.transform)) { add.frame = af; RoundGlass(add); }
     if (add.alpha < 1 && ![add.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.3 animations:^{ add.alpha = 1; }];
-    UIView *sheet = [root viewWithTag:ADDSHEET_TAG];
+    PlacePresetButton(e);
+    UIView *sheet = [root viewWithTag:ADDSHEET_TAG] ?: [root viewWithTag:PRESET_TAG];
     e.hidden = sheet != nil;
     if (!sheet && e.superview.subviews.lastObject != e) [e.superview bringSubviewToFront:e];
     gEditDebug = [NSString stringWithFormat:@"editing mods=%lu saved=%lu", (unsigned long)mods.count, (unsigned long)SavedSizes().count];
@@ -3082,6 +3103,7 @@ static void UpdateEditUI(BOOL animated) {
 
 static void EnterEdit(void) {
     if (gEditing || !gCCVC) return;
+    if (gPage != 0) ShowPage(0, YES);
     gEditing = YES;
     [[UISelectionFeedbackGenerator new] selectionChanged];
     UpdateEditUI(YES);
@@ -3329,6 +3351,7 @@ static void StartClosing(void) {
     gClosing = YES; gClosingAt = CACurrentMediaTime();
     HideTopButtons(YES);
     @try { if (gEditing) ExitEdit(NO); } @catch (__unused id e) {}
+    @try { if (gPage != 0) ShowPage(0, NO); [[gCCVC.viewIfLoaded viewWithTag:PAGEDOTS_TAG] setAlpha:0]; [[gCCVC.viewIfLoaded viewWithTag:PRESET_TAG] removeFromSuperview]; } @catch (__unused id e) {}
 }
 static id (*origBeginDismiss)(id, SEL, BOOL, BOOL);
 static id BeginDismiss(id self, SEL _cmd, BOOL animated, BOOL interactive) { StartClosing(); return origBeginDismiss(self, _cmd, animated, interactive); }
@@ -3374,6 +3397,554 @@ static void TryEditHooks(void) {
     }
 }
 
+#pragma mark - big connectivity / music layouts, pages, layout presets
+
+
+static double NowElapsed(void) {
+    double e = gNPElapsed;
+    if (gNPStamp && gIsPlaying) e += -[gNPStamp timeIntervalSinceNow] * (gNPRate > 0 ? gNPRate : 1);
+    if (gNPDuration > 0) e = MIN(e, gNPDuration);
+    return MAX(0, e);
+}
+static NSString *TimeText(double t) { int s = (int)llround(t); return [NSString stringWithFormat:@"%d:%02d", s / 60, s % 60]; }
+
+// system volume (what the volume buttons change)
+static id AVSys(void) {
+    static id s;
+    if (!s) {
+        dlopen("/System/Library/PrivateFrameworks/Celestial.framework/Celestial", RTLD_LAZY);
+        Class A = NSClassFromString(@"AVSystemController");
+        if ([A respondsToSelector:NSSelectorFromString(@"sharedAVSystemController")]) s = ((id (*)(id, SEL))objc_msgSend)(A, NSSelectorFromString(@"sharedAVSystemController"));
+    }
+    return s;
+}
+static float GetVolume(void) {
+    id s = AVSys(); float v = 0.5f; NSString *name = nil;
+    SEL g = NSSelectorFromString(@"getActiveCategoryVolume:andName:");
+    if ([s respondsToSelector:g]) ((BOOL (*)(id, SEL, float *, NSString **))objc_msgSend)(s, g, &v, &name);
+    return v;
+}
+static void SetVolume(float v) {
+    id s = AVSys(); SEL set = NSSelectorFromString(@"setActiveCategoryVolumeTo:");
+    if ([s respondsToSelector:set]) ((BOOL (*)(id, SEL, float))objc_msgSend)(s, set, MAX(0, MIN(1, v)));
+}
+static void SeekTo(double t) {
+    void *h = MediaRemote();
+    void (*fn)(double) = h ? (void (*)(double))dlsym(h, "MRMediaRemoteSetElapsedTime") : NULL;
+    if (fn) { fn(t); gNPElapsed = t; gNPStamp = [NSDate date]; }
+}
+
+// A thin glass slider (progress / volume)
+@interface C26Bar : UIControl
+@property (nonatomic) float value;
+@property (nonatomic) BOOL dragging;
+@property (nonatomic, strong) UIView *track, *fill;
+@property (nonatomic, copy) void (^changed)(float v, BOOL done);
+@end
+@implementation C26Bar
+- (instancetype)initWithFrame:(CGRect)f {
+    if (!(self = [super initWithFrame:f])) return nil;
+    _track = [UIView new]; _track.userInteractionEnabled = NO; _track.backgroundColor = [UIColor colorWithWhite:1 alpha:0.25]; _track.clipsToBounds = YES;
+    _fill = [UIView new]; _fill.userInteractionEnabled = NO; _fill.backgroundColor = UIColor.whiteColor;
+    [_track addSubview:_fill]; [self addSubview:_track];
+    return self;
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat h = _dragging ? 12 : 7;
+    _track.frame = CGRectMake(0, (self.bounds.size.height - h) / 2, self.bounds.size.width, h);
+    _track.layer.cornerRadius = h / 2;
+    _fill.frame = CGRectMake(0, 0, self.bounds.size.width * MAX(0, MIN(1, _value)), h);
+}
+- (void)setValue:(float)v { _value = v; [self setNeedsLayout]; }
+- (float)valueAt:(UITouch *)t { return MAX(0, MIN(1, [t locationInView:self].x / MAX(1, self.bounds.size.width))); }
+- (BOOL)beginTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
+    _dragging = YES;
+    [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:0 animations:^{ [self layoutSubviews]; } completion:nil];
+    return YES;
+}
+- (BOOL)continueTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e { self.value = [self valueAt:t]; [self layoutSubviews]; if (_changed) _changed(_value, NO); return YES; }
+- (void)endTrackingWithTouch:(UITouch *)t withEvent:(UIEvent *)e {
+    if (t) self.value = [self valueAt:t];
+    _dragging = NO;
+    if (_changed) _changed(_value, YES);
+    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:0 animations:^{ [self layoutSubviews]; } completion:nil];
+}
+- (void)cancelTrackingWithEvent:(UIEvent *)e { [self endTrackingWithTouch:nil withEvent:e]; }
+@end
+
+// The big player (4x2 up to a whole page)
+@interface C26BigPlayer : UIView
+@property (nonatomic, strong) UIImageView *art;
+@property (nonatomic, strong) UILabel *title, *artist, *elapsed, *remain;
+@property (nonatomic, strong) C26Bar *progress, *volume;
+@property (nonatomic, strong) UIButton *prev, *play, *next;
+@property (nonatomic, strong) UIImageView *volLo, *volHi;
+@property (nonatomic, strong) AVRoutePickerView *route;
+@property (nonatomic) int mode;   // 2: wide strip, 4: art + controls + volume, 6+: big artwork
+@end
+@implementation C26BigPlayer
+- (UIButton *)btn:(NSString *)sym pt:(CGFloat)pt cmd:(int)cmd {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    [b setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:pt weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+    b.tintColor = UIColor.whiteColor; b.tag = cmd;
+    [b addTarget:self action:@selector(tap:) forControlEvents:UIControlEventTouchUpInside];
+    [b addTarget:self action:@selector(down:) forControlEvents:UIControlEventTouchDown];
+    [b addTarget:self action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    [self addSubview:b];
+    return b;
+}
+- (instancetype)initWithFrame:(CGRect)f {
+    if (!(self = [super initWithFrame:f])) return nil;
+    self.tag = BIG_TAG;
+    _art = [UIImageView new]; _art.contentMode = UIViewContentModeScaleAspectFill; _art.clipsToBounds = YES;
+    _art.layer.cornerCurve = kCACornerCurveContinuous; _art.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    [self addSubview:_art];
+    _title = [UILabel new]; _title.textColor = UIColor.whiteColor; _title.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    _artist = [UILabel new]; _artist.textColor = [UIColor colorWithWhite:1 alpha:0.6]; _artist.font = [UIFont systemFontOfSize:16];
+    _elapsed = [UILabel new]; _remain = [UILabel new];
+    for (UILabel *l in @[_elapsed, _remain]) { l.textColor = [UIColor colorWithWhite:1 alpha:0.55]; l.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightMedium]; }
+    _remain.textAlignment = NSTextAlignmentRight;
+    for (UILabel *l in @[_title, _artist, _elapsed, _remain]) [self addSubview:l];
+    _progress = [C26Bar new];
+    __weak C26BigPlayer *ws = self;
+    _progress.changed = ^(float v, BOOL done) { C26BigPlayer *s = ws; if (gNPDuration > 0) { s.elapsed.text = TimeText(v * gNPDuration); if (done) SeekTo(v * gNPDuration); } };
+    [self addSubview:_progress];
+    _volume = [C26Bar new];
+    _volume.changed = ^(float v, BOOL done) { SetVolume(v); };
+    [self addSubview:_volume];
+    _volLo = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.fill"]];
+    _volHi = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.wave.3.fill"]];
+    for (UIImageView *i in @[_volLo, _volHi]) { i.tintColor = [UIColor colorWithWhite:1 alpha:0.6]; i.contentMode = UIViewContentModeScaleAspectFit; [self addSubview:i]; }
+    _prev = [self btn:@"backward.fill" pt:26 cmd:5];
+    _play = [self btn:@"play.fill" pt:34 cmd:2];
+    _next = [self btn:@"forward.fill" pt:26 cmd:4];
+    _route = [[AVRoutePickerView alloc] initWithFrame:CGRectZero];
+    _route.tintColor = UIColor.whiteColor; _route.activeTintColor = UIColor.systemBlueColor;
+    _route.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14];
+    _route.clipsToBounds = YES;
+    [self addSubview:_route];
+    return self;
+}
+- (void)down:(UIButton *)b { [UIView animateWithDuration:0.15 animations:^{ b.transform = CGAffineTransformMakeScale(0.82, 0.82); b.alpha = 0.7; }]; }
+- (void)up:(UIButton *)b { [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.45 initialSpringVelocity:0 options:0 animations:^{ b.transform = CGAffineTransformIdentity; b.alpha = 1; } completion:nil]; }
+- (void)tap:(UIButton *)b {
+    [self up:b];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    SendMR((int)b.tag);
+    if (b.tag == 2) { gIsPlaying = !gIsPlaying; [self refresh]; }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ gLastFetch = 0; FetchNowPlaying(); });
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGSize S = self.bounds.size;
+    CGFloat pad = MIN(22, S.width * 0.06), W = S.width - pad * 2;
+    BOOL big = _mode >= 6, mid = _mode == 4;
+    CGFloat y = pad;
+    if (big) {
+        CGFloat a = MIN(W, S.height - 300);
+        _art.frame = CGRectMake((S.width - a) / 2, y, a, a); _art.layer.cornerRadius = 14;
+        y += a + 18;
+        _title.frame = CGRectMake(pad, y, W - 56, 22); _artist.frame = CGRectMake(pad, y + 24, W - 56, 21);
+        _route.frame = CGRectMake(S.width - pad - 40, y + 2, 40, 40);
+        y += 60;
+    } else if (mid) {
+        CGFloat a = MIN(96, S.height * 0.3);
+        _art.frame = CGRectMake(pad, y, a, a); _art.layer.cornerRadius = 10;
+        _title.frame = CGRectMake(pad + a + 14, y + a / 2 - 22, W - a - 64, 22); _artist.frame = CGRectMake(pad + a + 14, y + a / 2 + 2, W - a - 64, 21);
+        _route.frame = CGRectMake(S.width - pad - 40, y + (a - 40) / 2, 40, 40);
+        y += a + 16;
+    } else {
+        CGFloat a = S.height - pad * 2;
+        _art.frame = CGRectMake(pad, pad, a, a); _art.layer.cornerRadius = 12;
+        CGFloat x = pad + a + 16, w = S.width - x - pad;
+        _title.frame = CGRectMake(x, pad + 2, w - 46, 22); _artist.frame = CGRectMake(x, pad + 25, w - 46, 20);
+        _route.frame = CGRectMake(S.width - pad - 38, pad, 38, 38);
+        CGFloat cy = pad + a * 0.62;
+        _prev.frame = CGRectMake(x, cy - 22, 44, 44); _play.frame = CGRectMake(x + (w - 50) / 2, cy - 25, 50, 50); _next.frame = CGRectMake(x + w - 44 - 40, cy - 22, 44, 44);
+        _progress.frame = CGRectMake(x, S.height - pad - 12, w, 14);
+        _elapsed.hidden = _remain.hidden = YES; _volume.hidden = _volLo.hidden = _volHi.hidden = YES;
+        _route.layer.cornerRadius = 19;
+        return;
+    }
+    _route.layer.cornerRadius = 20;
+    _elapsed.hidden = _remain.hidden = NO; _volume.hidden = _volLo.hidden = _volHi.hidden = NO;
+    CGFloat rest = S.height - y - pad;
+    CGFloat step = MAX(46, MIN(70, rest / 3.2));
+    _progress.frame = CGRectMake(pad, y, W, 16);
+    _elapsed.frame = CGRectMake(pad, y + 16, 60, 16); _remain.frame = CGRectMake(S.width - pad - 60, y + 16, 60, 16);
+    y += step;
+    CGFloat cy = y + 10;
+    _play.frame = CGRectMake((S.width - 64) / 2, cy - 32, 64, 64);
+    _prev.frame = CGRectMake(S.width / 2 - 32 - 90, cy - 26, 52, 52);
+    _next.frame = CGRectMake(S.width / 2 + 32 + 38, cy - 26, 52, 52);
+    y += step;
+    _volLo.frame = CGRectMake(pad, y - 8, 16, 16); _volHi.frame = CGRectMake(S.width - pad - 22, y - 8, 22, 16);
+    _volume.frame = CGRectMake(pad + 26, y - 8, W - 56, 16);
+}
+- (void)refresh {
+    FetchNowPlaying();
+    if (_art.image != gArtwork) [UIView transitionWithView:_art duration:0.3 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ self.art.image = gArtwork; } completion:nil];
+    NSString *t = gNPTitle ?: @"Not Playing", *a = gNPArtist ?: @"";
+    if (![_title.text isEqualToString:t]) _title.text = t;
+    if (![_artist.text isEqualToString:a]) _artist.text = a;
+    NSString *ps = gIsPlaying ? @"pause.fill" : @"play.fill";
+    if (![objc_getAssociatedObject(_play, kLastValue) isEqual:ps]) {
+        objc_setAssociatedObject(_play, kLastValue, ps, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [UIView transitionWithView:_play duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+            [self.play setImage:[UIImage systemImageNamed:ps withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:(self.mode >= 4 ? 38 : 30) weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+        } completion:nil];
+    }
+    if (!_progress.dragging) {
+        double e = NowElapsed();
+        _progress.value = gNPDuration > 0 ? e / gNPDuration : 0;
+        _elapsed.text = gNPTitle ? TimeText(e) : @"--:--";
+        _remain.text = gNPDuration > 0 ? [@"-" stringByAppendingString:TimeText(gNPDuration - e)] : @"--:--";
+    }
+    if (!_volume.dragging) _volume.value = GetVolume();
+}
+@end
+
+// The big connectivity block: labeled tiles and pills
+@interface C26BigConn : UIView
+@property (nonatomic) int rows;
+@property (nonatomic, weak) UIView *apple;   // where Apple's real buttons are
+@end
+@implementation C26BigConn
+- (instancetype)initWithFrame:(CGRect)f { if ((self = [super initWithFrame:f])) self.tag = BIG_TAG; return self; }
+- (NSArray *)plan {
+    // rows of keys; a row of 2 tiles is 2 units tall, everything else 1
+    if (_rows >= 8) return @[@[@"air"], @[@"wifi", @"airdrop"], @[@"cell", @"bt"], @[@"hotspot"]];
+    if (_rows >= 6) return @[@[@"air", @"hotspot"], @[@"wifi", @"airdrop"], @[@"cell", @"bt"]];
+    return @[@[@"air", @"wifi"], @[@"airdrop", @"cell"], @[@"bt", @"hotspot"]];
+}
+- (BOOL)tileRow:(NSArray *)r { return _rows >= 6 && r.count == 2 && ([r containsObject:@"wifi"] || [r containsObject:@"cell"]); }
+- (void)refresh {
+    NSMutableDictionary *byKey = [NSMutableDictionary dictionary];
+    Class L = NSClassFromString(@"CCUILabeledRoundButton");
+    NSMutableArray *bs = [NSMutableArray array];
+    if (L && self.apple) CollectViews(self.apple, 0, L, bs);
+    for (UIView *b in bs) { NSString *k = ConnKey(ConnTitle(b)); if (!byKey[k]) byKey[k] = b; }
+    NSArray *plan = [self plan];
+    CGSize S = self.bounds.size;
+    CGFloat gap = 12, pad = 10;
+    CGFloat units = 0; for (NSArray *r in plan) units += [self tileRow:r] ? 2 : 1;
+    CGFloat unitH = (S.height - pad * 2 - gap * (plan.count - 1)) / MAX(1, units);
+    CGFloat y = pad;
+    NSMutableSet *used = [NSMutableSet set];
+    for (NSArray *r in plan) {
+        BOOL tile = [self tileRow:r];
+        CGFloat h = tile ? unitH * 2 : unitH;
+        CGFloat w = (S.width - pad * 2 - gap * (r.count - 1)) / r.count;
+        for (NSUInteger i = 0; i < r.count; i++) {
+            NSString *k = r[i];
+            UIView *b = byKey[k];
+            C26ConnCard *card = nil;
+            for (UIView *v in self.subviews) if ([v isKindOfClass:[C26ConnCard class]] && [((C26ConnCard *)v).key isEqualToString:k] && ((C26ConnCard *)v).pill == !tile) card = (C26ConnCard *)v;
+            if (!card) {
+                card = [[C26ConnCard alloc] initWithKey:k pill:!tile];
+                [card setOn:NO animated:NO];
+                objc_setAssociatedObject(card, kLastValue, @(-1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                card.alpha = 0; [self addSubview:card];
+                [UIView animateWithDuration:0.3 animations:^{ card.alpha = 1; }];
+            }
+            [used addObject:card];
+            SetFrame(card, CGRectMake(pad + i * (w + gap), y, w, h));
+            UIControl *round = (UIControl *)RoundButtonIn(b);
+            card.target = [round isKindOfClass:[UIControl class]] ? round : nil;
+            card.apple = b;
+            NSString *title = b ? ConnTitle(b) : @{@"air": @"Airplane Mode", @"wifi": @"Wi-Fi", @"airdrop": @"AirDrop", @"cell": @"Cellular Data", @"bt": @"Bluetooth", @"hotspot": @"Personal Hotspot"}[k];
+            BOOL on = card.target ? card.target.isSelected : NO;
+            NSString *sub = b ? ConnSubtitle(b) : @"";
+            if (!sub.length) sub = on ? @"On" : @"Off";
+            if (![card.title.text isEqualToString:title]) card.title.text = title;
+            if (![card.sub.text isEqualToString:sub]) { card.sub.text = sub; [card setNeedsLayout]; }
+            if (card.bars) { int a, n; SignalBars(&a, &n); [card.bars setActive:a total:n color:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.12 alpha:1]]; }
+            NSNumber *last = objc_getAssociatedObject(card, kLastValue);
+            if (last.intValue != (int)on) { [card setOn:on animated:last.intValue != -1]; objc_setAssociatedObject(card, kLastValue, @(on), OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+            card.enabled = card.target != nil;
+            CGFloat al = card.target ? (card.target.enabled ? 1 : 0.5) : 0.4;
+            if (fabs(card.alpha - al) > 0.01 && ![card.layer animationForKey:@"opacity"]) card.alpha = al;
+        }
+        y += h + gap;
+    }
+    for (UIView *v in [self.subviews copy]) if ([v isKindOfClass:[C26ConnCard class]] && ![used containsObject:v]) [v removeFromSuperview];
+}
+@end
+
+// Hide Apple's content of a module (its glass stays) / bring it back
+static void MaskContent(UIView *moduleView, BOOL hide) {
+    UIViewController *vc = (UIViewController *)moduleView.nextResponder;
+    UIView *content = [vc isKindOfClass:[UIViewController class]] ? ((UIViewController *)KV(vc, @"contentViewController")).viewIfLoaded : nil;
+    if (![content isKindOfClass:[UIView class]]) return;
+    BOOL masked = [content.layer.mask.name isEqualToString:@"c26.big"];
+    if (hide && !masked) { CALayer *m = [CALayer layer]; m.name = @"c26.big"; content.layer.mask = m; }
+    if (!hide && masked) content.layer.mask = nil;
+}
+static BOOL ModuleExpanded(UIView *moduleView) {
+    id vc = moduleView.nextResponder;
+    id x = KV(vc, @"expanded");
+    return [x respondsToSelector:@selector(boolValue)] && [x boolValue];
+}
+
+// Each refresh: connectivity / music at 4 wide get the big layouts
+static void StyleBigModules(void) {
+    NSDictionary *mm = ModuleMap();
+    for (NSString *k in mm) {
+        NSString *l = k.lowercaseString;
+        BOOL conn = [l containsString:@"connectivity"], music = [l containsString:@"nowplaying"] || [l containsString:@"mediacontrols"];
+        if (!conn && !music) continue;
+        UIView *m = mm[k];
+        C26Rect r;
+        BOOL big = gEnabled && gEditUI && m.window && LayoutRectFor(k, &r) && r.size.width >= 4 && !ModuleExpanded(m) && (conn ? r.size.height >= 4 : r.size.height >= 2);
+        UIView *bv = [m viewWithTag:BIG_TAG];
+        if (!big) { if (bv) { [bv removeFromSuperview]; MaskContent(m, NO); } continue; }
+        if (!bv) {
+            bv = conn ? [[C26BigConn alloc] initWithFrame:m.bounds] : [[C26BigPlayer alloc] initWithFrame:m.bounds];
+            bv.alpha = 0;
+            [m addSubview:bv];
+            [UIView animateWithDuration:0.35 animations:^{ bv.alpha = 1; }];
+        }
+        MaskContent(m, YES);
+        if (m.subviews.lastObject != bv) [m bringSubviewToFront:bv];
+        if (!CGRectEqualToRect(bv.frame, m.bounds)) bv.frame = m.bounds;
+        if (conn) { C26BigConn *c = (C26BigConn *)bv; c.rows = (int)r.size.height; c.apple = m; [c refresh]; }
+        else { C26BigPlayer *p = (C26BigPlayer *)bv; int md = r.size.height >= 6 ? 6 : (r.size.height >= 4 ? 4 : 2); if (p.mode != md) { p.mode = md; [p setNeedsLayout]; objc_setAssociatedObject(p.play, kLastValue, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); } [p refresh]; }
+    }
+}
+
+// ---- pages (the icons down the right side, like iOS 18/26) ----
+static UIView *ModuleViewMatching(NSString *part) { NSDictionary *mm = ModuleMap(); for (NSString *k in mm) if ([k.lowercaseString containsString:part]) return mm[k]; return nil; }
+@interface C26PageCtl : NSObject
++ (instancetype)shared;
+@end
+@implementation C26PageCtl
++ (instancetype)shared { static C26PageCtl *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [C26PageCtl new]; }); return s; }
+- (void)dot:(UIButton *)b { [[UISelectionFeedbackGenerator new] selectionChanged]; ShowPage((int)b.tag - 100, YES); }
+- (void)swipe:(UIPanGestureRecognizer *)g {
+    if (g.state != UIGestureRecognizerStateEnded) return;
+    CGPoint v = [g velocityInView:g.view], t = [g translationInView:g.view];
+    if (fabs(t.y) < 40 && fabs(v.y) < 400) return;
+    int p = gPage + ((t.y < 0) ? 1 : -1);
+    p = MAX(0, MIN(2, p));
+    if (p != gPage) { [[UISelectionFeedbackGenerator new] selectionChanged]; ShowPage(p, YES); }
+}
+@end
+static void PlaceDots(void) {
+    UIView *root = gCCVC.viewIfLoaded;
+    if (!root) return;
+    UIView *dots = [root viewWithTag:PAGEDOTS_TAG];
+    BOOL landscape = root.bounds.size.width > root.bounds.size.height;
+    BOOL show = gEnabled && gEditUI && !gEditing && !landscape && !gClosing;
+    if (!dots) {
+        dots = [[UIView alloc] initWithFrame:CGRectZero]; dots.tag = PAGEDOTS_TAG;
+        NSArray *syms = @[@"heart.fill", @"antenna.radiowaves.left.and.right", @"music.note"];
+        for (int i = 0; i < 3; i++) {
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+            b.tag = 100 + i;
+            [b setImage:[UIImage systemImageNamed:syms[i] withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+            b.frame = CGRectMake(0, i * 54, 34, 44);
+            [b addTarget:[C26PageCtl shared] action:@selector(dot:) forControlEvents:UIControlEventTouchUpInside];
+            [dots addSubview:b];
+        }
+        [root addSubview:dots];
+    }
+    dots.frame = CGRectMake(root.bounds.size.width - 40, root.bounds.size.height * 0.42, 34, 3 * 54);
+    for (UIButton *b in dots.subviews) b.tintColor = [UIColor colorWithWhite:1 alpha:(b.tag - 100 == gPage) ? 1 : 0.45];
+    CGFloat a = show ? 1 : 0;
+    if (fabs(dots.alpha - a) > 0.01 && ![dots.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.2 animations:^{ dots.alpha = a; }];
+    dots.userInteractionEnabled = show;
+    if (root.subviews.lastObject != dots) [root bringSubviewToFront:dots];
+}
+static void RefreshPage(void) {
+    UIView *pg = [gCCVC.viewIfLoaded viewWithTag:PAGES_TAG];
+    if (!pg || gPage == 0) return;
+    UIView *c = pg.subviews.firstObject;
+    if ([c isKindOfClass:[C26BigConn class]]) { ((C26BigConn *)c).apple = ModuleViewMatching(@"connectivity"); [(C26BigConn *)c refresh]; }
+    if ([c isKindOfClass:[C26BigPlayer class]]) [(C26BigPlayer *)c refresh];
+}
+static void ShowPage(int page, BOOL animated) {
+    UIView *root = gCCVC.viewIfLoaded;
+    if (!root) return;
+    UIView *content = KV(gCCVC, @"overlayContainerView");
+    if (![content isKindOfClass:[UIView class]]) content = nil;
+    UIView *old = [root viewWithTag:PAGES_TAG];
+    int from = gPage; gPage = page;
+    CGFloat H = root.bounds.size.height, dir = page > from ? 1 : -1;
+    UIView *pg = nil;
+    if (page > 0) {
+        pg = [[UIView alloc] initWithFrame:root.bounds]; pg.tag = PAGES_TAG;
+        UIEdgeInsets sa = root.safeAreaInsets;
+        CGRect area = CGRectMake(28, sa.top + 70, root.bounds.size.width - 56 - 30, H - sa.top - 70 - sa.bottom - 40);
+        UIView *body;
+        if (page == 1) { C26BigConn *c = [[C26BigConn alloc] initWithFrame:area]; c.rows = 8; c.apple = ModuleViewMatching(@"connectivity"); body = c; }
+        else { C26BigPlayer *p = [[C26BigPlayer alloc] initWithFrame:area]; p.mode = 8; body = p;
+            p.backgroundColor = [UIColor colorWithWhite:1 alpha:0.10]; p.layer.cornerRadius = 40; p.layer.cornerCurve = kCACornerCurveContinuous;
+            p.layer.borderWidth = 1; p.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor; }
+        [pg addSubview:body];
+        UIPanGestureRecognizer *sw = [[UIPanGestureRecognizer alloc] initWithTarget:[C26PageCtl shared] action:@selector(swipe:)];
+        [pg addGestureRecognizer:sw];
+        [root insertSubview:pg belowSubview:[root viewWithTag:PAGEDOTS_TAG] ?: root.subviews.lastObject];
+        RefreshPage();
+    }
+    void (^place)(void) = ^{
+        content.alpha = page == 0 ? 1 : 0;
+        content.transform = page == 0 ? CGAffineTransformIdentity : CGAffineTransformMakeTranslation(0, -H * 0.25 * (page > 0 ? 1 : 0));
+        old.alpha = 0; old.transform = CGAffineTransformMakeTranslation(0, -H * 0.3 * dir);
+        pg.alpha = 1; pg.transform = CGAffineTransformIdentity;
+    };
+    pg.alpha = 0; pg.transform = CGAffineTransformMakeTranslation(0, H * 0.3 * dir);
+    if (animated) [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:place completion:^(__unused BOOL f) { [old removeFromSuperview]; }];
+    else { place(); [old removeFromSuperview]; }
+    PlaceDots();
+    UIView *a = [root viewWithTag:TOPPLUS_TAG], *b = [root viewWithTag:TOPPOWER_TAG];
+    [root bringSubviewToFront:a]; [root bringSubviewToFront:b];
+}
+
+// ---- layout presets ----
+static NSDictionary *Presets(void) { NSDictionary *d = [LayoutDefaults() dictionaryForKey:@"presets"]; return [d isKindOfClass:[NSDictionary class]] ? d : @{}; }
+static void SavePreset(NSString *name) {
+    NSMutableDictionary *all = [Presets() mutableCopy];
+    all[name] = @{@"pos": SavedPos(), @"posOrder": SavedPosOrder(), @"sizes": SavedSizes(), @"enabled": IdList(@"orderedUserEnabledModuleIdentifiers")};
+    [LayoutDefaults() setObject:all forKey:@"presets"];
+}
+static void ApplyLayout(NSDictionary *p) {
+    NSDictionary *pos = [p[@"pos"] isKindOfClass:[NSDictionary class]] ? p[@"pos"] : @{};
+    NSArray *ord = [p[@"posOrder"] isKindOfClass:[NSArray class]] ? p[@"posOrder"] : @[];
+    NSDictionary *sizes = [p[@"sizes"] isKindOfClass:[NSDictionary class]] ? p[@"sizes"] : @{};
+    [LayoutDefaults() setObject:pos forKey:@"pos"];
+    [LayoutDefaults() setObject:ord forKey:@"posOrder"];
+    [LayoutDefaults() setObject:sizes forKey:@"sizes"];
+    NSArray *en = p[@"enabled"];
+    if ([en isKindOfClass:[NSArray class]] && en.count) SetUserEnabled(en);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ RelayoutCC(); UpdateEditUI(YES); });
+}
+static void ShowPresets(void);
+@interface C26PresetCtl : NSObject
++ (instancetype)shared;
+@end
+@implementation C26PresetCtl
++ (instancetype)shared { static C26PresetCtl *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [C26PresetCtl new]; }); return s; }
+- (void)open:(UIButton *)b { Pop(b); ShowPresets(); }
+- (void)close:(id)x {
+    UIView *sh = [gCCVC.viewIfLoaded viewWithTag:PRESET_TAG];
+    UIView *panel = [sh viewWithTag:2];
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.92 initialSpringVelocity:0 options:0 animations:^{ sh.backgroundColor = UIColor.clearColor; panel.transform = CGAffineTransformMakeScale(0.85, 0.85); panel.alpha = 0; } completion:^(__unused BOOL f) { [sh removeFromSuperview]; EditRoot(NO).hidden = NO; }];
+}
+- (void)save:(id)x {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Save Layout" message:@"Give this layout a name." preferredStyle:UIAlertControllerStyleAlert];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) { tf.placeholder = @"My Layout"; tf.autocapitalizationType = UITextAutocapitalizationTypeWords; }];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *x2) {
+        NSString *n = [a.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (!n.length) n = [NSString stringWithFormat:@"Layout %lu", (unsigned long)Presets().count + 1];
+        SavePreset(n);
+        [[UINotificationFeedbackGenerator new] notificationOccurred:UINotificationFeedbackTypeSuccess];
+        [[gCCVC.viewIfLoaded viewWithTag:PRESET_TAG] removeFromSuperview];
+        ShowPresets();
+    }]];
+    [gCCVC presentViewController:a animated:YES completion:nil];
+}
+- (void)apply:(UIButton *)b {
+    NSString *n = objc_getAssociatedObject(b, kEditIdent);
+    NSDictionary *p = Presets()[n];
+    if (!p) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    ApplyLayout(p);
+    [self close:nil];
+}
+- (void)del:(UIButton *)b {
+    NSString *n = objc_getAssociatedObject(b, kEditIdent);
+    NSMutableDictionary *all = [Presets() mutableCopy];
+    [all removeObjectForKey:n];
+    [LayoutDefaults() setObject:all forKey:@"presets"];
+    [[UISelectionFeedbackGenerator new] selectionChanged];
+    [[gCCVC.viewIfLoaded viewWithTag:PRESET_TAG] removeFromSuperview];
+    ShowPresets();
+}
+- (void)reset:(id)x {
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Reset Layout?" message:@"Every control goes back to Apple's order and size." preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Reset" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *x2) {
+        [LayoutDefaults() removeObjectForKey:@"pos"]; [LayoutDefaults() removeObjectForKey:@"posOrder"]; [LayoutDefaults() removeObjectForKey:@"sizes"];
+        [self close:nil];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ RelayoutCC(); UpdateEditUI(YES); });
+    }]];
+    [gCCVC presentViewController:a animated:YES completion:nil];
+}
+@end
+static UIButton *SheetRow(NSString *title, NSString *sym, UIColor *tint, CGRect f) {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.frame = f; b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; b.layer.cornerRadius = f.size.height / 2; b.layer.cornerCurve = kCACornerCurveContinuous;
+    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    b.contentEdgeInsets = UIEdgeInsetsMake(0, 18, 0, 18); b.titleEdgeInsets = UIEdgeInsetsMake(0, 10, 0, -10);
+    [b setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    [b setTitle:title forState:UIControlStateNormal];
+    b.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    b.tintColor = tint; [b setTitleColor:tint forState:UIControlStateNormal];
+    return b;
+}
+static void ShowPresets(void) {
+    UIView *root = gCCVC.viewIfLoaded;
+    if (!root || [root viewWithTag:PRESET_TAG]) return;
+    EditRoot(NO).hidden = YES;
+    UIView *sh = [[UIView alloc] initWithFrame:root.bounds]; sh.tag = PRESET_TAG;
+    UIButton *dim = [UIButton buttonWithType:UIButtonTypeCustom]; dim.frame = sh.bounds;
+    [dim addTarget:[C26PresetCtl shared] action:@selector(close:) forControlEvents:UIControlEventTouchUpInside];
+    [sh addSubview:dim];
+    NSArray *names = [Presets().allKeys sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    CGFloat W = root.bounds.size.width - 32, rowH = 54, H = 70 + (names.count + 2) * (rowH + 10) + 20;
+    H = MIN(H, root.bounds.size.height * 0.7);
+    UIVisualEffectView *panel = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    panel.tag = 2; panel.frame = CGRectMake(16, (root.bounds.size.height - H) / 2, W, H);
+    panel.layer.cornerRadius = 36; panel.layer.cornerCurve = kCACornerCurveContinuous; panel.clipsToBounds = YES;
+    panel.layer.borderWidth = 1; panel.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+    [sh addSubview:panel];
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(0, 22, W, 28)];
+    t.text = @"Layouts"; t.textAlignment = NSTextAlignmentCenter; t.textColor = UIColor.whiteColor; t.font = [UIFont systemFontOfSize:21 weight:UIFontWeightBold];
+    [panel.contentView addSubview:t];
+    UIScrollView *sv = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 66, W, H - 66)];
+    [panel.contentView addSubview:sv];
+    CGFloat y = 4;
+    UIButton *save = SheetRow(@"Save Current Layout", @"plus.circle.fill", UIColor.systemBlueColor, CGRectMake(16, y, W - 32, rowH));
+    [save addTarget:[C26PresetCtl shared] action:@selector(save:) forControlEvents:UIControlEventTouchUpInside];
+    [sv addSubview:save]; y += rowH + 10;
+    for (NSString *n in names) {
+        UIButton *r = SheetRow(n, @"square.grid.2x2.fill", UIColor.whiteColor, CGRectMake(16, y, W - 32 - rowH - 10, rowH));
+        objc_setAssociatedObject(r, kEditIdent, n, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [r addTarget:[C26PresetCtl shared] action:@selector(apply:) forControlEvents:UIControlEventTouchUpInside];
+        [sv addSubview:r];
+        UIButton *d = SheetRow(@"", @"trash.fill", UIColor.systemRedColor, CGRectMake(W - 16 - rowH, y, rowH, rowH));
+        d.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter; d.contentEdgeInsets = UIEdgeInsetsZero; d.titleEdgeInsets = UIEdgeInsetsZero;
+        objc_setAssociatedObject(d, kEditIdent, n, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [d addTarget:[C26PresetCtl shared] action:@selector(del:) forControlEvents:UIControlEventTouchUpInside];
+        [sv addSubview:d];
+        y += rowH + 10;
+    }
+    UIButton *reset = SheetRow(@"Reset to Apple's Layout", @"arrow.counterclockwise", UIColor.systemRedColor, CGRectMake(16, y, W - 32, rowH));
+    [reset addTarget:[C26PresetCtl shared] action:@selector(reset:) forControlEvents:UIControlEventTouchUpInside];
+    [sv addSubview:reset]; y += rowH + 10;
+    sv.contentSize = CGSizeMake(W, y + 10);
+    [root addSubview:sh];
+    panel.transform = CGAffineTransformMakeScale(0.85, 0.85); panel.alpha = 0;
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{ sh.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3]; panel.transform = CGAffineTransformIdentity; panel.alpha = 1; } completion:nil];
+}
+// the Layouts button (left of Add a Control) while editing
+static void PlacePresetButton(UIView *e) {
+    UIButton *b = (UIButton *)[e viewWithTag:PRESETBTN_TAG];
+    UIView *add = [e viewWithTag:ADDBTN_TAG];
+    if (!add) return;
+    if (!b) {
+        b = GlassButton(@"square.stack.3d.up.fill", 17); b.tag = PRESETBTN_TAG;
+        [b addTarget:[C26PresetCtl shared] action:@selector(open:) forControlEvents:UIControlEventTouchUpInside];
+        b.alpha = 0; [e addSubview:b];
+        [UIView animateWithDuration:0.35 animations:^{ b.alpha = 1; }];
+    }
+    CGFloat d = add.bounds.size.height;
+    CGRect f = CGRectMake(CGRectGetMinX(add.frame) - d - 12, CGRectGetMinY(add.frame), d, d);
+    if (!CGRectEqualToRect(b.frame, f) && CGAffineTransformIsIdentity(b.transform)) { b.frame = f; RoundGlass(b); }
+}
+
 #pragma mark - tick
 
 static void Tick(void) {
@@ -3401,7 +3972,7 @@ static void Tick(void) {
     // edit mode / top buttons
     @try {
         if (!gCCVC) for (UIView *s in [gSliders allObjects]) { UIViewController *o = s.window ? FindCCVC(s) : nil; if (o) { gCCVC = o; break; } }
-        if (gCCVC.viewIfLoaded.window && !gClosing) { PlaceTopButtons(gCCVC); if (gEditing && !gResizing) UpdateEditUI(NO); }
+        if (gCCVC.viewIfLoaded.window && !gClosing) { PlaceTopButtons(gCCVC); if (gEditing && !gResizing) UpdateEditUI(NO); StyleBigModules(); PlaceDots(); RefreshPage(); }
     } @catch (__unused id e) {}
     NSMutableArray *cdbg = [NSMutableArray array], *expanded = [NSMutableArray array];
     for (UIView *b in [gConnButtons allObjects]) {
