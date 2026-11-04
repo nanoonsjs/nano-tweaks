@@ -1,4 +1,6 @@
-// Control26 0.5.4 - made by nano
+// Control26 0.5.5 - made by nano
+// 0.5.5: move controls anywhere (gaps allowed, own layout), edit mode ends when Control Center closes,
+//        + / power vanish as soon as it starts closing
 // 0.5.4: + and power can be tapped again (they moved out of the content area that gets the touches)
 // 0.5.3: fixed the Safe Mode crash (the grid was inside Control Center's module view), grid lines up,
 //        + / power on the status bar line, smooth shaped glow, the others make room while you drag,
@@ -2208,7 +2210,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 0.5.4 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 0.5.5 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2285,6 +2287,7 @@ typedef struct { C26Point origin; C26Size size; } C26Rect;
 #define POWERUI_TAG  0x43323646
 
 static BOOL gEditing = NO, gResizing = NO, gClosing = NO;
+static CFTimeInterval gClosingAt;
 static __weak id gSettingsMgr;
 static NSMutableDictionary *gProto;          // module id -> "w,h" (Apple's size)
 @interface C26EditLock : NSObject @end
@@ -2467,6 +2470,140 @@ static void RelayoutCC(void) {
         } @catch (__unused id e) {}
     } completion:nil];
 }
+// ---- free placement: our own layout, so a control can sit anywhere (gaps allowed) ----
+// pos: module id -> "x,y" where you put it; posOrder: newest first (it wins when two overlap).
+// Everything without a spot fills the first free gaps, in Control Center's own order.
+static const void *kFreeMap = &kFreeMap, *kFreeRows = &kFreeRows;
+static NSDictionary *SavedPos(void) { NSDictionary *d = [LayoutDefaults() dictionaryForKey:@"pos"]; return [d isKindOfClass:[NSDictionary class]] ? d : @{}; }
+static NSArray *SavedPosOrder(void) { NSArray *a = [LayoutDefaults() arrayForKey:@"posOrder"]; return [a isKindOfClass:[NSArray class]] ? a : @[]; }
+static NSDictionary *FreeLayout(NSArray *ids, NSArray *sizes, int cols, int *outRows) {
+    NSDictionary *pos = SavedPos();
+    if (!pos.count || ids.count != sizes.count) return nil;
+    enum { MR = 64 };
+    static BOOL occ[MR][8];
+    memset(occ, 0, sizeof(occ));
+    NSMutableDictionary *sz = [NSMutableDictionary dictionary], *out = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < ids.count; i++) {
+        C26Size s = {1, 1};
+        id v = sizes[i];
+        if ([v isKindOfClass:[NSValue class]]) [(NSValue *)v getValue:&s size:sizeof(s)];
+        if (s.width < 1) s.width = 1;
+        if (s.height < 1) s.height = 1;
+        if (s.width > (unsigned long long)cols) s.width = cols;
+        if (s.height > 16) s.height = 16;
+        sz[ids[i]] = [NSValue valueWithBytes:&s objCType:@encode(C26Size)];
+    }
+    BOOL (^fits)(int, int, int, int) = ^BOOL(int x, int y, int w, int h) {
+        if (x < 0 || y < 0 || x + w > cols || y + h > MR) return NO;
+        for (int yy = y; yy < y + h; yy++) for (int xx = x; xx < x + w; xx++) if (occ[yy][xx]) return NO;
+        return YES;
+    };
+    void (^put)(NSString *, int, int, int, int) = ^(NSString *k, int x, int y, int w, int h) {
+        for (int yy = y; yy < y + h; yy++) for (int xx = x; xx < x + w; xx++) occ[yy][xx] = YES;
+        C26Rect r = {{(unsigned long long)x, (unsigned long long)y}, {(unsigned long long)w, (unsigned long long)h}};
+        out[k] = [NSValue valueWithBytes:&r objCType:@encode(C26Rect)];
+    };
+    NSMutableArray *order = [SavedPosOrder() mutableCopy];
+    for (NSString *k in pos) if (![order containsObject:k]) [order addObject:k];
+    int rows = 0;
+    for (NSString *k in order) {
+        NSValue *v = sz[k]; id p = pos[k];
+        if (!v || ![p isKindOfClass:[NSString class]]) continue;
+        C26Size s; [v getValue:&s size:sizeof(s)];
+        NSArray *xy = [p componentsSeparatedByString:@","];
+        if (xy.count != 2) continue;
+        int x = [xy[0] intValue], y = [xy[1] intValue];
+        if (x + (int)s.width > cols) x = cols - (int)s.width;
+        if (fits(x, y, (int)s.width, (int)s.height)) { put(k, x, y, (int)s.width, (int)s.height); rows = MAX(rows, y + (int)s.height); }
+    }
+    for (NSString *k in ids) {
+        if (out[k]) continue;
+        C26Size s; [sz[k] getValue:&s size:sizeof(s)];
+        BOOL done = NO;
+        for (int y = 0; y < MR && !done; y++) for (int x = 0; x + (int)s.width <= cols && !done; x++)
+            if (fits(x, y, (int)s.width, (int)s.height)) { put(k, x, y, (int)s.width, (int)s.height); rows = MAX(rows, y + (int)s.height); done = YES; }
+    }
+    if (outRows) *outRows = rows;
+    return out;
+}
+static BOOL IsPortraitProvider(id pp) {
+    UIViewController *c = CollectionVC();
+    SEL s = NSSelectorFromString(@"_positionProviderForInterfaceOrientation:");
+    if (c && [c respondsToSelector:s]) return ((id (*)(id, SEL, long long))objc_msgSend)(c, s, 1) == pp;
+    SEL m = NSSelectorFromString(@"maximumLayoutSize");
+    if ([pp respondsToSelector:m]) { C26Size mx = ((C26Size (*)(id, SEL))objc_msgSend)(pp, m); return mx.width == 4; }
+    return NO;
+}
+static void (*origRegen)(id, SEL, id, id);
+static void Regen(id self, SEL _cmd, id ids, id sizes) {
+    origRegen(self, _cmd, ids, sizes);
+    @try {
+        NSDictionary *m = nil; int rows = 0;
+        if (gEnabled && gEditUI && [ids isKindOfClass:[NSArray class]] && [sizes isKindOfClass:[NSArray class]] && IsPortraitProvider(self))
+            m = FreeLayout(ids, sizes, 4, &rows);
+        objc_setAssociatedObject(self, kFreeMap, m, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, kFreeRows, m ? @(rows) : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @catch (__unused id e) {}
+}
+static C26Rect (*origLRect)(id, SEL, id);
+static C26Rect LRect(id self, SEL _cmd, id ident) {
+    NSDictionary *m = objc_getAssociatedObject(self, kFreeMap);
+    NSValue *v = ident ? m[ident] : nil;
+    if (v) { C26Rect r; [v getValue:&r size:sizeof(r)]; return r; }
+    return origLRect(self, _cmd, ident);
+}
+static C26Size (*origLSize)(id, SEL);
+static C26Size LSize(id self, SEL _cmd) {
+    C26Size s = origLSize(self, _cmd);
+    NSNumber *rows = objc_getAssociatedObject(self, kFreeRows);
+    if (rows && rows.intValue > 0) s.height = (unsigned long long)rows.intValue;
+    return s;
+}
+// pin every control where it is now (the first time you move one)
+static void FreezeLayout(void) {
+    NSMutableDictionary *pos = [NSMutableDictionary dictionary];
+    NSMutableArray *items = [NSMutableArray array];
+    NSDictionary *mm = ModuleMap();
+    for (NSString *k in mm) {
+        C26Rect r;
+        if (!LayoutRectFor(k, &r)) continue;
+        pos[k] = [NSString stringWithFormat:@"%llu,%llu", r.origin.x, r.origin.y];
+        [items addObject:@[k, @(r.origin.y * 8 + r.origin.x)]];
+    }
+    [items sortUsingComparator:^NSComparisonResult(NSArray *a, NSArray *b) { return [a[1] compare:b[1]]; }];
+    NSMutableArray *order = [NSMutableArray array];
+    for (NSArray *it in items) [order addObject:it[0]];
+    [LayoutDefaults() setObject:pos forKey:@"pos"];
+    [LayoutDefaults() setObject:order forKey:@"posOrder"];
+}
+static void SetPos(NSString *ident, int x, int y) {
+    if (!SavedPos().count) FreezeLayout();
+    NSMutableDictionary *pos = [SavedPos() mutableCopy];
+    NSMutableArray *order = [SavedPosOrder() mutableCopy];
+    pos[ident] = [NSString stringWithFormat:@"%d,%d", x, y];
+    [order removeObject:ident]; [order insertObject:ident atIndex:0];
+    [LayoutDefaults() setObject:pos forKey:@"pos"];
+    [LayoutDefaults() setObject:order forKey:@"posOrder"];
+}
+// a control you resize keeps its spot and pushes the others away
+static void PinFront(NSString *ident) {
+    NSDictionary *pos = SavedPos();
+    if (!pos.count) return;
+    C26Rect r;
+    if (LayoutRectFor(ident, &r)) SetPos(ident, (int)r.origin.x, (int)r.origin.y);
+}
+// after a move: everyone stays where they ended up
+static void RePinAll(void) {
+    if (!SavedPos().count) return;
+    NSArray *order = SavedPosOrder();
+    NSMutableDictionary *pos = [NSMutableDictionary dictionary];
+    for (NSString *k in ModuleMap()) { C26Rect r; if (LayoutRectFor(k, &r)) pos[k] = [NSString stringWithFormat:@"%llu,%llu", r.origin.x, r.origin.y]; }
+    NSMutableArray *o2 = [order mutableCopy];
+    for (NSString *k in pos) if (![o2 containsObject:k]) [o2 addObject:k];
+    [LayoutDefaults() setObject:pos forKey:@"pos"];
+    [LayoutDefaults() setObject:o2 forKey:@"posOrder"];
+}
+
 static void SaveSize(NSString *ident, C26Size s) {
     NSMutableDictionary *d = [SavedSizes() mutableCopy];
     NSString *v = [NSString stringWithFormat:@"%llu,%llu", s.width, s.height];
@@ -2553,6 +2690,7 @@ static void RemoveModule(NSString *ident);
         }
         if (n.width != _last.width || n.height != _last.height) {
             _last = n;
+            PinFront(ident);
             SaveSize(ident, n);
             [[UISelectionFeedbackGenerator new] selectionChanged];
             RelayoutCC();
@@ -2562,16 +2700,18 @@ static void RemoveModule(NSString *ident);
     gResizing = NO;
     UpdateEditUI(YES);
 }
-// hold and drag a control: the others make room while you move it, let go to keep it there
+// hold and drag a control anywhere: it lands on the spot under it (gaps are fine), the ones in
+// the way step aside while you drag, and everything stays put when you let go
 - (void)move:(UIPanGestureRecognizer *)g {
     NSString *ident = objc_getAssociatedObject(g.view, kEditIdent);
-    UIView *e = EditRoot(NO);
+    UIView *e = EditRoot(NO), *cv = CollectionView();
     NSDictionary *mm = ModuleMap();
     UIView *mv = mm[ident];
-    if (!ident || !mv || !e) return;
+    if (!ident || !mv || !e || !cv) return;
     CGPoint p = [g locationInView:e];
     if (g.state == UIGestureRecognizerStateBegan) {
         gResizing = YES;
+        if (!SavedPos().count) FreezeLayout();
         CGRect f = ModFrameIn(mv, e);
         _grab = CGPointMake(p.x - CGRectGetMidX(f), p.y - CGRectGetMidY(f));
         _hover = nil;
@@ -2582,38 +2722,32 @@ static void RemoveModule(NSString *ident);
         return;
     }
     if (g.state == UIGestureRecognizerStateChanged) {
-        // stay under the finger, wherever Control Center has put the control by now
         CGRect f = ModFrameIn(mv, e);
         CGPoint want = CGPointMake(p.x - _grab.x, p.y - _grab.y);
         mv.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(1.08, 1.08), CGAffineTransformMakeTranslation(want.x - CGRectGetMidX(f), want.y - CGRectGetMidY(f)));
-        // over another control: take its place now, so you see how it will look
-        NSArray *order = IdList(@"orderedUserEnabledModuleIdentifiers");
-        NSString *target = nil;
-        for (NSString *k in order) {
-            UIView *v = mm[k];
-            if (!v || [k isEqualToString:ident]) continue;
-            if (CGRectContainsPoint(CGRectInset(ModFrameIn(v, e), 6, 6), p)) { target = k; break; }
+        // the spot under the control's top-left corner
+        C26Grid gr = GridIn(cv);
+        C26Rect lr;
+        if (!gr.ok || !LayoutRectFor(ident, &lr)) return;
+        CGPoint tl = [e convertPoint:CGPointMake(want.x - f.size.width / 2, want.y - f.size.height / 2) toView:cv];
+        int col = 0, row = 0; CGFloat bx = CGFLOAT_MAX, by = CGFLOAT_MAX;
+        for (int i = 0; i < 4; i++) { CGFloat d = fabs(gr.xs[i] - tl.x); if (d < bx) { bx = d; col = i; } }
+        for (int i = 0; i < 32; i++) { CGFloat d = fabs(gr.ys[i] - tl.y); if (d < by) { by = d; row = i; } }
+        col = MAX(0, MIN(col, 4 - (int)lr.size.width));
+        NSString *key = [NSString stringWithFormat:@"%d,%d", col, row];
+        if (![key isEqualToString:_hover]) {
+            _hover = key;
+            SetPos(ident, col, row);
+            [[UISelectionFeedbackGenerator new] selectionChanged];
+            RelayoutCC();
         }
-        if (target && ![target isEqualToString:_hover]) {
-            _hover = target;
-            NSMutableArray *a = [order mutableCopy];
-            NSUInteger from = [a indexOfObject:ident], to = [a indexOfObject:target];
-            if (from != NSNotFound && to != NSNotFound) {
-                [a removeObjectAtIndex:from];
-                [a insertObject:ident atIndex:MIN(to, a.count)];
-                SetUserEnabled(a);
-                [[UISelectionFeedbackGenerator new] selectionChanged];
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ RelayoutCC(); });
-            }
-        } else if (!target) _hover = nil;
         return;
     }
-    // let go: it settles into its new spot
     gResizing = NO; _hover = nil;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ mv.transform = CGAffineTransformIdentity; } completion:^(__unused BOOL f) { mv.layer.zPosition = 0; }];
     for (UIView *x in e.subviews) if ([objc_getAssociatedObject(x, kEditIdent) isEqual:ident]) x.hidden = NO;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ UpdateEditUI(YES); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ RePinAll(); UpdateEditUI(YES); });
 }
 - (void)closeSheet:(id)x {
     UIView *sheet = [gCCVC.viewIfLoaded viewWithTag:ADDSHEET_TAG];
@@ -2686,10 +2820,14 @@ static void PlaceTopButtons(UIViewController *vc) {
             [plus setImage:[UIImage systemImageNamed:sym withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
         } completion:nil];
     }
+    if (gClosing) {
+        if (CACurrentMediaTime() - gClosingAt > 1.2 && !w.hidden) gClosing = NO;
+        else { plus.alpha = 0; pw.alpha = 0; return; }
+    }
     // fade with Control Center's content (it fades in and out when opening / closing)
     CGFloat a = 1;
     for (UIView *q = cv; q && q != host; q = q.superview) a *= q.alpha;
-    if (fabs(plus.alpha - a) > 0.01) { plus.alpha = a; pw.alpha = a; }
+    if (fabs(plus.alpha - a) > 0.01 && ![plus.layer animationForKey:@"opacity"]) { plus.alpha = a; pw.alpha = a; }
     if (host.subviews.lastObject != pw) { [host bringSubviewToFront:plus]; [host bringSubviewToFront:pw]; }
     if (!gEditing) gEditDebug = [NSString stringWithFormat:@"top cy=%.0f safeTop=%.0f row0=%.0f,%.0f", cy, top, r0.origin.x, r0.origin.y];
 }
@@ -2856,7 +2994,7 @@ static void UpdateEditUI(BOOL animated) {
         UIView *h = nil, *mb = nil, *dg = nil;
         for (UIView *x in e.subviews) if ([objc_getAssociatedObject(x, kEditIdent) isEqual:ident]) { if (x.tag == 1) h = x; else if (x.tag == 2) mb = x; else if (x.tag == 3) dg = x; }
         // the control itself: hold and drag to move it (controls you added)
-        if ([removable containsObject:ident]) {
+        if (YES) {
             if (!dg) {
                 dg = [[UIView alloc] initWithFrame:f]; dg.tag = 3;
                 objc_setAssociatedObject(dg, kEditIdent, ident, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -3131,11 +3269,32 @@ static void OVLayout(UIViewController *self, SEL _cmd) {
     if (gClosing) return;
     @try { PlaceTopButtons(self); if (gEditing && !gResizing) UpdateEditUI(NO); } @catch (__unused id e) {}
 }
+static void HideTopButtons(BOOL animated) {
+    UIView *root = gCCVC.viewIfLoaded;
+    UIView *a = [root viewWithTag:TOPPLUS_TAG], *b = [root viewWithTag:TOPPOWER_TAG];
+    if (animated) [UIView animateWithDuration:0.15 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ a.alpha = 0; b.alpha = 0; } completion:nil];
+    else { a.alpha = 0; b.alpha = 0; }
+}
+static void StartClosing(void) {
+    gClosing = YES; gClosingAt = CACurrentMediaTime();
+    HideTopButtons(YES);
+    @try { if (gEditing) ExitEdit(NO); } @catch (__unused id e) {}
+}
+static id (*origBeginDismiss)(id, SEL, BOOL, BOOL);
+static id BeginDismiss(id self, SEL _cmd, BOOL animated, BOOL interactive) { StartClosing(); return origBeginDismiss(self, _cmd, animated, interactive); }
+static void (*origDismissAnim)(id, SEL, BOOL, id);
+static void DismissAnim(id self, SEL _cmd, BOOL animated, id done) { StartClosing(); origDismissAnim(self, _cmd, animated, done); }
+static id (*origBeginPresent)(id, SEL, BOOL, BOOL);
+static id BeginPresent(id self, SEL _cmd, BOOL animated, BOOL interactive) {
+    gClosing = NO;
+    @try { if (gEditing) ExitEdit(NO); } @catch (__unused id e) {}
+    return origBeginPresent(self, _cmd, animated, interactive);
+}
 static void (*origWillDismiss)(id, SEL);
 static void WillDismiss(id self, SEL _cmd) {
-    gClosing = YES;
+    StartClosing();
     origWillDismiss(self, _cmd);
-    dispatch_async(dispatch_get_main_queue(), ^{ @try { ExitEdit(NO); [[C26PowerUI shared] cancel:nil]; } @catch (__unused id e) {} gClosing = NO; });
+    dispatch_async(dispatch_get_main_queue(), ^{ @try { [[C26PowerUI shared] cancel:nil]; } @catch (__unused id e) {} });
 }
 
 static BOOL gEditHooked, gSettingsHooked;
@@ -3153,6 +3312,15 @@ static void TryEditHooks(void) {
         EH(OV, NSSelectorFromString(@"_dismissalFlickGestureRecognizerShouldBegin:"), DFlick, origDFlick);
         EH(OV, NSSelectorFromString(@"_scrollPanGestureRecognizerShouldBegin:"), SPan, origSPan);
         EH(OV, NSSelectorFromString(@"_willDismissView"), WillDismiss, origWillDismiss);
+        EH(OV, NSSelectorFromString(@"_beginDismissalAnimated:interactive:"), BeginDismiss, origBeginDismiss);
+        EH(OV, @selector(dismissAnimated:withCompletionHandler:), DismissAnim, origDismissAnim);
+        EH(OV, NSSelectorFromString(@"_beginPresentationAnimated:interactive:"), BeginPresent, origBeginPresent);
+        Class PP = NSClassFromString(@"CCUIControlCenterPositionProvider");
+        if (PP) {
+            EH(PP, @selector(regenerateRectsWithOrderedIdentifiers:orderedSizes:), Regen, origRegen);
+            EH(PP, @selector(layoutRectForIdentifier:), LRect, origLRect);
+            EH(PP, @selector(layoutSize), LSize, origLSize);
+        }
     }
 }
 
