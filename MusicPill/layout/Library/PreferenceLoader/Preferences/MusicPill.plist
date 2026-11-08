@@ -329,6 +329,42 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
+			<string>Hold the Pill: hold the now playing pill for a glass menu with Up Next (reorder, remove and add songs), a Sleep Timer and Music Insights (top artist, most played song, listening time, this week). Waveform: little animated bars on the cover while music plays.</string>
+			<key>label</key>
+			<string>Extras</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>pillhold</string>
+			<key>label</key>
+			<string>Hold the Pill</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>wave</string>
+			<key>label</key>
+			<string>Waveform</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
 			<string>For the Liquid (Gl)ass tweak. On: where LiquidAss draws its glass buttons (like back buttons), MusicPill's own glass steps aside so only LiquidAss's shows. Off: MusicPill's glass shows there and LiquidAss's under it is hidden. Reopen the app after changing.</string>
 			<key>label</key>
 			<string>LiquidAss</string>

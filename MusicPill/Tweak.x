@@ -1,4 +1,6 @@
 // MusicPill 1.2.71 - made by nano
+// 1.2.77: Hold the Pill (glass menu: Up Next, Sleep Timer, Music Insights), Waveform on the cover, jelly bounce on the pill swipe
+// 1.2.72-1.2.76: LiquidAss compatibility (its glass wins where both draw, menus keep our layout, pill keeps its size)
 // 1.2.71: the artist page's own About and its gray background are left as they are; the "i" About sheet stays
 // 1.2.70: stopped moving the artist page's sections by hand (broke the header); the old About is collapsed through the page's own layout instead
 // 1.2.69: the old About stays gone (also when Music swaps its views) and the page end no longer jumps; the About sheet keeps the artist name
@@ -393,6 +395,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 #define COLLAPSE_TAG 0x4D50434C
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
+static BOOL gPillHoldPref, gWavePref;   // read into the extras (Extras.h) below
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
 static __weak UIScrollView *gArtistCV;
@@ -517,6 +520,8 @@ static void LoadPrefs(void) {
     gRound  = PrefBool(file, @"round", YES);
     gDebug  = PrefBool(file, @"debug", NO);
     gSwipe  = PrefBool(file, @"swipe", YES);
+    gPillHoldPref = PrefBool(file, @"pillhold", NO);
+    gWavePref = PrefBool(file, @"wave", NO);
     gMarquee  = PrefBool(file, @"marquee", YES);
     gAlbum    = PrefBool(file, @"album", YES);
     gNavGlass = PrefBool(file, @"navglass", YES);
@@ -1219,11 +1224,11 @@ static void SkipTrack(BOOL next) {
     if (pillObj && [pillObj respondsToSelector:@selector(bumpDir:)]) [pillObj performSelector:@selector(bumpDir:) withObject:@(next ? -1 : 1)];
     // Little slide-and-bounce so the swipe feels like it did something.
     CGAffineTransform base = PillTransform(m);
-    CGAffineTransform nudge = CGAffineTransformTranslate(base, next ? -26 : 26, 0);
+    CGAffineTransform nudge = CGAffineTransformScale(CGAffineTransformTranslate(base, next ? -24 : 24, 0), 1.07, 0.9);   // jelly: stretched toward the swipe, squashed
     [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
         m.transform = nudge;
     } completion:^(BOOL done) {
-        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0
+        [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.38 initialSpringVelocity:0.9
                             options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState
                          animations:^{ m.transform = base; }
                          completion:^(BOOL d) {
@@ -1404,7 +1409,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.76 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.77 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -8002,6 +8007,8 @@ static void ShowAboutSheet(UIView *from, NSDictionary *about) {
     [top presentViewController:vc animated:YES completion:nil];
 }
 
+#include "Extras.h"
+
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
     if (![bid isEqualToString:@"com.apple.Music"]) return;
@@ -8011,5 +8018,5 @@ static void ShowAboutSheet(UIView *from, NSDictionary *about) {
     HookMenuClasses();
     HookResponses();
     HookSymbolButton();
-    dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); });
+    dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); StartExtras(); });
 }
