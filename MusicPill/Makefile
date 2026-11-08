@@ -10,7 +10,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = MusicPill
 MusicPill_FILES = Tweak.x
-MusicPill_FRAMEWORKS = UIKit MediaPlayer AVFoundation CoreMedia
+MusicPill_FRAMEWORKS = UIKit MediaPlayer AVFoundation AVKit CoreMedia
 MusicPill_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 
 include $(THEOS_MAKE_PATH)/tweak.mk

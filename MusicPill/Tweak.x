@@ -1,4 +1,5 @@
-// MusicPill 1.2.82 - made by nano
+// MusicPill 1.2.83 - made by nano
+// 1.2.83: landscape v2 - Music really turns (home bar along the bottom, no status bar), lyrics button, glass control capsule, normal AirPlay icon, still background with Increase Contrast
 // 1.2.82: landscape player (turn the phone: cover left, glass controls right, colors from the cover, Insights in two columns), smaller pill on Library
 // 1.2.81: jelly bounce after a swipe always shows (flicks on a skip, wobbles home); no second star after lyrics / queue
 // 1.2.80: menu grows from the pill with the glass filling in and melts back into it, glass touch light on the pill, pill 4.5pt lower, Up Next row removed
@@ -1426,7 +1427,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.82 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.83 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
