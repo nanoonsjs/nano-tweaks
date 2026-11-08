@@ -52,6 +52,15 @@ static void LGOursHidden(UIView *g, BOOL hide) {
     if (hide && !masked) { CALayer *m = [CALayer layer]; m.name = @"lg.ours"; g.layer.mask = m; }
     if (!hide && masked) g.layer.mask = nil;
 }
+// actually on screen: nothing above it hidden or faded out (LiquidAss keeps glass on bars that aren't shown)
+static BOOL LGVisible(UIView *v) {
+    if (!v.window) return NO;
+    for (UIView *x = v; x && x != v.window; x = x.superview) {
+        if (x.hidden || x.alpha < 0.02 || x.layer.opacity < 0.02) return NO;
+        if (x.layer.mask && x.layer.mask.bounds.size.width < 1) return NO;
+    }
+    return YES;
+}
 // LiquidAss glass views sitting on our glass view g
 static NSArray *LGTheirsOn(UIView *g) {
     NSMutableArray *out = [NSMutableArray array];
@@ -66,6 +75,7 @@ static NSArray *LGTheirsOn(UIView *g) {
         UIView *v = q.firstObject; [q removeObjectAtIndex:0];
         if (v == g) continue;
         if (LGIsTheirs(v) && !LGHoldsContent(v)) {
+            if (![gLGHidden containsObject:v] && !LGVisible(v)) continue;   // ones we hid ourselves still count
             CGRect L = [v convertRect:v.bounds toView:nil];
             CGRect I = CGRectIntersection(L, R);
             CGFloat la = L.size.width * L.size.height, ia = CGRectIsNull(I) ? 0 : I.size.width * I.size.height;

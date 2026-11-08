@@ -1246,7 +1246,35 @@ static void AddSwipes(UIView *m) {
     }
 }
 
+// LiquidAss enlarges the bottom area (tab bar and the bar above it) while you touch the tab bar.
+// The now playing pill counters that scale every frame, so it stays its size.
+@interface MPSteady : NSObject
+@property (nonatomic, weak) UIView *mini;
+@property (nonatomic, strong) CADisplayLink *link;
++ (instancetype)shared;
+@end
+@implementation MPSteady
++ (instancetype)shared { static MPSteady *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [MPSteady new]; }); return s; }
+- (void)watch:(UIView *)m {
+    if (!LGPresent()) return;
+    self.mini = m;
+    if (!self.link) { self.link = [CADisplayLink displayLinkWithTarget:self selector:@selector(step)]; [self.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes]; }
+}
+- (void)step {
+    UIView *m = self.mini;
+    if (!m.window || !m.superview) { [self.link invalidate]; self.link = nil; return; }
+    CGRect u = [m.superview convertRect:CGRectMake(0, 0, 100, 100) toView:nil];
+    CGFloat sx = u.size.width / 100, sy = u.size.height / 100;
+    CATransform3D t = (fabs(sx - 1) < 0.003 && fabs(sy - 1) < 0.003) || sx < 0.5 || sy < 0.5 ? CATransform3DIdentity : CATransform3DMakeScale(1 / sx, 1 / sy, 1);
+    if (!CATransform3DEqualToTransform(m.layer.sublayerTransform, t)) {
+        [CATransaction begin]; [CATransaction setDisableActions:YES];
+        m.layer.sublayerTransform = t;
+        [CATransaction commit];
+    }
+}
+@end
 static void StylePill(UIView *m) {
+    [[MPSteady shared] watch:m];
     CGFloat r = m.bounds.size.height / 2;
     if (m.layer.cornerRadius != r) {
         m.layer.cornerRadius = r;
@@ -1376,7 +1404,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.74 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.75 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1524,7 +1552,30 @@ static void FrostGlass(UIVisualEffectView *g, UIView *shadowHost) {
     if (!was || was.boolValue != light) {
         objc_setAssociatedObject(g, (const void *)&FrostGlass, @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIView *tint = [g.contentView viewWithTag:0x4D50574C];
-        if (light) {
+        if (gLGCompatOn && LGPresent()) {
+            // LiquidAss look: clear glass, a bright thin rim and a soft shine along the top edge
+            g.effect = [UIBlurEffect effectWithStyle:light ? UIBlurEffectStyleSystemUltraThinMaterialLight : UIBlurEffectStyleSystemUltraThinMaterialDark];
+            if (!tint) {
+                tint = [[UIView alloc] initWithFrame:g.contentView.bounds];
+                tint.tag = 0x4D50574C; tint.userInteractionEnabled = NO;
+                tint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                [g.contentView insertSubview:tint atIndex:0];
+            }
+            tint.backgroundColor = light ? [UIColor colorWithWhite:1 alpha:0.18] : [UIColor colorWithWhite:0 alpha:0.12];
+            CAGradientLayer *shine = nil;
+            for (CALayer *l in tint.layer.sublayers) if ([l.name isEqualToString:@"mp.shine"]) shine = (CAGradientLayer *)l;
+            if (!shine) {
+                shine = [CAGradientLayer layer]; shine.name = @"mp.shine";
+                shine.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.20].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.08].CGColor];
+                shine.locations = @[@0, @0.35, @0.75, @1];
+                [tint.layer addSublayer:shine];
+            }
+            shine.frame = tint.bounds;
+            g.layer.borderWidth = 1;
+            g.layer.borderColor = [UIColor colorWithWhite:1 alpha:light ? 0.55 : 0.28].CGColor;
+            shadowHost.layer.shadowColor = UIColor.blackColor.CGColor;
+            shadowHost.layer.shadowOpacity = light ? 0.10 : 0.25; shadowHost.layer.shadowRadius = 12; shadowHost.layer.shadowOffset = CGSizeMake(0, 4);
+        } else if (light) {
             g.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight];
             if (!tint) {
                 tint = [[UIView alloc] initWithFrame:g.contentView.bounds];
@@ -1544,6 +1595,10 @@ static void FrostGlass(UIVisualEffectView *g, UIView *shadowHost) {
             g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2].CGColor;
             shadowHost.layer.shadowOpacity = 0;
         }
+    }
+    UIView *tintNow = [g.contentView viewWithTag:0x4D50574C];
+    for (CALayer *l in tintNow.layer.sublayers) if ([l.name isEqualToString:@"mp.shine"] && !CGRectEqualToRect(l.frame, tintNow.bounds)) {
+        [CATransaction begin]; [CATransaction setDisableActions:YES]; l.frame = tintNow.bounds; l.cornerRadius = g.layer.cornerRadius; l.masksToBounds = YES; [CATransaction commit];
     }
     if (shadowHost.layer.shadowOpacity > 0 && !CGRectIsEmpty(shadowHost.bounds)) {
         CGFloat r = MIN(shadowHost.bounds.size.width, shadowHost.bounds.size.height) / 2;
