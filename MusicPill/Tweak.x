@@ -1404,7 +1404,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.75 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.76 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1552,30 +1552,7 @@ static void FrostGlass(UIVisualEffectView *g, UIView *shadowHost) {
     if (!was || was.boolValue != light) {
         objc_setAssociatedObject(g, (const void *)&FrostGlass, @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIView *tint = [g.contentView viewWithTag:0x4D50574C];
-        if (gLGCompatOn && LGPresent()) {
-            // LiquidAss look: clear glass, a bright thin rim and a soft shine along the top edge
-            g.effect = [UIBlurEffect effectWithStyle:light ? UIBlurEffectStyleSystemUltraThinMaterialLight : UIBlurEffectStyleSystemUltraThinMaterialDark];
-            if (!tint) {
-                tint = [[UIView alloc] initWithFrame:g.contentView.bounds];
-                tint.tag = 0x4D50574C; tint.userInteractionEnabled = NO;
-                tint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-                [g.contentView insertSubview:tint atIndex:0];
-            }
-            tint.backgroundColor = light ? [UIColor colorWithWhite:1 alpha:0.18] : [UIColor colorWithWhite:0 alpha:0.12];
-            CAGradientLayer *shine = nil;
-            for (CALayer *l in tint.layer.sublayers) if ([l.name isEqualToString:@"mp.shine"]) shine = (CAGradientLayer *)l;
-            if (!shine) {
-                shine = [CAGradientLayer layer]; shine.name = @"mp.shine";
-                shine.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.20].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.08].CGColor];
-                shine.locations = @[@0, @0.35, @0.75, @1];
-                [tint.layer addSublayer:shine];
-            }
-            shine.frame = tint.bounds;
-            g.layer.borderWidth = 1;
-            g.layer.borderColor = [UIColor colorWithWhite:1 alpha:light ? 0.55 : 0.28].CGColor;
-            shadowHost.layer.shadowColor = UIColor.blackColor.CGColor;
-            shadowHost.layer.shadowOpacity = light ? 0.10 : 0.25; shadowHost.layer.shadowRadius = 12; shadowHost.layer.shadowOffset = CGSizeMake(0, 4);
-        } else if (light) {
+        if (light) {
             g.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight];
             if (!tint) {
                 tint = [[UIView alloc] initWithFrame:g.contentView.bounds];
