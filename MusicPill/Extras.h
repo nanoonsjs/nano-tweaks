@@ -626,6 +626,30 @@ static void ReleaseDrag(UIView *v, CGFloat vx, CGFloat vy) {
     [v.layer addAnimation:a forKey:@"mp.release"];
 }
 
+// The jelly bounce after you let go: plays on the pill itself (added on top of its own size/position),
+// so it always shows. go = a skip: it first flicks further the way you swiped, then wobbles home.
+static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
+    NSValue *d = objc_getAssociatedObject(v, kDragT);
+    objc_setAssociatedObject(v, kDragT, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ApplyPillST(v);
+    [v.layer removeAnimationForKey:@"mp.release"];
+    (void)d;
+    CGFloat sxd = MIN(0.10, fabs(dx) / 520), syd = MIN(0.10, fabs(dy) / 420);
+    NSArray *kt = @[@0, @0.22, @0.5, @0.75, @1];
+    CAKeyframeAnimation *tx = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+    tx.values = go ? @[@(dx), @(dx * 1.35), @(-dx * 0.22), @(dx * 0.08), @0] : @[@(dx), @(-dx * 0.18), @(dx * 0.07), @(-dx * 0.02), @0];
+    CAKeyframeAnimation *ty = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
+    ty.values = @[@(dy), @(-dy * 0.2), @(dy * 0.08), @0, @0];
+    CAKeyframeAnimation *sx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"];
+    sx.values = @[@(sxd - syd * 0.5), @(-0.05), @(0.03), @(-0.01), @0];
+    CAKeyframeAnimation *sy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
+    sy.values = @[@(syd - sxd * 0.7), @(0.06), @(-0.03), @(0.01), @0];
+    CAAnimationGroup *g = [CAAnimationGroup animation];
+    for (CAKeyframeAnimation *k in @[tx, ty, sx, sy]) { k.additive = YES; k.keyTimes = kt; k.timingFunctions = @[[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]]; }
+    g.animations = @[tx, ty, sx, sy];
+    g.duration = go ? 0.7 : 0.6;
+    [v.layer addAnimation:g forKey:@"mp.bounce"];
+}
 @interface MPPillPan : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 @end
@@ -692,10 +716,10 @@ static void XTouchLight(UIView *pillView, CGPoint p, BOOL on) {
             id pillObj = gPillObj;
             if (pillObj && pillObj != v && [pillObj respondsToSelector:@selector(refresh)]) [pillObj performSelector:@selector(refresh)];
         }
-        ReleaseDrag(v, vel.x, 0);
+        XBounce(v, XRubber(t.x, 70), 0, go);
     } else {
         BOOL go = ended && (t.y < -34 || vel.y < -420);
-        ReleaseDrag(v, 0, vel.y);
+        XBounce(v, 0, XRubber(MIN(0, t.y), 46), NO);
         if (go) [[MPHoldCtl shared] showMenuFrom:v];
     }
 }
