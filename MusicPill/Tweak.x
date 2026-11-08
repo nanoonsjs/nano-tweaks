@@ -1,4 +1,5 @@
-// MusicPill 1.2.77 - made by nano
+// MusicPill 1.2.78 - made by nano
+// 1.2.78: the pill follows your finger (sideways = skip with jelly, up = glass menu), hold = Music's song menu, tap opens the player (no swipe up), new Insights, live waveform
 // 1.2.77: Hold the Pill (glass menu: Up Next, Sleep Timer, Music Insights), Waveform on the cover, jelly bounce on the pill swipe
 // 1.2.72-1.2.76: LiquidAss compatibility (its glass wins where both draw, menus keep our layout, pill keeps its size)
 // 1.2.71: the artist page's own About and its gray background are left as they are; the "i" About sheet stays
@@ -395,7 +396,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 #define COLLAPSE_TAG 0x4D50434C
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
-static BOOL gPillHoldPref, gWavePref;   // read into the extras (Extras.h) below
+static BOOL gPillHoldPref, gWavePref, gTapOpenPref = YES;   // read into the extras (Extras.h) below
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
 static __weak UIScrollView *gArtistCV;
@@ -522,6 +523,7 @@ static void LoadPrefs(void) {
     gSwipe  = PrefBool(file, @"swipe", YES);
     gPillHoldPref = PrefBool(file, @"pillhold", NO);
     gWavePref = PrefBool(file, @"wave", NO);
+    gTapOpenPref = PrefBool(file, @"tapopen", YES);
     gMarquee  = PrefBool(file, @"marquee", YES);
     gAlbum    = PrefBool(file, @"album", YES);
     gNavGlass = PrefBool(file, @"navglass", YES);
@@ -1240,6 +1242,7 @@ static void SkipTrack(BOOL next) {
 @end
 
 static void AddSwipes(UIView *m) {
+    return;   // 1.2.78: the pill follows your finger instead (Extras.h, MPPillPan)
     if (objc_getAssociatedObject(m, kSwipeAdded)) return;
     objc_setAssociatedObject(m, kSwipeAdded, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     for (NSNumber *dir in @[@(UISwipeGestureRecognizerDirectionLeft), @(UISwipeGestureRecognizerDirectionRight)]) {
@@ -1253,6 +1256,15 @@ static void AddSwipes(UIView *m) {
 
 // LiquidAss enlarges the bottom area (tab bar and the bar above it) while you touch the tab bar.
 // The now playing pill counters that scale every frame, so it stays its size.
+static const void *kDragT = &kDragT, *kCounterT = &kCounterT;
+// the pill's inside moves by our drag (Extras.h) on top of the LiquidAss counter-scale; both are sublayer transforms
+static void ApplyPillST(UIView *v) {
+    NSValue *d = objc_getAssociatedObject(v, kDragT), *c = objc_getAssociatedObject(v, kCounterT);
+    CATransform3D t = CATransform3DConcat(d ? d.CATransform3DValue : CATransform3DIdentity, c ? c.CATransform3DValue : CATransform3DIdentity);
+    if (!CATransform3DEqualToTransform(v.layer.sublayerTransform, t)) {
+        [CATransaction begin]; [CATransaction setDisableActions:YES]; v.layer.sublayerTransform = t; [CATransaction commit];
+    }
+}
 @interface MPSteady : NSObject
 @property (nonatomic, weak) UIView *mini;
 @property (nonatomic, strong) CADisplayLink *link;
@@ -1271,11 +1283,8 @@ static void AddSwipes(UIView *m) {
     CGRect u = [m.superview convertRect:CGRectMake(0, 0, 100, 100) toView:nil];
     CGFloat sx = u.size.width / 100, sy = u.size.height / 100;
     CATransform3D t = (fabs(sx - 1) < 0.003 && fabs(sy - 1) < 0.003) || sx < 0.5 || sy < 0.5 ? CATransform3DIdentity : CATransform3DMakeScale(1 / sx, 1 / sy, 1);
-    if (!CATransform3DEqualToTransform(m.layer.sublayerTransform, t)) {
-        [CATransaction begin]; [CATransaction setDisableActions:YES];
-        m.layer.sublayerTransform = t;
-        [CATransaction commit];
-    }
+    objc_setAssociatedObject(m, kCounterT, [NSValue valueWithCATransform3D:t], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (![m.layer animationForKey:@"mp.release"]) ApplyPillST(m);
 }
 @end
 static void StylePill(UIView *m) {
@@ -1409,7 +1418,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.77 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.78 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];

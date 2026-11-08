@@ -329,7 +329,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Hold the Pill: hold the now playing pill for a glass menu with Up Next (reorder, remove and add songs), a Sleep Timer and Music Insights (top artist, most played song, listening time, this week). Waveform: little animated bars on the cover while music plays.</string>
+			<string>Swipe Up for Menu: swipe up on the now playing pill for a glass menu with Up Next (reorder, remove and add songs), Sleep Timer and Insights. Hold the pill for Music's song menu. Waveform: live bars on the cover while music plays. Tap to Open Player: Music's swipe up on the bar is off, a tap opens the player.</string>
 			<key>label</key>
 			<string>Extras</string>
 		</dict>
@@ -345,7 +345,7 @@
 			<key>key</key>
 			<string>pillhold</string>
 			<key>label</key>
-			<string>Hold the Pill</string>
+			<string>Swipe Up for Menu</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -360,6 +360,20 @@
 			<string>wave</string>
 			<key>label</key>
 			<string>Waveform</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>tapopen</string>
+			<key>label</key>
+			<string>Tap to Open Player</string>
 		</dict>
 		<dict>
 			<key>cell</key>
