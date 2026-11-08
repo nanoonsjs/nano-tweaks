@@ -930,6 +930,9 @@ static NSArray *IOS26MenuChildren(NSArray *children, UIMenuOptions options) {
     NSMutableDictionary *found = [NSMutableDictionary dictionary];
     RestyleMenu(children, found);
     if (options & UIMenuOptionsDisplayInline) return children;   // sections: only rename
+    // LiquidAss draws its own context menus; our side-by-side Download / Favorite / Share row makes its menu
+    // stretch huge, so with LiquidAss the menu keeps its normal list (still with our names and icons)
+    if (gLGCompatOn && LGPresent()) return children;
     for (UIMenuElement *e in children) if ([e isKindOfClass:[UIMenu class]] && [((UIMenu *)e).identifier isEqualToString:MP_ROW_ID]) return children;
     NSMutableArray *row = [NSMutableArray array];
     for (NSString *k in @[@"download", @"fav", @"share"]) if (found[k]) [row addObject:found[k]];
@@ -1374,7 +1377,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.71 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.73 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
