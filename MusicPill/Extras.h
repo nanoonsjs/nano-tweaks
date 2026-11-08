@@ -139,11 +139,46 @@ static UILabel *XLabel(NSString *t, CGFloat size, UIFontWeight w, UIColor *c) {
 @interface MPSheet : UIView
 @property (nonatomic, strong) UIVisualEffectView *panel;
 @property (nonatomic, copy) void (^onTick)(void);
+@property (nonatomic, weak) UIView *source;   // grows out of this (the pill) and goes back into it
 + (MPSheet *)showIn:(UIWindow *)w height:(CGFloat)h;
++ (MPSheet *)showIn:(UIWindow *)w height:(CGFloat)h from:(UIView *)src;
 - (void)close;
 @end
 @implementation MPSheet
-+ (MPSheet *)showIn:(UIWindow *)w height:(CGFloat)h {
+static __weak UIView *gSheetSource;   // the pill the last menu came out of
+static CGAffineTransform XFromRect(CGRect panel, CGRect r) {
+    CGFloat sx = MAX(0.05, r.size.width / panel.size.width), sy = MAX(0.05, r.size.height / panel.size.height);
+    return CGAffineTransformScale(CGAffineTransformMakeTranslation(CGRectGetMidX(r) - CGRectGetMidX(panel), CGRectGetMidY(r) - CGRectGetMidY(panel)), sx, sy);
+}
++ (MPSheet *)showIn:(UIWindow *)w height:(CGFloat)h { return [self showIn:w height:h from:gSheetSource]; }
++ (MPSheet *)showIn:(UIWindow *)w height:(CGFloat)h from:(UIView *)src {
+    if (src.window != w) src = nil;
+    if (!src) return [self slideIn:w height:h];
+    MPSheet *s = [[MPSheet alloc] initWithFrame:w.bounds];
+    s.source = src;
+    s.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
+    s.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [s addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:s action:@selector(bgTap:)]];
+    CGFloat W = w.bounds.size.width - 24;
+    s.panel = XGlass(34);
+    CGRect pr = [src convertRect:src.bounds toView:w];
+    // sit just above the pill when there's room, otherwise as low as fits
+    CGFloat y = MIN(CGRectGetMinY(pr) - 10 - h, w.bounds.size.height - h - MAX(16, w.safeAreaInsets.bottom));
+    y = MAX(w.safeAreaInsets.top + 8, y);
+    s.panel.frame = CGRectMake(12, y, W, h);
+    [s addSubview:s.panel];
+    [w addSubview:s];
+    // grows out of the pill: starts as the pill's shape, its contents fade in as it opens
+    s.panel.transform = XFromRect(s.panel.frame, pr);
+    s.panel.contentView.alpha = 0;
+    src.alpha = 1;
+    [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:0 animations:^{
+        s.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35]; s.panel.transform = CGAffineTransformIdentity;
+    } completion:nil];
+    [UIView animateWithDuration:0.3 delay:0.12 options:0 animations:^{ s.panel.contentView.alpha = 1; } completion:nil];
+    return s;
+}
++ (MPSheet *)slideIn:(UIWindow *)w height:(CGFloat)h {
     MPSheet *s = [[MPSheet alloc] initWithFrame:w.bounds];
     s.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
     s.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -161,6 +196,15 @@ static UILabel *XLabel(NSString *t, CGFloat size, UIFontWeight w, UIColor *c) {
 }
 - (void)bgTap:(UITapGestureRecognizer *)g { if (!CGRectContainsPoint(self.panel.frame, [g locationInView:self])) [self close]; }
 - (void)close {
+    UIView *src = self.source;
+    if (src.window == self.window && src) {
+        CGRect pr = [src convertRect:src.bounds toView:self];
+        [UIView animateWithDuration:0.15 animations:^{ self.panel.contentView.alpha = 0; }];
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:0 animations:^{
+            self.backgroundColor = [UIColor colorWithWhite:0 alpha:0]; self.panel.transform = XFromRect(self.panel.frame, pr); self.panel.alpha = 0.6;
+        } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
+        return;
+    }
     [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:0 animations:^{
         self.backgroundColor = [UIColor colorWithWhite:0 alpha:0]; self.panel.transform = CGAffineTransformMakeTranslation(0, self.panel.bounds.size.height + 60);
     } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
@@ -501,8 +545,9 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
     UIWindow *w = v.window;
     if (!w || self.menu.window) return;
     self.from = v;
+    gSheetSource = v;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-    MPSheet *sh = [MPSheet showIn:w height:3 * 62 + 24];
+    MPSheet *sh = [MPSheet showIn:w height:3 * 62 + 24 from:v];
     self.menu = sh;
     UIView *c = sh.panel.contentView; CGFloat W = sh.panel.bounds.size.width;
     NSString *sleep = SleepStatus();

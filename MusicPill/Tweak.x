@@ -1,4 +1,5 @@
-// MusicPill 1.2.78 - made by nano
+// MusicPill 1.2.79 - made by nano
+// 1.2.79: menus grow out of the pill and go back into it; the 3s wait after closing the player is gone
 // 1.2.78: the pill follows your finger (sideways = skip with jelly, up = glass menu), hold = Music's song menu, tap opens the player (no swipe up), new Insights, live waveform
 // 1.2.77: Hold the Pill (glass menu: Up Next, Sleep Timer, Music Insights), Waveform on the cover, jelly bounce on the pill swipe
 // 1.2.72-1.2.76: LiquidAss compatibility (its glass wins where both draw, menus keep our layout, pill keeps its size)
@@ -1418,7 +1419,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.78 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.79 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2342,7 +2343,7 @@ static void SyncPill(void) {
 
 // The player (as a snapshot) shrinks straight into the pill.
 static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
-    gPlayerCooldownUntil = CACurrentMediaTime() + 3;
+    gPlayerCooldownUntil = CACurrentMediaTime() + 0.25;   // was 3s; just enough to ignore a double tap
     SyncPill();   // the pill is back right away underneath
     UITabBar *tb = gLastTabBar;
     UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
@@ -2456,7 +2457,7 @@ static void MaybeInstallDrag(UIViewController *vc) {
     {
         NSString *n = NSStringFromClass([vc class]);
         if (vc.view.window.rootViewController.presentedViewController == vc && ([n containsString:@"Player"] || [n containsString:@"NowPlaying"]))
-            gPlayerCooldownUntil = CACurrentMediaTime() + 3;
+            gPlayerCooldownUntil = CACurrentMediaTime() + 0.25;   // was 3s; just enough to ignore a double tap
     }
     if (!gCollapse || !gRound) return;
     UIWindow *win = vc.view.window;
