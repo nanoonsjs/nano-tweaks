@@ -105,6 +105,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <substrate.h>
+#include "../shared/LGCompat.h"
 #import <PhotosUI/PhotosUI.h>
 #import <Photos/Photos.h>
 #import <LocalAuthentication/LocalAuthentication.h>
@@ -163,6 +164,7 @@ static void LoadPrefs(void) {
         if (!file || (m && best && [m compare:best] == NSOrderedDescending)) { file = d; best = m; }
     }
     gOn = PrefBool(file, @"enabled", YES);
+    gLGCompatOn = PrefBool(file, @"lgcompat", YES);
     gBarOn = gOn && PrefBool(file, @"bar", YES);
     gMenuOn = gOn && PrefBool(file, @"menu", YES);
     gTopOn = gOn && PrefBool(file, @"topbar", YES);
@@ -986,6 +988,7 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     if (!host || !v.superview) return;
     if (!gStyled) gStyled = [NSHashTable weakObjectsHashTable];
     [gStyled addObject:v];
+    LGCompatRegister(v);
     UIVisualEffectView *g = objc_getAssociatedObject(v, &kGlassKey);
     if (!inside && [v isKindOfClass:[UIControl class]]) AddJelly((UIControl *)v);
     if (!g || g.superview != host) {
@@ -1559,6 +1562,7 @@ static UIButton *GlassCapsule(NSInteger tag, SEL action, SEL down) {
     [b addTarget:[M26Search shared] action:action forControlEvents:UIControlEventTouchUpInside];
     [b addTarget:[M26Search shared] action:down forControlEvents:UIControlEventTouchDown];
     [b addTarget:[M26Search shared] action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    LGCompatRegister(b);
     return b;
 }
 static void PaintCapsule(UIButton *b, BOOL dark) {

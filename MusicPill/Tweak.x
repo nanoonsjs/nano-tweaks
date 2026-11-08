@@ -338,6 +338,7 @@
 // the switches did nothing in 0.3.0. We now read the plist file directly
 // (Dopamine keeps tweak prefs under /var/jb) and fall back to cfprefsd.
 #import <UIKit/UIKit.h>
+#include "../shared/LGCompat.h"
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
@@ -512,6 +513,7 @@ static void LoadPrefs(void) {
     NSDictionary *file = ReadPrefsFile(&src);
     gPrefsSource = src ?: @"cfprefs/defaults";
     gRename = PrefBool(file, @"rename", YES);
+    gLGCompatOn = PrefBool(file, @"lgcompat", YES);
     gRound  = PrefBool(file, @"round", YES);
     gDebug  = PrefBool(file, @"debug", NO);
     gSwipe  = PrefBool(file, @"swipe", YES);
@@ -1514,6 +1516,7 @@ static UIImage *SelectedTabImage(UITabBar *tb) {
 // Home / Search circles next to the minimized pill.
 static void FrostGlass(UIVisualEffectView *g, UIView *shadowHost) {
     if (![g isKindOfClass:[UIVisualEffectView class]]) return;
+    LGCompatRegister(g);
     BOOL light = g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
     NSNumber *was = objc_getAssociatedObject(g, (const void *)&FrostGlass);
     if (!was || was.boolValue != light) {
@@ -1615,6 +1618,7 @@ static UIView *GlassCircle(NSString *ident, UIView *host) {
     lp.delegate = (id<UIGestureRecognizerDelegate>)[MPCollapse shared];
     [c addGestureRecognizer:lp];
     [host addSubview:c];
+    LGCompatRegister(c);
     return c;
 }
 static void RebuildCircleGlass(UIView *c) {

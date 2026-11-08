@@ -76,6 +76,7 @@
 //    Apple's chrome (tap the photo to hide the bars).
 //  - Frames are set only when they change, with a busy flag against re-entry.
 #import <UIKit/UIKit.h>
+#include "../shared/LGCompat.h"
 #import <QuartzCore/QuartzCore.h>
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
@@ -128,6 +129,7 @@ static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSDictionary *f = ReadPrefsFile();
     gEnabled = PrefBool(f, @"enabled", YES);
+    gLGCompatOn = PrefBool(f, @"lgcompat", YES);
     gTopBar  = PrefBool(f, @"topbar", YES);
     gPlayer  = PrefBool(f, @"player", YES);
     gDebug   = PrefBool(f, @"debug", NO);
@@ -576,6 +578,7 @@ static PGGlass *GlassIn(UIView *c, NSString *key) {
     for (UIView *v in c.subviews) if ([v isKindOfClass:[PGGlass class]] && [v.accessibilityIdentifier isEqualToString:key]) return (PGGlass *)v;
     PGGlass *g = [PGGlass new];
     g.accessibilityIdentifier = key;
+    LGCompatRegister(g);
     [c insertSubview:g atIndex:0];
     return g;
 }
