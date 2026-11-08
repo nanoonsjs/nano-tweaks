@@ -1,4 +1,5 @@
-// MusicPill 1.2.81 - made by nano
+// MusicPill 1.2.82 - made by nano
+// 1.2.82: landscape player (turn the phone: cover left, glass controls right, colors from the cover, Insights in two columns), smaller pill on Library
 // 1.2.81: jelly bounce after a swipe always shows (flicks on a skip, wobbles home); no second star after lyrics / queue
 // 1.2.80: menu grows from the pill with the glass filling in and melts back into it, glass touch light on the pill, pill 4.5pt lower, Up Next row removed
 // 1.2.79: menus grow out of the pill and go back into it; the 3s wait after closing the player is gone
@@ -399,7 +400,8 @@ static UIView *GlyphIn(UIView *v, int depth);
 #define COLLAPSE_TAG 0x4D50434C
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
-static BOOL gPillHoldPref, gWavePref, gTapOpenPref = YES;   // read into the extras (Extras.h) below
+static BOOL gPillHoldPref, gWavePref, gTapOpenPref = YES, gLandscapePref, gLibMiniPref;
+static BOOL OnLibraryTab(void);   // read into the extras (Extras.h) below
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
 static __weak UIScrollView *gArtistCV;
@@ -527,6 +529,8 @@ static void LoadPrefs(void) {
     gPillHoldPref = PrefBool(file, @"pillhold", NO);
     gWavePref = PrefBool(file, @"wave", NO);
     gTapOpenPref = PrefBool(file, @"tapopen", YES);
+    gLandscapePref = PrefBool(file, @"landscape", NO);
+    gLibMiniPref = PrefBool(file, @"libmini", NO);
     gMarquee  = PrefBool(file, @"marquee", YES);
     gAlbum    = PrefBool(file, @"album", YES);
     gNavGlass = PrefBool(file, @"navglass", YES);
@@ -1150,6 +1154,7 @@ static CGAffineTransform PillTransform(UIView *m) {
     CGFloat inset = gSize == 0 ? 24 : (gSize == 1 ? 56 : 96);
     CGFloat s = W > inset + 100 ? (W - inset) / W : 1;
     s = MIN(1.0, s * (gExpanded ? PILL_GROW_SCROLL : PILL_GROW_NORMAL));
+    if (OnLibraryTab()) s *= 0.86;   // Library: a smaller pill
     // Scaling shrinks around the center; shift down a bit so a smaller pill
     // keeps the same small gap above the tab bar instead of floating up.
     CGFloat ty = -1.5 + H * (1 - s) / 2;   // 1.2.80: 4.5pt lower (was -6)
@@ -1421,7 +1426,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.81 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.82 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -8033,6 +8038,7 @@ static void ShowAboutSheet(UIView *from, NSDictionary *about) {
 }
 
 #include "Extras.h"
+#include "Landscape.h"
 
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
@@ -8043,5 +8049,5 @@ static void ShowAboutSheet(UIView *from, NSDictionary *about) {
     HookMenuClasses();
     HookResponses();
     HookSymbolButton();
-    dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); StartExtras(); });
+    dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); StartExtras(); StartLandscape(); });
 }

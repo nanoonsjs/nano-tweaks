@@ -9,7 +9,8 @@
 
 #pragma mark - now playing (MediaRemote), polled once a second
 
-static NSString *gXTitle, *gXArtist;
+static NSString *gXTitle, *gXArtist, *gXAlbum;
+static UIImage *gXArt;   // the cover (from MediaRemote)
 static BOOL gXPlaying;
 static double gXElapsed, gXDuration, gXRate;
 static CFAbsoluteTime gXStamp;
@@ -32,6 +33,10 @@ static void XPoll(void) {
         id t = x[@"kMRMediaRemoteNowPlayingInfoTitle"], a = x[@"kMRMediaRemoteNowPlayingInfoArtist"];
         gXTitle = [t isKindOfClass:[NSString class]] ? t : nil;
         gXArtist = [a isKindOfClass:[NSString class]] ? a : nil;
+        id al = x[@"kMRMediaRemoteNowPlayingInfoAlbum"]; gXAlbum = [al isKindOfClass:[NSString class]] ? al : nil;
+        static NSData *lastArt;
+        NSData *ad = x[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
+        if ([ad isKindOfClass:[NSData class]] && ![ad isEqualToData:lastArt]) { lastArt = ad; gXArt = [UIImage imageWithData:ad]; }
         gXElapsed = [x[@"kMRMediaRemoteNowPlayingInfoElapsedTime"] doubleValue];
         gXDuration = [x[@"kMRMediaRemoteNowPlayingInfoDuration"] doubleValue];
         gXRate = [x[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"] doubleValue];
@@ -383,14 +388,20 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
 
 @interface MPInsightsCtl : NSObject
 + (void)showIn:(UIWindow *)w;
++ (void)buildIn:(UIView *)c size:(CGSize)size closeTarget:(id)closeT action:(SEL)closeA;
 @end
 @implementation MPInsightsCtl
 + (void)showIn:(UIWindow *)w {
-    XLoad();
-    [[NSUserDefaults standardUserDefaults] setObject:gXLog forKey:@"mp.insights"];
     CGFloat H = w.bounds.size.height - w.safeAreaInsets.top - 24;
     MPSheet *sh = [MPSheet showIn:w height:H];
-    UIView *c = sh.panel.contentView; CGFloat W = sh.panel.bounds.size.width;
+    [self buildIn:sh.panel.contentView size:sh.panel.bounds.size closeTarget:sh action:@selector(close)];
+}
+// Lays the dashboard out in any container: one column upright, two columns when it's wide (landscape).
++ (void)buildIn:(UIView *)c size:(CGSize)size closeTarget:(id)closeT action:(SEL)closeA {
+    XLoad();
+    [[NSUserDefaults standardUserDefaults] setObject:gXLog forKey:@"mp.insights"];
+    CGFloat W = size.width, H = size.height;
+    BOOL wide = W > 600;
     UIColor *pink = [UIColor colorWithRed:1 green:0.25 blue:0.42 alpha:1], *violet = [UIColor colorWithRed:0.55 green:0.38 blue:1 alpha:1];
 
     // header
@@ -405,13 +416,15 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
     [x setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
     x.tintColor = UIColor.whiteColor; x.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
     x.frame = CGRectMake(W - 58, 22, 38, 38); x.layer.cornerRadius = 19;
-    [x addTarget:sh action:@selector(close) forControlEvents:UIControlEventTouchUpInside];
+    [x addTarget:closeT action:closeA forControlEvents:UIControlEventTouchUpInside];
     [c addSubview:x];
 
     UIScrollView *sc = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 92, W, H - 92)];
     sc.showsVerticalScrollIndicator = NO; sc.alwaysBounceVertical = YES;
     [c addSubview:sc];
-    CGFloat y = 4, cw = W - 32;
+    // left column: the week (hero, streak, today); right column: artist, songs, all time
+    CGFloat cw = wide ? (W - 44) / 2 : W - 32, lx = 16, rx = wide ? 28 + cw : 16;
+    CGFloat y = 4;
     int idx = 0;
 
     // ---- this week: big number, change vs last week, bars per day
@@ -423,7 +436,7 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
         vals[i] = [days[XDayKey(d)] doubleValue]; total += vals[i]; mx = MAX(mx, vals[i]);
         last += [days[XDayKey(p)] doubleValue];
     }
-    UIView *hero = XCardView(CGRectMake(16, y, cw, 250));
+    UIView *hero = XCardView(CGRectMake(lx, y, cw, 250));
     CAGradientLayer *gr = [CAGradientLayer layer];
     gr.frame = hero.bounds; gr.cornerRadius = 26;
     gr.colors = @[(id)[pink colorWithAlphaComponent:0.55].CGColor, (id)[violet colorWithAlphaComponent:0.35].CGColor, (id)[UIColor colorWithWhite:0 alpha:0].CGColor];
@@ -466,7 +479,7 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
     NSArray *chips = @[@[@"flame.fill", streak == 1 ? @"1 day" : [NSString stringWithFormat:@"%d days", streak], @"Listening streak", [UIColor colorWithRed:1 green:0.6 blue:0.2 alpha:1]],
                        @[@"clock.fill", XDur([days[XDayKey([NSDate date])] doubleValue]), @"Today", violet]];
     for (int i = 0; i < 2; i++) {
-        UIView *ch = XCardView(CGRectMake(16 + i * (hw + 12), y, hw, 92));
+        UIView *ch = XCardView(CGRectMake(lx + i * (hw + 12), y, hw, 92));
         UIImageView *ic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:chips[i][0] withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightBold]]];
         ic.tintColor = chips[i][3]; ic.frame = CGRectMake(16, 14, 24, 24); ic.contentMode = UIViewContentModeCenter; [ch addSubview:ic];
         UILabel *v = XLabel(chips[i][1], 24, UIFontWeightHeavy, nil); v.frame = CGRectMake(16, 40, hw - 32, 28); [ch addSubview:v];
@@ -474,11 +487,13 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
         [sc addSubview:ch]; XAppear(ch, idx++);
     }
     y += 92 + 12;
+    CGFloat yLeft = y;
+    if (wide) y = 4;   // the right column starts at the top again
 
     // ---- top artist this week
     NSString *topArtist = XTopN(gXLog[@"weekArtists"], 1).firstObject;
     if (topArtist) {
-        UIView *ac = XCardView(CGRectMake(16, y, cw, 110));
+        UIView *ac = XCardView(CGRectMake(rx, y, cw, 110));
         UIImageView *av = XArtView(XArtFor(nil, topArtist, 78), CGRectMake(16, 16, 78, 78), 39);
         av.layer.borderWidth = 2; av.layer.borderColor = [pink colorWithAlphaComponent:0.8].CGColor; [ac addSubview:av];
         UILabel *h = XLabel(@"TOP ARTIST", 12, UIFontWeightBold, pink); h.frame = CGRectMake(110, 22, cw - 126, 16); [ac addSubview:h];
@@ -490,9 +505,9 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
 
     // ---- top songs this week
     NSArray *tops = XTopN(gXLog[@"weekSongs"], 5);
-    UILabel *s1 = XLabel(@"Top Songs This Week", 20, UIFontWeightBold, nil); s1.frame = CGRectMake(22, y + 6, cw, 26); [sc addSubview:s1]; y += 40;
+    UILabel *s1 = XLabel(@"Top Songs This Week", 20, UIFontWeightBold, nil); s1.frame = CGRectMake(rx + 6, y + 6, cw, 26); [sc addSubview:s1]; y += 40;
     if (tops.count) {
-        UIView *lc = XCardView(CGRectMake(16, y, cw, tops.count * 60 + 8));
+        UIView *lc = XCardView(CGRectMake(rx, y, cw, tops.count * 60 + 8));
         for (NSUInteger i = 0; i < tops.count; i++) {
             NSArray *p = [tops[i] componentsSeparatedByString:@"\n"];
             UIView *row = XRow(cw, (int)i + 1, XArtFor(p.firstObject, p.count > 1 ? p[1] : nil, 44), p.firstObject, p.count > 1 ? p[1] : @"", XDur([gXLog[@"weekSongs"][tops[i]] doubleValue]));
@@ -500,20 +515,20 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
         }
         [sc addSubview:lc]; XAppear(lc, idx++); y += lc.bounds.size.height + 12;
     } else {
-        UILabel *e = XLabel(@"Play some music and your week shows up here.", 14, UIFontWeightRegular, [UIColor colorWithWhite:1 alpha:0.5]); e.frame = CGRectMake(22, y, cw, 20); [sc addSubview:e]; y += 32;
+        UILabel *e = XLabel(@"Play some music and your week shows up here.", 14, UIFontWeightRegular, [UIColor colorWithWhite:1 alpha:0.5]); e.frame = CGRectMake(rx + 6, y, cw, 20); [sc addSubview:e]; y += 32;
     }
 
     // ---- all time, from your library's play counts (worked out in the background)
-    UILabel *s2 = XLabel(@"All Time", 20, UIFontWeightBold, nil); s2.frame = CGRectMake(22, y + 6, cw, 26); [sc addSubview:s2]; y += 40;
-    UIView *allCard = XCardView(CGRectMake(16, y, cw, 5 * 60 + 8 + 70));
+    UILabel *s2 = XLabel(@"All Time", 20, UIFontWeightBold, nil); s2.frame = CGRectMake(rx + 6, y + 6, cw, 26); [sc addSubview:s2]; y += 40;
+    UIView *allCard = XCardView(CGRectMake(rx, y, cw, 5 * 60 + 8 + 70));
     UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     spin.color = UIColor.whiteColor; spin.center = CGPointMake(cw / 2, allCard.bounds.size.height / 2); [spin startAnimating]; [allCard addSubview:spin];
     [sc addSubview:allCard]; XAppear(allCard, idx++);
     y += allCard.bounds.size.height + 12;
     UILabel *foot = XLabel(@"This week counts what you've played since turning this on. All Time comes from your library's play counts.", 12, UIFontWeightRegular, [UIColor colorWithWhite:1 alpha:0.4]);
-    foot.numberOfLines = 0; foot.adjustsFontSizeToFitWidth = NO; foot.frame = CGRectMake(22, y, cw - 12, 34); [sc addSubview:foot];
+    foot.numberOfLines = 0; foot.adjustsFontSizeToFitWidth = NO; foot.frame = CGRectMake(rx + 6, y, cw - 12, 34); [sc addSubview:foot];
     y += 50;
-    sc.contentSize = CGSizeMake(W, y);
+    sc.contentSize = CGSizeMake(W, MAX(y, yLeft));
     __weak UIView *weakCard = allCard;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSMutableArray *items = [NSMutableArray array]; double libTime = 0;

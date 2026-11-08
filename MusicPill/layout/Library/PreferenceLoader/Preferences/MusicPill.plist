@@ -329,7 +329,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Swipe Up for Menu: swipe up on the now playing pill for a glass menu with Up Next (reorder, remove and add songs), Sleep Timer and Insights. Hold the pill for Music's song menu. Waveform: live bars on the cover while music plays. Tap to Open Player: Music's swipe up on the bar is off, a tap opens the player.</string>
+			<string>Swipe Up for Menu: swipe up on the now playing pill for a glass menu with Up Next (reorder, remove and add songs), Sleep Timer and Insights. Hold the pill for Music's song menu. Waveform: live bars on the cover while music plays. Tap to Open Player: Music's swipe up on the bar is off, a tap opens the player. Landscape Player: turn your phone sideways in Music for a full-screen glass player (cover left, controls right, colors from the cover, Insights button). Needs Portrait Orientation Lock off. Smaller Pill on Library: a more compact now playing pill on the Library tab.</string>
 			<key>label</key>
 			<string>Extras</string>
 		</dict>
@@ -374,6 +374,34 @@
 			<string>tapopen</string>
 			<key>label</key>
 			<string>Tap to Open Player</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>landscape</string>
+			<key>label</key>
+			<string>Landscape Player</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>libmini</string>
+			<key>label</key>
+			<string>Smaller Pill on Library</string>
 		</dict>
 		<dict>
 			<key>cell</key>
