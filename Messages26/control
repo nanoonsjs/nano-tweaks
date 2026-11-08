@@ -1,6 +1,6 @@
 Package: com.nano.messages26
 Name: Messages26
-Version: 1.2.1
+Version: 1.2.2
 Architecture: iphoneos-arm
 Description: Messages redesigned in the iOS 26 Liquid Glass style: glass message bar and + app menu, bottom search pill, glass bubbles with swipe to reply, a new contact page with tabs and chat backgrounds, bubble colors, contact frames, Face ID chat lock and more.
 Maintainer: nano

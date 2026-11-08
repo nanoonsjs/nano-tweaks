@@ -329,7 +329,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>With the Liquid (Gl)ass tweak installed, its glass is hidden under MusicPill's own glass buttons so the two don't stack. Turn off to keep LiquidAss's glass there instead. Reopen the app after changing.</string>
+			<string>For the Liquid (Gl)ass tweak. On: where LiquidAss draws its glass buttons (like back buttons), MusicPill's own glass steps aside so only LiquidAss's shows. Off: MusicPill's glass shows there and LiquidAss's under it is hidden. Reopen the app after changing.</string>
 			<key>label</key>
 			<string>LiquidAss</string>
 		</dict>

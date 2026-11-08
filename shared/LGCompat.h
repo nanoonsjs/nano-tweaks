@@ -1,11 +1,11 @@
 // LGCompat.h - get along with the Liquid (Gl)ass tweak ("LiquidAss" by dylv / WinsAviation).
 //
 // LiquidAss puts its own glass (LGButtonView, LGLiveBackdropView, ...) behind bar buttons in every app.
-// Where one of our tweaks already draws its own glass button, the two stack up. With this, wherever
-// we draw glass, LiquidAss's glass right underneath it is hidden (only there; the rest of LiquidAss
-// keeps working). Nothing happens when LiquidAss isn't installed.
+// Where one of our tweaks already draws its own glass, the two stack up. With compatibility on (default),
+// our glass steps aside wherever LiquidAss already draws, so LiquidAss's buttons show. With it off, ours
+// shows and LiquidAss's glass under it is hidden. Nothing happens when LiquidAss isn't installed.
 //
-// Use: LGCompatRegister(view) for each view we draw glass for, and set gLGCompatOn from the prefs.
+// Use: LGCompatRegister(glassView) for each glass view we draw (the glass itself, not the button), and set gLGCompatOn from the prefs.
 #pragma once
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -46,33 +46,52 @@ static void LGSetHidden(UIView *v, BOOL hide) {
         [gLGHidden removeObject:v];
     }
 }
-static void LGCompatPass(void) {
-    if (!gLGCompatOn) {   // turned off: give LiquidAss its views back
-        for (UIView *v in [gLGHidden allObjects]) LGSetHidden(v, NO);
-        return;
+// our own glass, hidden with an empty mask (our code keeps setting alpha/hidden, a mask it leaves alone)
+static void LGOursHidden(UIView *g, BOOL hide) {
+    BOOL masked = [g.layer.mask.name isEqualToString:@"lg.ours"];
+    if (hide && !masked) { CALayer *m = [CALayer layer]; m.name = @"lg.ours"; g.layer.mask = m; }
+    if (!hide && masked) g.layer.mask = nil;
+}
+// LiquidAss glass views sitting on our glass view g
+static NSArray *LGTheirsOn(UIView *g) {
+    NSMutableArray *out = [NSMutableArray array];
+    CGRect R = [g convertRect:g.bounds toView:nil];
+    if (R.size.width < 8 || R.size.height < 8) return out;
+    // look around our view: up to 4 levels up (a bar or its button stack), then down through that
+    UIView *root = g;
+    for (int i = 0; i < 4 && root.superview && root.superview != g.window; i++) root = root.superview;
+    NSMutableArray *q = [NSMutableArray arrayWithObject:root];
+    int n = 0;
+    while (q.count && n++ < 500) {
+        UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+        if (v == g) continue;
+        if (LGIsTheirs(v) && !LGHoldsContent(v)) {
+            CGRect L = [v convertRect:v.bounds toView:nil];
+            CGRect I = CGRectIntersection(L, R);
+            CGFloat la = L.size.width * L.size.height, ia = CGRectIsNull(I) ? 0 : I.size.width * I.size.height;
+            // theirs sits on ours: mostly inside it and not much bigger than it (a whole-bar backdrop is left alone)
+            if (la > 0 && ia / la > 0.45 && la < R.size.width * R.size.height * 3.0) [out addObject:v];
+            continue;
+        }
+        [q addObjectsFromArray:v.subviews];
     }
+    return out;
+}
+// Compatibility on: LiquidAss's glass wins, ours steps aside where both would be.
+// Compatibility off: ours wins, LiquidAss's glass under it is hidden.
+static void LGCompatPass(void) {
     for (UIView *g in [gLGOurs allObjects]) {
-        if (!g.window || g.hidden || g.alpha < 0.05) continue;
-        CGRect R = [g convertRect:g.bounds toView:nil];
-        if (R.size.width < 8 || R.size.height < 8) continue;
-        // look around our view: up to 4 levels up (a bar or its button stack), then down through that
-        UIView *root = g;
-        for (int i = 0; i < 4 && root.superview && root.superview != g.window; i++) root = root.superview;
-        NSMutableArray *q = [NSMutableArray arrayWithObject:root];
-        int n = 0;
-        while (q.count && n++ < 500) {
-            UIView *v = q.firstObject; [q removeObjectAtIndex:0];
-            if (LGIsTheirs(v) && !LGHoldsContent(v)) {
-                CGRect L = [v convertRect:v.bounds toView:nil];
-                CGRect I = CGRectIntersection(L, R);
-                CGFloat la = L.size.width * L.size.height, ia = CGRectIsNull(I) ? 0 : I.size.width * I.size.height;
-                // theirs sits on ours: mostly inside it and not much bigger than it (a whole-bar backdrop is left alone)
-                if (la > 0 && ia / la > 0.45 && la < R.size.width * R.size.height * 3.0) LGSetHidden(v, YES);
-                continue;
-            }
-            [q addObjectsFromArray:v.subviews];
+        if (!g.window || g.hidden) { continue; }
+        NSArray *theirs = LGTheirsOn(g);
+        if (gLGCompatOn) {
+            LGOursHidden(g, theirs.count > 0);
+
+        } else {
+            LGOursHidden(g, NO);
+            for (UIView *v in theirs) LGSetHidden(v, YES);
         }
     }
+    if (gLGCompatOn) for (UIView *v in [gLGHidden allObjects]) LGSetHidden(v, NO);   // give theirs back
 }
 static void LGCompatRegister(UIView *v) {
     if (!v || !LGPresent()) return;

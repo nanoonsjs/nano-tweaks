@@ -988,7 +988,6 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
     if (!host || !v.superview) return;
     if (!gStyled) gStyled = [NSHashTable weakObjectsHashTable];
     [gStyled addObject:v];
-    LGCompatRegister(v);
     UIVisualEffectView *g = objc_getAssociatedObject(v, &kGlassKey);
     if (!inside && [v isKindOfClass:[UIControl class]]) AddJelly((UIControl *)v);
     if (!g || g.superview != host) {
@@ -996,6 +995,7 @@ static void GlassBehind(UIView *v, CGFloat padX, CGFloat padY, BOOL circle) {
         g = GlassView(v); g.tag = GLASS_TAG;
         if (inside) [host insertSubview:g atIndex:0]; else [host insertSubview:g belowSubview:v];
         objc_setAssociatedObject(v, &kGlassKey, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!inside) LGCompatRegister(g);
     }
     if (inside && host.subviews.firstObject != g) [host sendSubviewToBack:g];
     // measure without our scaling (positions would count it twice)
@@ -1562,7 +1562,6 @@ static UIButton *GlassCapsule(NSInteger tag, SEL action, SEL down) {
     [b addTarget:[M26Search shared] action:action forControlEvents:UIControlEventTouchUpInside];
     [b addTarget:[M26Search shared] action:down forControlEvents:UIControlEventTouchDown];
     [b addTarget:[M26Search shared] action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
-    LGCompatRegister(b);
     return b;
 }
 static void PaintCapsule(UIButton *b, BOOL dark) {

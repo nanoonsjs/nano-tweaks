@@ -930,16 +930,15 @@ static NSArray *IOS26MenuChildren(NSArray *children, UIMenuOptions options) {
     NSMutableDictionary *found = [NSMutableDictionary dictionary];
     RestyleMenu(children, found);
     if (options & UIMenuOptionsDisplayInline) return children;   // sections: only rename
-    // LiquidAss draws its own context menus; our side-by-side Download / Favorite / Share row makes its menu
-    // stretch huge, so with LiquidAss the menu keeps its normal list (still with our names and icons)
-    if (gLGCompatOn && LGPresent()) return children;
     for (UIMenuElement *e in children) if ([e isKindOfClass:[UIMenu class]] && [((UIMenu *)e).identifier isEqualToString:MP_ROW_ID]) return children;
     NSMutableArray *row = [NSMutableArray array];
     for (NSString *k in @[@"download", @"fav", @"share"]) if (found[k]) [row addObject:found[k]];
     if (row.count < 2) return children;
     UIMenu *top = [UIMenu menuWithTitle:@"" image:nil identifier:MP_ROW_ID options:UIMenuOptionsDisplayInline children:row];
     if ([top respondsToSelector:@selector(setPreferredElementSize:)]) {
-        ((void (*)(id, SEL, NSInteger))objc_msgSend)(top, @selector(setPreferredElementSize:), 1);   // medium: icon over title, side by side
+        // medium: icon over title, side by side. LiquidAss's menus stretch that row huge, so with LiquidAss
+        // the three stay at the top as their own section of normal rows; everything else is laid out the same.
+        if (!(gLGCompatOn && LGPresent())) ((void (*)(id, SEL, NSInteger))objc_msgSend)(top, @selector(setPreferredElementSize:), 1);
         NSArray *rest = WithoutElements(children, [NSSet setWithArray:row]);
         UIAction *pin = PinMenuAction();
         if (pin) rest = [rest arrayByAddingObject:[UIMenu menuWithTitle:@"" image:nil identifier:@"com.user.musicpill.pin" options:UIMenuOptionsDisplayInline children:@[pin]]];
@@ -1377,7 +1376,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.73 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.74 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1621,7 +1620,6 @@ static UIView *GlassCircle(NSString *ident, UIView *host) {
     lp.delegate = (id<UIGestureRecognizerDelegate>)[MPCollapse shared];
     [c addGestureRecognizer:lp];
     [host addSubview:c];
-    LGCompatRegister(c);
     return c;
 }
 static void RebuildCircleGlass(UIView *c) {
