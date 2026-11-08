@@ -1,4 +1,5 @@
-// MusicPill 1.2.79 - made by nano
+// MusicPill 1.2.80 - made by nano
+// 1.2.80: menu grows from the pill with the glass filling in and melts back into it, glass touch light on the pill, pill 4.5pt lower, Up Next row removed
 // 1.2.79: menus grow out of the pill and go back into it; the 3s wait after closing the player is gone
 // 1.2.78: the pill follows your finger (sideways = skip with jelly, up = glass menu), hold = Music's song menu, tap opens the player (no swipe up), new Insights, live waveform
 // 1.2.77: Hold the Pill (glass menu: Up Next, Sleep Timer, Music Insights), Waveform on the cover, jelly bounce on the pill swipe
@@ -1150,7 +1151,7 @@ static CGAffineTransform PillTransform(UIView *m) {
     s = MIN(1.0, s * (gExpanded ? PILL_GROW_SCROLL : PILL_GROW_NORMAL));
     // Scaling shrinks around the center; shift down a bit so a smaller pill
     // keeps the same small gap above the tab bar instead of floating up.
-    CGFloat ty = -6 + H * (1 - s) / 2;
+    CGFloat ty = -1.5 + H * (1 - s) / 2;   // 1.2.80: 4.5pt lower (was -6)
     return CGAffineTransformScale(CGAffineTransformMakeTranslation(0, ty), s, s);
 }
 
@@ -1419,7 +1420,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.79 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.80 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];

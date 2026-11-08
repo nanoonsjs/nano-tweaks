@@ -150,10 +150,19 @@ static CGAffineTransform XFromRect(CGRect panel, CGRect r) {
     CGFloat sx = MAX(0.05, r.size.width / panel.size.width), sy = MAX(0.05, r.size.height / panel.size.height);
     return CGAffineTransformScale(CGAffineTransformMakeTranslation(CGRectGetMidX(r) - CGRectGetMidX(panel), CGRectGetMidY(r) - CGRectGetMidY(panel)), sx, sy);
 }
+static UIVisualEffect *XGlassEffect(void) { return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]; }
+// the rim fades with the glass (a layer border doesn't animate with UIView animations)
+static void XRim(CALayer *l, CGFloat to, CFTimeInterval dur) {
+    CGColorRef c = [UIColor colorWithWhite:1 alpha:to].CGColor;
+    CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"borderColor"];
+    a.fromValue = (__bridge id)(l.presentationLayer ?: l).borderColor; a.toValue = (__bridge id)c; a.duration = dur;
+    a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    l.borderColor = c;
+    [l addAnimation:a forKey:@"rim"];
+}
 + (MPSheet *)showIn:(UIWindow *)w height:(CGFloat)h { return [self showIn:w height:h from:gSheetSource]; }
 + (MPSheet *)showIn:(UIWindow *)w height:(CGFloat)h from:(UIView *)src {
     if (src.window != w) src = nil;
-    if (!src) return [self slideIn:w height:h];
     MPSheet *s = [[MPSheet alloc] initWithFrame:w.bounds];
     s.source = src;
     s.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
@@ -161,53 +170,60 @@ static CGAffineTransform XFromRect(CGRect panel, CGRect r) {
     [s addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:s action:@selector(bgTap:)]];
     CGFloat W = w.bounds.size.width - 24;
     s.panel = XGlass(34);
-    CGRect pr = [src convertRect:src.bounds toView:w];
-    // sit just above the pill when there's room, otherwise as low as fits
-    CGFloat y = MIN(CGRectGetMinY(pr) - 10 - h, w.bounds.size.height - h - MAX(16, w.safeAreaInsets.bottom));
+    CGFloat bottom = w.bounds.size.height - h - MAX(16, w.safeAreaInsets.bottom), y = bottom;
+    CGRect pr = src ? [src convertRect:src.bounds toView:w] : CGRectZero;
+    if (src) y = MIN(CGRectGetMinY(pr) - 12 - h, bottom);   // just above the pill when there's room
     y = MAX(w.safeAreaInsets.top + 8, y);
     s.panel.frame = CGRectMake(12, y, W, h);
     [s addSubview:s.panel];
     [w addSubview:s];
-    // grows out of the pill: starts as the pill's shape, its contents fade in as it opens
-    s.panel.transform = XFromRect(s.panel.frame, pr);
+    // starts as clear glass in the pill's shape (or below the screen), then the glass fills in as it grows
+    s.panel.effect = nil;
+    s.panel.layer.borderColor = [UIColor colorWithWhite:1 alpha:0].CGColor;
     s.panel.contentView.alpha = 0;
-    src.alpha = 1;
-    [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:0 animations:^{
-        s.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35]; s.panel.transform = CGAffineTransformIdentity;
+    s.panel.transform = src ? XFromRect(s.panel.frame, pr) : CGAffineTransformMakeTranslation(0, h + 60);
+    if (src) {   // the pill gives a little push as the menu leaves it
+        CASpringAnimation *a = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+        a.additive = YES; a.fromValue = @0.06; a.toValue = @0; a.stiffness = 300; a.damping = 12; a.duration = a.settlingDuration;
+        [src.layer addAnimation:a forKey:@"mp.launch"];
+    }
+    [UIView animateWithDuration:0.72 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        s.panel.transform = CGAffineTransformIdentity;
     } completion:nil];
-    [UIView animateWithDuration:0.3 delay:0.12 options:0 animations:^{ s.panel.contentView.alpha = 1; } completion:nil];
-    return s;
-}
-+ (MPSheet *)slideIn:(UIWindow *)w height:(CGFloat)h {
-    MPSheet *s = [[MPSheet alloc] initWithFrame:w.bounds];
-    s.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
-    s.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [s addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:s action:@selector(bgTap:)]];
-    CGFloat W = w.bounds.size.width - 24;
-    s.panel = XGlass(34);
-    s.panel.frame = CGRectMake(12, w.bounds.size.height - h - MAX(16, w.safeAreaInsets.bottom), W, h);
-    [s addSubview:s.panel];
-    [w addSubview:s];
-    s.panel.transform = CGAffineTransformMakeTranslation(0, h + 60);
-    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:0 animations:^{
-        s.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35]; s.panel.transform = CGAffineTransformIdentity;
+    [UIView animateWithDuration:0.4 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        s.backgroundColor = [UIColor colorWithWhite:0 alpha:0.32];
+        s.panel.effect = XGlassEffect();
     } completion:nil];
+    XRim(s.panel.layer, 0.22, 0.4);
+    [UIView animateWithDuration:0.3 delay:0.14 options:UIViewAnimationOptionCurveEaseOut animations:^{ s.panel.contentView.alpha = 1; } completion:nil];
     return s;
 }
 - (void)bgTap:(UITapGestureRecognizer *)g { if (!CGRectContainsPoint(self.panel.frame, [g locationInView:self])) [self close]; }
 - (void)close {
+    if (self.tag == 0x4D50) return;   // already closing
+    self.tag = 0x4D50;
+    self.userInteractionEnabled = NO;
     UIView *src = self.source;
-    if (src.window == self.window && src) {
-        CGRect pr = [src convertRect:src.bounds toView:self];
-        [UIView animateWithDuration:0.15 animations:^{ self.panel.contentView.alpha = 0; }];
-        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:0 animations:^{
-            self.backgroundColor = [UIColor colorWithWhite:0 alpha:0]; self.panel.transform = XFromRect(self.panel.frame, pr); self.panel.alpha = 0.6;
-        } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
-        return;
-    }
-    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:0 animations:^{
-        self.backgroundColor = [UIColor colorWithWhite:0 alpha:0]; self.panel.transform = CGAffineTransformMakeTranslation(0, self.panel.bounds.size.height + 60);
+    BOOL back = src && src.window == self.window;
+    CGRect pr = back ? [src convertRect:src.bounds toView:self] : CGRectZero;
+    CGAffineTransform to = back ? XFromRect(self.panel.frame, pr) : CGAffineTransformMakeTranslation(0, self.panel.bounds.size.height + 60);
+    // contents go first, then the glass melts away while it shrinks back into the pill: nothing is left behind
+    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ self.panel.contentView.alpha = 0; } completion:nil];
+    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        self.panel.transform = to;
+    } completion:nil];
+    [UIView animateWithDuration:0.3 delay:0.06 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        self.panel.effect = nil;
+        self.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
     } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
+    XRim(self.panel.layer, 0, 0.28);
+    if (back) {   // and the pill takes it back in with a little squish
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.24 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            CASpringAnimation *a = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+            a.additive = YES; a.fromValue = @0.05; a.toValue = @0; a.stiffness = 320; a.damping = 11; a.duration = a.settlingDuration;
+            [src.layer addAnimation:a forKey:@"mp.absorb"];
+        });
+    }
 }
 @end
 
@@ -547,12 +563,11 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
     self.from = v;
     gSheetSource = v;
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-    MPSheet *sh = [MPSheet showIn:w height:3 * 62 + 24 from:v];
+    MPSheet *sh = [MPSheet showIn:w height:2 * 62 + 24 from:v];
     self.menu = sh;
     UIView *c = sh.panel.contentView; CGFloat W = sh.panel.bounds.size.width;
     NSString *sleep = SleepStatus();
-    NSArray *rows = @[@[@"list.bullet", @"Up Next", @"Reorder, remove and add songs"],
-                      @[@"moon.zzz.fill", @"Sleep Timer", sleep ? [NSString stringWithFormat:@"On · %@", sleep] : @"Stop music after a while"],
+    NSArray *rows = @[@[@"moon.zzz.fill", @"Sleep Timer", sleep ? [NSString stringWithFormat:@"On · %@", sleep] : @"Stop music after a while"],
                       @[@"chart.bar.fill", @"Insights", @"Your week, top artists and songs"]];
     for (NSUInteger i = 0; i < rows.count; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -564,14 +579,14 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
         UIView *ic = [[UIView alloc] initWithFrame:CGRectMake(10, 9, 40, 40)];
         ic.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; ic.layer.cornerRadius = 20; ic.userInteractionEnabled = NO;
         UIImageView *iv = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:rows[i][0] withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]];
-        iv.tintColor = i == 1 ? [UIColor colorWithRed:0.66 green:0.58 blue:1 alpha:1] : [UIColor colorWithRed:1 green:0.3 blue:0.45 alpha:1];
+        iv.tintColor = i == 0 ? [UIColor colorWithRed:0.66 green:0.58 blue:1 alpha:1] : [UIColor colorWithRed:1 green:0.3 blue:0.45 alpha:1];
         iv.contentMode = UIViewContentModeCenter; iv.frame = ic.bounds; [ic addSubview:iv];
         [b addSubview:ic];
         UILabel *t = XLabel(rows[i][1], 17, UIFontWeightSemibold, nil); t.frame = CGRectMake(62, 9, W - 100, 22); t.userInteractionEnabled = NO; [b addSubview:t];
         UILabel *s = XLabel(rows[i][2], 13, UIFontWeightRegular, [UIColor colorWithWhite:1 alpha:0.55]); s.frame = CGRectMake(62, 31, W - 100, 18); s.userInteractionEnabled = NO; [b addSubview:s];
         [c addSubview:b];
-        b.alpha = 0; b.transform = CGAffineTransformMakeTranslation(0, 14);
-        [UIView animateWithDuration:0.45 delay:0.08 + i * 0.05 usingSpringWithDamping:0.75 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.alpha = 1; b.transform = CGAffineTransformIdentity; } completion:nil];
+        b.alpha = 0; b.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, 18), 0.94, 0.94);
+        [UIView animateWithDuration:0.55 delay:0.12 + i * 0.06 usingSpringWithDamping:0.72 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.alpha = 1; b.transform = CGAffineTransformIdentity; } completion:nil];
     }
 }
 - (void)rowDown:(UIButton *)b { [UIView animateWithDuration:0.15 animations:^{ b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.10]; b.transform = CGAffineTransformMakeScale(0.97, 0.97); }]; }
@@ -584,8 +599,8 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
     [self.menu close];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (!w) return;
-        if (b.tag == 0) OpenUpNext(gHiddenMini ?: from);
-        else if (b.tag == 1) [[MPSleepCtl shared] showIn:w];
+        (void)from;
+        if (b.tag == 0) [[MPSleepCtl shared] showIn:w];
         else [MPInsightsCtl showIn:w];
     });
 }
@@ -624,9 +639,43 @@ static void ReleaseDrag(UIView *v, CGFloat vx, CGFloat vy) {
     return NO;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return NO; }
+static void XTouchLight(UIView *pillView, CGPoint p, BOOL on) {
+    // inside the pill's glass, so the light stays within its shape
+    UIView *v = [pillView viewWithTag:GLASS_TAG];
+    if (!v && [pillView isKindOfClass:[MPMiniPill class]]) v = ((MPMiniPill *)pillView).glass;
+    if (!v) v = pillView;
+    p = [pillView convertPoint:p toView:v];
+    CAGradientLayer *gl = nil;
+    for (CALayer *l in v.layer.sublayers) if ([l.name isEqualToString:@"mp.touch"]) gl = (CAGradientLayer *)l;
+    if (!on) {
+        if (gl) { [CATransaction begin]; [CATransaction setAnimationDuration:0.35]; gl.opacity = 0; [CATransaction commit]; }
+        return;
+    }
+    if (!gl) {
+        gl = [CAGradientLayer layer]; gl.name = @"mp.touch"; gl.type = kCAGradientLayerRadial;
+        gl.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.42].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.12].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+        gl.locations = @[@0, @0.45, @1];
+        gl.startPoint = CGPointMake(0.5, 0.5); gl.endPoint = CGPointMake(1, 1);
+        gl.opacity = 0;
+        [v.layer addSublayer:gl];
+    }
+    CGFloat d = MAX(90, v.bounds.size.height * 2.2);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    gl.bounds = CGRectMake(0, 0, d, d); gl.position = p; gl.cornerRadius = d / 2;
+    [CATransaction commit];
+    if (gl.opacity < 1) { [CATransaction begin]; [CATransaction setAnimationDuration:0.18]; gl.opacity = 1; [CATransaction commit]; }
+}
 - (void)pan:(UIPanGestureRecognizer *)g {
     UIView *v = g.view;
     CGPoint t = [g translationInView:v.superview], vel = [g velocityInView:v.superview];
+    if (g.state == UIGestureRecognizerStateBegan) {
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+        CASpringAnimation *a = [CASpringAnimation animationWithKeyPath:@"transform.scale"];   // the glass swells under your finger
+        a.additive = YES; a.fromValue = @(-0.03); a.toValue = @0; a.stiffness = 400; a.damping = 16; a.duration = a.settlingDuration;
+        [v.layer addAnimation:a forKey:@"mp.touchdown"];
+    }
+    if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) XTouchLight(v, [g locationInView:v], YES);
+    else XTouchLight(v, CGPointZero, NO);
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
         [v.layer removeAnimationForKey:@"mp.release"];
         if (_axis == 1) SetDrag(v, XRubber(t.x, 70), 0);
