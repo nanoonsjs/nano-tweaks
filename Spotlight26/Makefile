@@ -9,6 +9,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = Spotlight26
 Spotlight26_FILES = Tweak.x
 Spotlight26_FRAMEWORKS = UIKit QuartzCore
-Spotlight26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
+Spotlight26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 
 include $(THEOS_MAKE_PATH)/tweak.mk

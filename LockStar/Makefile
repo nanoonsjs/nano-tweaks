@@ -10,6 +10,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = LockStar
 LockStar_FILES = Tweak.x
 LockStar_FRAMEWORKS = UIKit QuartzCore
-LockStar_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
+LockStar_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 
 include $(THEOS_MAKE_PATH)/tweak.mk

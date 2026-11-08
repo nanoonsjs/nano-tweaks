@@ -8,6 +8,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = InstaGlass
 InstaGlass_FILES = Tweak.x
 InstaGlass_FRAMEWORKS = UIKit QuartzCore
-InstaGlass_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
+InstaGlass_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 
 include $(THEOS_MAKE_PATH)/tweak.mk

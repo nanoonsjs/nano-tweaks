@@ -10,6 +10,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = Photos26
 Photos26_FILES = Tweak.x
 Photos26_FRAMEWORKS = UIKit QuartzCore AVFoundation CoreMedia
-Photos26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
+Photos26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 
 include $(THEOS_MAKE_PATH)/tweak.mk

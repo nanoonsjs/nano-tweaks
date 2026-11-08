@@ -10,6 +10,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = Control26
 Control26_FILES = Tweak.x
 Control26_FRAMEWORKS = UIKit QuartzCore AVKit
-Control26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
+Control26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 
 include $(THEOS_MAKE_PATH)/tweak.mk
