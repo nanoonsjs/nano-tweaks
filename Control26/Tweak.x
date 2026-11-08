@@ -1,4 +1,7 @@
-// Control26 1.1 - made by nano
+// Control26 1.2 - made by nano
+// 1.2: smaller iPhones (4.7"/5.5"): pages fit the screen, Connectivity fits (short names), page icons fit the margin;
+//      Style setting (iOS 26 / iOS 18), Module Shapes (round controls, capsule sliders) without other tweaks,
+//      clean card corners, - badges sit on the control edge, star no longer covers back on the music player
 // 1.1: cover tap removed again; public release
 // 1.0.4: tap the cover to open the playing app (Music, Spotify, ...), page icons no longer react to taps (hold and slide)
 // 1.0.3: no more freeze when jumping pages, progress bar no longer flashes full while sliding, 4x2 player buttons centered
@@ -118,6 +121,7 @@
 #import <AVKit/AVKit.h>
 #import <objc/message.h>
 #import <substrate.h>
+#import <mach-o/dyld.h>
 
 @interface MRUNowPlayingView : UIView @end
 @interface CCUIBaseSliderView : UIView @end
@@ -173,6 +177,8 @@ static BOOL PrefBool(NSDictionary *f, NSString *key, BOOL def) {
     return v ? [v boolValue] : def;
 }
 static BOOL gDropIn = YES, gCCPage = YES;
+static BOOL gShapes = YES;
+static BOOL gStyle18;   // Style: iOS 18 look (flat frosted) instead of iOS 26 liquid glass
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSDictionary *f = ReadPrefsFile();
@@ -187,9 +193,13 @@ static void LoadPrefs(void) {
     gEditUI  = PrefBool(f, @"editui", YES);
     gDropIn  = PrefBool(f, @"dropin", YES);
     gCCPage  = PrefBool(f, @"ccsettings", YES);
+    id st = f[@"style"];
+    gStyle18 = [st respondsToSelector:@selector(intValue)] && [st intValue] == 18;
+    gShapes  = PrefBool(f, @"shapes", YES);
 }
+static void RestyleAll(void);
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ LoadPrefs(); @try { StopAutoBrightness(); } @catch (__unused id e) {} });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ LoadPrefs(); @try { StopAutoBrightness(); RestyleAll(); } @catch (__unused id e) {} });
 }
 
 #pragma mark - helpers
@@ -1829,6 +1839,10 @@ static void OpenSettingsPane(NSString *pane) {
     SEL d = @selector(dismissAnimated:withCompletionHandler:);
     if ([cc respondsToSelector:d]) ((void (*)(id, SEL, BOOL, id))objc_msgSend)(cc, d, YES, nil);
 }
+static NSString *ShortConnName(NSString *t) {
+    NSDictionary *m = @{@"Airplane Mode": @"Airplane", @"Personal Hotspot": @"Hotspot", @"Cellular Data": @"Cellular", @"Mobile Data": @"Mobile"};
+    return m[t] ?: t;
+}
 @interface C26ConnCard : UIControl
 @property (nonatomic, copy) NSString *key;
 @property (nonatomic, weak) UIControl *target;   // Apple's round button
@@ -1980,6 +1994,7 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     _sheen.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.22].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor,
                       (id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.1].CGColor];
     _sheen.locations = @[@0, @0.3, @0.8, @1];
+    _sheen.masksToBounds = YES;   // stays inside the rounded corners (no stray white lines)
     [self.layer addSublayer:_sheen];
     _circle = [UIView new];
     _circle.userInteractionEnabled = NO;
@@ -1991,6 +2006,7 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
     _title = [UILabel new];
     _title.font = [UIFont systemFontOfSize:pill ? 15.5 : 15.5 weight:UIFontWeightMedium];
     _title.textColor = UIColor.whiteColor;
+    _title.adjustsFontSizeToFitWidth = YES; _title.minimumScaleFactor = 0.8;
     [self addSubview:_title];
     _sub = [UILabel new];
     _sub.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
@@ -2016,21 +2032,31 @@ static void OpenConnMenu(UIView *labeled, UIControl *round) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGSize S = self.bounds.size;
-    self.layer.cornerRadius = _pill ? S.height / 2 : 30;
+    BOOL small = S.width < 150;
+    self.layer.cornerRadius = _pill ? S.height / 2 : (gStyle18 ? 22 : (small ? 24 : 30));
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _sheen.frame = self.bounds; _sheen.cornerRadius = self.layer.cornerRadius;
+    _sheen.hidden = gStyle18;
+    self.layer.borderWidth = gStyle18 ? 0 : 1.1;
     [CATransaction commit];
-    CGFloat d = 44;
+    // a short name when the full one won't fit (Airplane Mode -> Airplane, Personal Hotspot -> Hotspot)
+    NSString *full = objc_getAssociatedObject(self, @selector(title)) ?: _title.text;
+    CGFloat d = MIN(44, MAX(30, (_pill ? S.height - 20 : S.width * 0.32)));
     CGFloat subW;
     if (_pill) {
-        _circle.frame = CGRectMake(14, (S.height - d) / 2, d, d);
-        CGFloat x = 14 + d + 12, w = S.width - x - 16;
+        CGFloat lx = small ? 10 : 14;
+        _circle.frame = CGRectMake(lx, (S.height - d) / 2, d, d);
+        CGFloat x = lx + d + (small ? 8 : 12), w = S.width - x - (small ? 10 : 16);
+        NSString *want = full;
+        if (full.length && [full sizeWithAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:15.5 weight:UIFontWeightMedium]}].width * 0.8 > w) want = ShortConnName(full);
+        if (want.length && ![_title.text isEqualToString:want]) _title.text = want;
         _title.frame = CGRectMake(x, S.height / 2 - 20, w, 20);
         subW = MIN(w, [_sub sizeThatFits:CGSizeMake(w, 20)].width);
         _sub.frame = CGRectMake(x, S.height / 2 + 1, subW, 19);
     } else {
         _circle.frame = CGRectMake(14, 14, d, d);
         CGFloat w = S.width - 30;
+        if (full.length && ![_title.text isEqualToString:full]) _title.text = full;
         _title.frame = CGRectMake(16, S.height - 56, w, 20);
         subW = MIN(w - 16, [_sub sizeThatFits:CGSizeMake(w, 20)].width);
         _sub.frame = CGRectMake(16, S.height - 35, subW, 19);
@@ -2259,7 +2285,7 @@ static void StyleConnectivity(NSArray *buttons) {
                 [card.bars setActive:a total:n color:white ? [UIColor colorWithWhite:0.12 alpha:1] : UIColor.whiteColor];
             }
             NSString *title = ConnTitle(b), *sub = ConnSubtitle(b);
-            if (![card.title.text isEqualToString:title]) card.title.text = title;
+            if (![objc_getAssociatedObject(card, @selector(title)) isEqual:title]) { objc_setAssociatedObject(card, @selector(title), title, OBJC_ASSOCIATION_COPY_NONATOMIC); card.title.text = title; [card setNeedsLayout]; }
             if (![card.sub.text isEqualToString:sub]) { card.sub.text = sub; [card setNeedsLayout]; }
             BOOL on = card.target ? card.target.isSelected : NO;
             NSNumber *last = objc_getAssociatedObject(card, kLastValue);
@@ -2323,7 +2349,7 @@ static void UpdateDebug(UIWindow *w) {
         l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    NSString *text = [NSString stringWithFormat:@" Control26 1.1 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
+    NSString *text = [NSString stringWithFormat:@" Control26 1.2 debug\n music: %@\n cmds: %@\n conn: %@\n sliders: %@\n edit: %@ cc=%@", gMusicDebug, gCmdDebug, gConnDebug, gSliderDebug, gEditDebug, gCCVC ? NSStringFromClass([gCCVC class]) : @"-"];
     if (![l.text isEqualToString:text]) l.text = text;
     CGFloat width = w.bounds.size.width - 24;
     CGSize s = [l sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
@@ -2403,7 +2429,19 @@ typedef struct { C26Point origin; C26Size size; } C26Rect;
 #define PAGEDOTS_TAG 0x43323652
 #define PRESET_TAG   0x43323653
 #define PRESETBTN_TAG 0x43323654
-#define PAGE_ROWS 7                          // each page: 4 across, 7 down
+// each page is 4 across and as many rows as fit the screen: 7 on bigger iPhones, 5-6 on 4.7"/5.5" ones
+static int PageRows(void) {
+    static int rows;
+    if (rows) return rows;
+    CGSize sc = UIScreen.mainScreen.bounds.size;
+    CGFloat W = MIN(sc.width, sc.height), H = MAX(sc.width, sc.height);
+    BOOL notch = H / W > 2.0;
+    CGFloat pitch = W * 0.225, top = notch ? 180 : 150;
+    rows = (int)floor((H - top - 16) / pitch);
+    rows = MAX(4, MIN(7, rows));
+    return rows;
+}
+#define PAGE_ROWS (PageRows())
 static int PagesWanted(void);
 static int PageCount(void);
 static void CompactPages(void);
@@ -2567,7 +2605,13 @@ static CGRect GridCell(C26Grid g, int col, int row) {
     return CGRectMake(g.xs[col], g.ys[row], g.edge, g.edge);
 }
 // what sizes each control can be (the sliders stay as they are)
+static NSArray *AllowedSizesAll(NSString *ident);
 static NSArray *AllowedSizes(NSString *ident) {
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSString *z in AllowedSizesAll(ident)) if ([[z componentsSeparatedByString:@","].lastObject intValue] <= PAGE_ROWS) [out addObject:z];
+    return out;
+}
+static NSArray *AllowedSizesAll(NSString *ident) {
     NSString *l = ident.lowercaseString;
     if (IsCopy(ident)) return [l containsString:@"connectivity"] ? @[@"4,4", @"4,6", @"4,7"] : @[@"4,2", @"4,4", @"4,6", @"4,7"];
     if ([l containsString:@"audio"] || [l containsString:@"volume"] || [l hasSuffix:@".displaymodule"] || [l containsString:@"brightness"]) return @[];
@@ -2779,6 +2823,7 @@ static UIButton *GlassButton(NSString *symbol, CGFloat pt) {
 static void RoundGlass(UIButton *b) {
     UIView *fx = [b viewWithTag:1];
     fx.frame = b.bounds;
+    fx.layer.borderWidth = gStyle18 ? 0 : 1;
     fx.layer.cornerRadius = MIN(b.bounds.size.width, b.bounds.size.height) / 2;
     if (b.imageView) [b bringSubviewToFront:b.imageView];
     if (b.titleLabel) [b bringSubviewToFront:b.titleLabel];
@@ -3142,6 +3187,71 @@ static UIView *HandleView(void) {
 }
 
 // the control's own outline: its background's corner radius (round buttons come out round)
+// ---- module shapes: round 1x1 controls, capsule sliders, rounded bigger modules (iOS 18 / 26), works without other tweaks ----
+static BOOL OtherGlassTweak(void) {
+    static int v = -1;
+    if (v < 0) { v = 0; for (uint32_t i = 0; i < _dyld_image_count(); i++) { const char *n = _dyld_get_image_name(i); if (n && (strcasestr(n, "liquidass") || strcasestr(n, "liquidglass"))) { v = 1; break; } } }
+    return v == 1;
+}
+static void ShapeModule(UIView *m, BOOL on) {
+    CALayer *rim = nil;
+    for (CALayer *l in m.layer.sublayers) if ([l.name isEqualToString:@"c26.rim"]) rim = l;
+    CGSize S = m.bounds.size;
+    if (!on || S.width < 20 || S.height < 20) { [rim removeFromSuperlayer]; return; }
+    CGFloat mn = MIN(S.width, S.height);
+    CGFloat radius = mn < 100 ? mn / 2 : MIN(gStyle18 ? 36 : 40, mn * 0.25);
+    // Apple's own backgrounds (material views) take the shape
+    NSMutableArray *st = [NSMutableArray arrayWithObject:m]; int n = 0;
+    while (st.count && n++ < 60) {
+        UIView *v = st.firstObject; [st removeObjectAtIndex:0];
+        if (v.tag == BIG_TAG) continue;
+        BOOL full = v.bounds.size.width >= S.width * 0.9 && v.bounds.size.height >= S.height * 0.9;
+        if (!full) continue;
+        NSString *cn = NSStringFromClass(v.class);
+        if (v != m && ([cn containsString:@"Material"] || [cn containsString:@"Background"] || [cn containsString:@"VisualEffect"])) {
+            if (fabs(v.layer.cornerRadius - radius) > 0.5) v.layer.cornerRadius = radius;
+            if (@available(iOS 13.0, *)) if (v.layer.cornerCurve != kCACornerCurveContinuous) v.layer.cornerCurve = kCACornerCurveContinuous;
+            if (!v.clipsToBounds) v.clipsToBounds = YES;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+    // iOS 26: a thin light rim like liquid glass (left out if another glass tweak draws its own)
+    BOOL wantRim = !gStyle18 && !OtherGlassTweak();
+    if (!wantRim) { [rim removeFromSuperlayer]; return; }
+    if (!rim) {
+        rim = [CALayer layer]; rim.name = @"c26.rim";
+        rim.borderColor = [UIColor colorWithWhite:1 alpha:0.26].CGColor; rim.borderWidth = 1.1;
+        if (@available(iOS 13.0, *)) rim.cornerCurve = kCACornerCurveContinuous;
+        [m.layer addSublayer:rim];
+    }
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if (!CGRectEqualToRect(rim.frame, m.bounds)) rim.frame = m.bounds;
+    if (fabs(rim.cornerRadius - radius) > 0.5) rim.cornerRadius = radius;
+    if (m.layer.sublayers.lastObject != rim) { [rim removeFromSuperlayer]; [m.layer addSublayer:rim]; }
+    [CATransaction commit];
+}
+static BOOL ModuleExpanded(UIView *moduleView);
+static void StyleShapes(void) {
+    NSDictionary *mm = ModuleMap();
+    for (NSString *k in mm) {
+        if (IsCopy(k)) continue;
+        UIView *m = mm[k];
+        BOOL on = gEnabled && gShapes && m.window && !ModuleExpanded(m) && ![m viewWithTag:BIG_TAG];
+        @try { ShapeModule(m, on); } @catch (__unused id e) {}
+    }
+}
+// after the Style setting changes: everything we drew lays itself out again with the new look
+static void RestyleAll(void) {
+    NSMutableArray *st = [NSMutableArray array];
+    for (UIView *m in ModuleMap().allValues) [st addObject:m];
+    int n = 0;
+    while (st.count && n++ < 800) {
+        UIView *v = st.firstObject; [st removeObjectAtIndex:0];
+        if ([v isKindOfClass:NSClassFromString(@"C26ConnCard")] || v.tag == BIG_TAG) [v setNeedsLayout];
+        if ([v isKindOfClass:[UIButton class]] && [[v viewWithTag:1] isKindOfClass:[UIVisualEffectView class]]) RoundGlass((UIButton *)v);
+        [st addObjectsFromArray:v.subviews];
+    }
+}
 static CGFloat ModuleRadius(UIView *m, CGRect f) {
     CGFloat W = m.bounds.size.width, H = m.bounds.size.height, best = 0;
     NSMutableArray *st = [NSMutableArray arrayWithObject:m]; int n = 0;
@@ -3221,7 +3331,9 @@ static void UpdateEditUI(BOOL animated) {
         [seen addObject:ident];
         if (m.userInteractionEnabled) { m.userInteractionEnabled = NO; objc_setAssociatedObject(m, kWiggleOff, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
         CGRect f = ModFrameIn(m, e);
-        if (m.layer.zPosition < 1) GlowFor(e, ident, f, ModuleRadius(m, f));
+        CGFloat rr = ModuleRadius(m, f);
+        CGFloat inset = rr * 0.293;   // where the rounded corner actually is (45 degrees on the arc)
+        if (m.layer.zPosition < 1) GlowFor(e, ident, f, rr);
         // resize handle in the bottom-right corner
         UIView *h = nil, *mb = nil, *dg = nil;
         for (UIView *x in e.subviews) if ([objc_getAssociatedObject(x, kEditIdent) isEqual:ident]) { if (x.tag == 1) h = x; else if (x.tag == 2) mb = x; else if (x.tag == 3) dg = x; }
@@ -3240,7 +3352,7 @@ static void UpdateEditUI(BOOL animated) {
         BOOL canResize = AllowedSizes(ident).count > 0;
         if (!canResize && h) { [h removeFromSuperview]; h = nil; }
         if (canResize && !h) { h = HandleView(); h.tag = 1; objc_setAssociatedObject(h, kEditIdent, ident, OBJC_ASSOCIATION_RETAIN_NONATOMIC); h.alpha = 0; [e addSubview:h]; }
-        CGPoint hc = CGPointMake(CGRectGetMaxX(f) - 13, CGRectGetMaxY(f) - 13);
+        CGPoint hc = CGPointMake(CGRectGetMaxX(f) - MAX(13, inset), CGRectGetMaxY(f) - MAX(13, inset));
         // the minus badge (only controls you added can be removed)
         BOOL canRemove = [removable containsObject:ident];
         if (canRemove && !mb) {
@@ -3251,7 +3363,7 @@ static void UpdateEditUI(BOOL animated) {
             b.alpha = 0; [e addSubview:b]; mb = b;
         }
         if (!canRemove && mb) { [mb removeFromSuperview]; mb = nil; }
-        CGPoint bc = CGPointMake(CGRectGetMinX(f) + 6, CGRectGetMinY(f) + 6);
+        CGPoint bc = CGPointMake(CGRectGetMinX(f) + MAX(6, inset), CGRectGetMinY(f) + MAX(6, inset));   // on the control's edge, not off in the corner
         BOOL fresh = (h && h.alpha < 1) || (mb && mb.alpha < 1);
         if (fresh) { if (h.alpha < 1) h.center = hc; if (mb.alpha < 1) { mb.center = bc; mb.transform = CGAffineTransformMakeScale(0.6, 0.6); } }
         void (^place)(void) = ^{ h.center = hc; h.alpha = 1; mb.center = bc; mb.alpha = 1; mb.transform = CGAffineTransformIdentity; };
@@ -3752,7 +3864,7 @@ static void SeekTo(double t) {
     self.tag = BIG_TAG;
     _card = [UIView new]; _card.userInteractionEnabled = NO;
     _card.backgroundColor = [UIColor colorWithWhite:1 alpha:0.16];
-    _card.layer.borderWidth = 1; _card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
+    _card.layer.borderWidth = gStyle18 ? 0 : 1; _card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
     _card.layer.cornerCurve = kCACornerCurveContinuous;
     [self addSubview:_card];
     _art = [UIImageView new]; _art.contentMode = UIViewContentModeScaleAspectFill; _art.clipsToBounds = YES;
@@ -3806,7 +3918,7 @@ static void SeekTo(double t) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGSize S = self.bounds.size;
-    _card.frame = self.bounds;
+    _card.frame = self.bounds; _card.layer.borderWidth = gStyle18 ? 0 : 1;
     _card.layer.cornerRadius = MIN(40, MIN(S.width, S.height) * 0.22);
     if (_mode <= 2) {
         CGFloat pad = 16, a = S.height - pad * 2;
@@ -3849,9 +3961,11 @@ static void SeekTo(double t) {
     y += 50;
     CGFloat cy = y + 37;
     _play.frame = CGRectMake((S.width - 70) / 2, cy - 35, 70, 70);
-    _prev.frame = CGRectMake(S.width / 2 - 35 - 26 - 58, cy - 29, 58, 58);
-    _next.frame = CGRectMake(S.width / 2 + 35 + 26, cy - 29, 58, 58);
     _star.frame = CGRectMake(pad - 6, cy - 22, 44, 44);
+    CGFloat room = S.width / 2 - 35 - (CGRectGetMaxX(_star.frame) + 2);   // space between the star and play
+    CGFloat bw = MIN(58, MAX(40, room - 8)), sp = MIN(26, MAX(2, room - bw));
+    _prev.frame = CGRectMake(S.width / 2 - 35 - sp - bw, cy - bw / 2, bw, bw);
+    _next.frame = CGRectMake(S.width / 2 + 35 + sp, cy - bw / 2, bw, bw);
     y += 74;
     CGFloat vy = y + 25;
     _volLo.frame = CGRectMake(pad, vy - 8, 15, 16); _volHi.frame = CGRectMake(S.width - pad - 24, vy - 8, 24, 16);
@@ -3899,7 +4013,7 @@ static void SeekTo(double t) {
 @implementation C26BigConn
 - (instancetype)initWithFrame:(CGRect)f { if ((self = [super initWithFrame:f])) self.tag = BIG_TAG; return self; }
 - (NSArray *)plan {
-    if (_rows >= 7) return @[@[@"air"], @[@"wifi", @"airdrop"], @[@"cell", @"bt"], @[@"hotspot"]];
+    if (_rows >= 7 && PAGE_ROWS >= 7) return @[@[@"air"], @[@"wifi", @"airdrop"], @[@"cell", @"bt"], @[@"hotspot"]];
     if (_rows >= 6) return @[@[@"air", @"hotspot"], @[@"wifi", @"airdrop"], @[@"cell", @"bt"]];
     return @[@[@"air", @"wifi"], @[@"airdrop", @"cell"], @[@"bt", @"hotspot"]];
 }
@@ -3912,7 +4026,8 @@ static void SeekTo(double t) {
     for (UIView *b in bs) { NSString *k = ConnKey(ConnTitle(b)); if (!byKey[k]) byKey[k] = b; }
     NSArray *plan = [self plan];
     CGSize S = self.bounds.size;
-    CGFloat gap = 14, pillH = 70, tileW = (S.width - gap) / 2, tileH = tileW * 0.96;
+    if (S.width < 40 || S.height < 40) return;   // not laid out yet
+    CGFloat gap = S.width < 330 ? 10 : 14, pillH = S.width < 330 ? 60 : 70, tileW = (S.width - gap) / 2, tileH = tileW * 0.96;
     int tiles = 0, pills = 0;
     for (NSArray *r in plan) { if ([self tileRow:r]) tiles++; else pills++; }
     CGFloat need = pills * pillH + tiles * tileH + gap * (plan.count - 1);
@@ -3947,7 +4062,7 @@ static void SeekTo(double t) {
             BOOL on = card.target ? card.target.isSelected : NO;
             NSString *sub = b ? ConnSubtitle(b) : @"";
             if (!sub.length || [sub isEqualToString:title]) sub = on ? @"On" : @"Off";
-            if (![card.title.text isEqualToString:title]) card.title.text = title;
+            if (![objc_getAssociatedObject(card, @selector(title)) isEqual:title]) { objc_setAssociatedObject(card, @selector(title), title, OBJC_ASSOCIATION_COPY_NONATOMIC); card.title.text = title; [card setNeedsLayout]; }
             if (![card.sub.text isEqualToString:sub]) { card.sub.text = sub; [card setNeedsLayout]; }
             if (card.bars) { int a, n; SignalBars(&a, &n); [card.bars setActive:a total:n color:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.12 alpha:1]]; }
             NSNumber *last = objc_getAssociatedObject(card, kLastValue);
@@ -4052,7 +4167,7 @@ static void AddCopy(NSString *kind) {
     NSString *ident = [NSString stringWithFormat:@"%@%@.%llu", COPY_PREFIX, kind, (unsigned long long)([NSDate date].timeIntervalSince1970 * 1000)];
     C26Size sz = CopyDefaultSize(ident);
     int page = CurrentPage();
-    BOOL occ[PAGE_ROWS][4]; memset(occ, 0, sizeof(occ));
+    BOOL occ[7][4]; memset(occ, 0, sizeof(occ));
     for (NSString *k in ModuleMap()) {
         C26Rect r;
         if (!LayoutRectFor(k, &r) || (int)r.origin.y / PAGE_ROWS != page) continue;
@@ -4354,8 +4469,21 @@ static void PlaceDots(void) {
         }
     }
     CGFloat h = n * 54 + (gEditing ? 44 : 0);
-    CGRect f = CGRectMake(root.bounds.size.width - 40, (root.bounds.size.height - h) / 2, 36, h);
-    if (!CGRectEqualToRect(dots.frame, f)) dots.frame = f;
+    // sit in the space right of the controls; on narrow phones that space is small, so the icons get smaller
+    CGFloat right = root.bounds.size.width - 40;
+    UIView *gcv = CollectionView();
+    C26Grid gg = gcv ? GridIn(gcv) : (C26Grid){0};
+    if (gg.ok) right = CGRectGetMaxX([gcv convertRect:GridCell(gg, 3, 0) toView:root]);
+    CGFloat margin = MAX(12, root.bounds.size.width - right);
+    CGFloat sc = margin >= 40 ? 1 : MAX(0.5, (margin - 2) / 36);
+    CGRect f = CGRectMake(right + (margin - 36) / 2, (root.bounds.size.height - h) / 2, 36, h);
+    if (margin >= 40) f.origin.x = root.bounds.size.width - 40;
+    CGAffineTransform dt = sc < 1 ? CGAffineTransformMakeScale(sc, sc) : CGAffineTransformIdentity;
+    // bounds + center work with a scale applied (frame doesn't)
+    CGRect bb = CGRectMake(0, 0, 36, h); CGPoint cc = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
+    if (!CGRectEqualToRect(dots.bounds, bb)) dots.bounds = bb;
+    if (!CGPointEqualToPoint(dots.center, cc)) dots.center = cc;
+    if (!CGAffineTransformEqualToTransform(dots.transform, dt)) dots.transform = dt;
     for (UIView *b in dots.subviews) if (b.tag >= 100 && b.tag < 110) b.tintColor = [UIColor colorWithWhite:1 alpha:(b.tag - 100 == cur) ? 1 : 0.42];
     CGFloat a = show ? 1 : 0;
     if (fabs(dots.alpha - a) > 0.01 && ![dots.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.25 animations:^{ dots.alpha = a; }];
@@ -4534,7 +4662,7 @@ static void Tick(void) {
     // edit mode / top buttons
     @try {
         if (!gCCVC) for (UIView *s in [gSliders allObjects]) { UIViewController *o = s.window ? FindCCVC(s) : nil; if (o) { gCCVC = o; break; } }
-        if (gCCVC.viewIfLoaded.window && !gClosing) { PlaceTopButtons(gCCVC); if (gEditing && !gResizing) UpdateEditUI(NO); StyleBigModules(); StyleCopies(); PlaceDots(); ApplyPageVisibility(); if (gNeedRelayout) { gNeedRelayout = NO; RelayoutCC(); } }
+        if (gCCVC.viewIfLoaded.window && !gClosing) { PlaceTopButtons(gCCVC); if (gEditing && !gResizing) UpdateEditUI(NO); StyleBigModules(); StyleShapes(); StyleCopies(); PlaceDots(); ApplyPageVisibility(); if (gNeedRelayout) { gNeedRelayout = NO; RelayoutCC(); } }
     } @catch (__unused id e) {}
     NSMutableArray *cdbg = [NSMutableArray array], *expanded = [NSMutableArray array];
     for (UIView *b in [gConnButtons allObjects]) {

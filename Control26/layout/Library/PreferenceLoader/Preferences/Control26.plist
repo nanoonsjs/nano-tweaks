@@ -78,6 +78,28 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
+			<key>label</key><string>Look</string>
+			<key>footerText</key><string>iOS 26: liquid glass with light rims and shine. iOS 18: flat frosted tiles like iOS 18. Module Shapes makes small controls round and sliders capsule-shaped like iOS 18 and iOS 26 (no other tweak needed). Close and reopen Control Center to see a change.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSegmentCell</string>
+			<key>key</key><string>style</string>
+			<key>default</key><integer>26</integer>
+			<key>validValues</key><array><integer>26</integer><integer>18</integer></array>
+			<key>validTitles</key><array><string>iOS 26</string><string>iOS 18</string></array>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Module Shapes</string>
+			<key>key</key><string>shapes</string>
+			<key>default</key><true/>
+			<key>defaults</key><string>com.user.control26</string>
+			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
 			<key>label</key><string>Extras</string>
 			<key>footerText</key><string>Opening Animation: controls drop in one by one when Control Center opens. Settings Page: Settings &gt; Control Center gets the iOS 18 look with a Reset button (the + button in edit mode replaces the old control lists).</string>
 		</dict>
