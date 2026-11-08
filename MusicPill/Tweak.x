@@ -1,4 +1,4 @@
-// MusicPill 1.2.71 - made by nano
+// MusicPill 1.2.77 - made by nano
 // 1.2.77: Hold the Pill (glass menu: Up Next, Sleep Timer, Music Insights), Waveform on the cover, jelly bounce on the pill swipe
 // 1.2.72-1.2.76: LiquidAss compatibility (its glass wins where both draw, menus keep our layout, pill keeps its size)
 // 1.2.71: the artist page's own About and its gray background are left as they are; the "i" About sheet stays
