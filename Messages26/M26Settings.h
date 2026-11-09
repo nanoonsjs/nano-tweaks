@@ -211,7 +211,10 @@ static UIImageView *M26Sym(UIView *in, NSString *name, CGFloat pt, CGPoint c, UI
     UIView *nw = _chat; nw.alpha = 0;
     if (old) [_screen insertSubview:old aboveSubview:nw];
     [UIView animateWithDuration:0.35 animations:^{ nw.alpha = 1; old.alpha = 0; } completion:^(__unused BOOL f) { [old removeFromSuperview]; }];
-    [self islandSay:[NSString stringWithFormat:@"%@ · %@", n[0], on ? @"On" : @"Off"] icon:n[1] on:on];
+    // the real Dynamic Island at the top of the screen says what changed
+    M26TopIsland(self, n[0], n[1], on ? UIColor.systemBlueColor : UIColor.systemGrayColor, on);
+    NSUInteger g = ++_gen;
+    [self after:0.7 gen:g do:^{ [self loop:g]; }];
 }
 
 #pragma mark the loop

@@ -1,4 +1,5 @@
-// Messages26 1.3.4 - made by nano
+// Messages26 1.3.5 - made by nano
+// 1.3.5: viewer buttons read by their action (photos are photos), no reply / reactions there, faster FaceTime panel, top-of-screen Dynamic Island, springy settings sheet, contact page grows out of the photo
 // 1.3.4: photos are photos (Live Photos too), strips behind the viewer bars hidden, reactions open the picker, FaceTime opens a glass panel, Dynamic Island in the Messages26 sheet
 // 1.3.3: viewer: photos never show video controls, no bottom background, Reply / reactions are real taps on Apple's buttons, reaction icon with a burst, no drag-to-seek on the video
 // 1.3.2: settings: a live preview phone that plays the features and follows your switches, with a Dynamic Island that says what changed
@@ -154,7 +155,7 @@ static void LockPreview(UIView *avatar, NSString *key);
 static BOOL gBigPfp = YES;
 static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
 static BOOL gViewerOn = YES;   // 1.3: iOS 26 photo / video viewer (MsgViewer.h)
-static BOOL gAudioBig = YES, gSpeakerOn = YES;
+static BOOL gAudioBig = YES, gSpeakerOn = YES, gContactAnim = YES;
 static NSString *gMVDebug = @"viewer: -", *gMVItems = @"", *gMVPans = @"";   // viewer debug (MsgViewer.h)
 static void M26FTInstall(UIButton *b);   // 1.3.1: bigger audio bubbles, audio messages on the speaker (MsgAudio.h)
 static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
@@ -184,6 +185,7 @@ static void LoadPrefs(void) {
     gViewerOn = gOn && PrefBool(file, @"viewer", YES);
     gAudioBig = gOn && PrefBool(file, @"audiobig", YES);
     gSpeakerOn = gOn && PrefBool(file, @"speaker", YES);
+    gContactAnim = gOn && PrefBool(file, @"contactanim", YES);
     gPrefDebug = PrefBool(file, @"debug", NO);
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
@@ -4790,63 +4792,81 @@ static UIImage *IconTile(NSString *sym, UIColor *c) {
     cache[key] = img;
     return img;
 }
-// Settings sheet: a Dynamic Island at the top that grows to say what you just turned on or off
-static void M26SheetIsland(UIView *host, NSString *title, NSString *icon, UIColor *color, BOOL on) {
-    if (!host) return;
-    static const void *kIsl = &kIsl;
+// The "real" Dynamic Island: a black island that comes out of the top of the screen (from the notch on
+// notched iPhones, from the island on Dynamic Island ones), grows to say what you turned on or off,
+// and goes back up. It lives in its own window over everything, like the system's.
+static UIWindow *gIslandWin;
+static void M26TopIsland(UIView *from, NSString *title, NSString *icon, UIColor *color, BOOL on) {
+    UIWindowScene *scene = from.window.windowScene;
+    if (!scene) return;
     static const void *kGen = &kGen;
-    UIView *isl = objc_getAssociatedObject(host, kIsl);
-    CGFloat W = host.bounds.size.width;
-    CGRect small = CGRectMake(W / 2 - 50, 10, 100, 30), big = CGRectMake(14, 10, W - 28, 64);
-    if (!isl) {
-        isl = [[UIView alloc] initWithFrame:small];
-        isl.backgroundColor = UIColor.blackColor; isl.layer.cornerCurve = kCACornerCurveContinuous; isl.clipsToBounds = YES;
-        isl.layer.borderWidth = 0.6; isl.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
-        isl.userInteractionEnabled = NO;
-        objc_setAssociatedObject(host, kIsl, isl, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGFloat W = scene.coordinateSpace.bounds.size.width;
+    if (!gIslandWin || gIslandWin.windowScene != scene) {
+        gIslandWin = [[UIWindow alloc] initWithWindowScene:scene];
+        gIslandWin.windowLevel = UIWindowLevelStatusBar + 10;
+        gIslandWin.userInteractionEnabled = NO;
+        gIslandWin.backgroundColor = UIColor.clearColor;
+        UIViewController *rv = [UIViewController new]; rv.view.backgroundColor = UIColor.clearColor; rv.view.userInteractionEnabled = NO;
+        gIslandWin.rootViewController = rv;
     }
-    [host addSubview:isl];
+    gIslandWin.frame = CGRectMake(0, 0, W, 140);
+    gIslandWin.hidden = NO;
+    UIView *host = gIslandWin.rootViewController.view;
+    UIView *isl = [host viewWithTag:0x15];
+    CGFloat top = from.window.safeAreaInsets.top;
+    BOOL notch = top > 20;
+    // where the island "lives": under the notch (hidden in it) or a pill at the top
+    CGRect home = notch ? CGRectMake(W / 2 - 80, -22, 160, 52) : CGRectMake(W / 2 - 50, 8, 100, 28);
+    CGFloat bh = notch ? 96 : 70;
+    CGRect big = CGRectMake(10, notch ? -18 : 6, W - 20, bh);
+    if (!isl) {
+        isl = [[UIView alloc] initWithFrame:home]; isl.tag = 0x15;
+        isl.backgroundColor = UIColor.blackColor; isl.layer.cornerCurve = kCACornerCurveContinuous; isl.clipsToBounds = YES;
+        isl.layer.cornerRadius = home.size.height / 2;
+        [host addSubview:isl];
+    }
     for (UIView *v in [isl.subviews copy]) [v removeFromSuperview];
-    [isl.layer removeAllAnimations];
     UIView *c = [[UIView alloc] initWithFrame:CGRectMake(0, 0, big.size.width, big.size.height)];
+    CGFloat cy = big.size.height - 34;   // below the notch
     UIImageView *ic = [[UIImageView alloc] initWithImage:IconTile(icon, color)];
-    ic.frame = CGRectMake(14, 14, 36, 36); ic.layer.cornerRadius = 9; ic.clipsToBounds = YES; [c addSubview:ic];
+    ic.frame = CGRectMake(14, cy - 19, 38, 38); ic.layer.cornerRadius = 10; ic.clipsToBounds = YES; [c addSubview:ic];
     UILabel *t = [UILabel new]; t.text = title; t.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; t.textColor = UIColor.whiteColor;
-    t.frame = CGRectMake(62, 12, big.size.width - 150, 22); [c addSubview:t];
+    t.frame = CGRectMake(62, cy - 20, big.size.width - 150, 21); [c addSubview:t];
     UILabel *s = [UILabel new]; s.text = on ? @"Turned on" : @"Turned off"; s.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium]; s.textColor = [UIColor colorWithWhite:1 alpha:0.55];
-    s.frame = CGRectMake(62, 34, big.size.width - 150, 18); [c addSubview:s];
+    s.frame = CGRectMake(62, cy + 1, big.size.width - 150, 18); [c addSubview:s];
     UILabel *pill = [UILabel new]; pill.text = on ? @"ON" : @"OFF"; pill.textAlignment = NSTextAlignmentCenter;
     pill.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold]; pill.textColor = on ? UIColor.blackColor : UIColor.whiteColor;
     pill.backgroundColor = on ? UIColor.systemGreenColor : [UIColor colorWithWhite:1 alpha:0.18];
-    pill.frame = CGRectMake(big.size.width - 70, 20, 56, 24); pill.layer.cornerRadius = 12; pill.clipsToBounds = YES; [c addSubview:pill];
-    c.alpha = 0; c.center = CGPointMake(isl.bounds.size.width / 2, isl.bounds.size.height / 2);
+    pill.frame = CGRectMake(big.size.width - 72, cy - 12, 58, 24); pill.layer.cornerRadius = 12; pill.clipsToBounds = YES; [c addSubview:pill];
+    c.alpha = 0; c.transform = CGAffineTransformMakeScale(0.9, 0.9);
+    c.center = CGPointMake(isl.bounds.size.width / 2, isl.bounds.size.height / 2);
     [isl addSubview:c];
-    isl.alpha = 1;
-    if (isl.bounds.size.width < 1) { isl.frame = small; }
-    isl.layer.cornerRadius = isl.bounds.size.height / 2;
-    [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.4 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-        isl.frame = big; isl.layer.cornerRadius = 32;
+    [isl.layer removeAllAnimations];
+    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.3 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        isl.frame = big; isl.layer.cornerRadius = notch ? 40 : 35;
         c.center = CGPointMake(big.size.width / 2, big.size.height / 2);
     } completion:nil];
-    [UIView animateWithDuration:0.25 delay:0.12 options:0 animations:^{ c.alpha = 1; } completion:nil];
+    [UIView animateWithDuration:0.3 delay:0.1 options:0 animations:^{ c.alpha = 1; c.transform = CGAffineTransformIdentity; } completion:nil];
     CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
     pop.values = @[@0.6, @1.18, @0.95, @1]; pop.keyTimes = @[@0, @0.4, @0.7, @1]; pop.duration = 0.5; pop.beginTime = CACurrentMediaTime() + 0.15;
     [pill.layer addAnimation:pop forKey:@"pop"];
     NSNumber *gen = @([objc_getAssociatedObject(isl, kGen) integerValue] + 1);
     objc_setAssociatedObject(isl, kGen, gen, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     __weak UIView *wi = isl;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.9 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIView *i = wi; if (!i || ![objc_getAssociatedObject(i, kGen) isEqual:gen]) return;
-        [UIView animateWithDuration:0.15 animations:^{ c.alpha = 0; }];
-        [UIView animateWithDuration:0.5 delay:0.05 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            i.frame = small; i.layer.cornerRadius = 15;
-            c.center = CGPointMake(small.size.width / 2, small.size.height / 2);
+        [UIView animateWithDuration:0.16 animations:^{ c.alpha = 0; c.transform = CGAffineTransformMakeScale(0.9, 0.9); }];
+        [UIView animateWithDuration:0.5 delay:0.04 usingSpringWithDamping:0.88 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+            i.frame = home; i.layer.cornerRadius = home.size.height / 2;
+            c.center = CGPointMake(home.size.width / 2, home.size.height / 2);
         } completion:^(__unused BOOL f) {
             if (![objc_getAssociatedObject(i, kGen) isEqual:gen]) return;
-            [UIView animateWithDuration:0.25 animations:^{ i.alpha = 0; i.transform = CGAffineTransformMakeScale(0.6, 0.6); } completion:^(__unused BOOL d) { i.transform = CGAffineTransformIdentity; if ([objc_getAssociatedObject(i, kGen) isEqual:gen]) [i removeFromSuperview]; }];
+            if (!notch) [UIView animateWithDuration:0.2 animations:^{ i.alpha = 0; } completion:^(__unused BOOL d) { if ([objc_getAssociatedObject(i, kGen) isEqual:gen]) { [i removeFromSuperview]; gIslandWin.hidden = YES; } }];
+            else { [i removeFromSuperview]; gIslandWin.hidden = YES; }
         }];
     });
 }
+static void M26SheetIsland(UIView *host, NSString *title, NSString *icon, UIColor *color, BOOL on) { M26TopIsland(host, title, icon, color, on); }
 @interface M26SettingsVC : UITableViewController
 @end
 @implementation M26SettingsVC
@@ -4888,6 +4908,17 @@ static void M26SheetIsland(UIView *host, NSString *title, NSString *icon, UIColo
     tv.tableHeaderView = hd;
 }
 - (void)tableView:(UITableView *)tv willDisplayCell:(UITableViewCell *)c forRowAtIndexPath:(NSIndexPath *)ip {
+    // dynamic: each row springs in the first time the sheet shows it
+    static const void *kShown = &kShown;
+    NSMutableSet *shown = objc_getAssociatedObject(self, kShown);
+    if (!shown) { shown = [NSMutableSet set]; objc_setAssociatedObject(self, kShown, shown, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    NSString *key = [NSString stringWithFormat:@"%ld.%ld", (long)ip.section, (long)ip.row];
+    if (![shown containsObject:key]) {
+        [shown addObject:key];
+        NSTimeInterval d = MIN(0.5, shown.count * 0.035);
+        c.alpha = 0; c.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, 22), 0.96, 0.96);
+        [UIView animateWithDuration:0.6 delay:d usingSpringWithDamping:0.78 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ c.alpha = 1; c.transform = CGAffineTransformIdentity; } completion:nil];
+    }
     c.textLabel.font = [UIFont systemFontOfSize:17 weight:ip.row == 0 ? UIFontWeightMedium : UIFontWeightRegular];
     if (ip.row > 0 && !c.imageView.image) c.indentationWidth = 46, c.indentationLevel = 1;
 }
@@ -4999,7 +5030,23 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     SetOpt(FeatRows()[sw.tag - 1][0], sw.on);
     NSArray *row = FeatRows()[sw.tag - 1];
     M26SheetIsland(self.navigationController.view ?: self.view, row[1], row[2], row[3], sw.on);
-    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:sw.tag] withRowAnimation:UITableViewRowAnimationFade];
+    // the row answers too: its icon hops and the row swells a little
+    UITableViewCell *cell = (UITableViewCell *)sw.superview;
+    while (cell && ![cell isKindOfClass:[UITableViewCell class]]) cell = (UITableViewCell *)cell.superview;
+    if (cell) {
+        CAKeyframeAnimation *hop = [CAKeyframeAnimation animationWithKeyPath:@"transform"];
+        hop.values = @[[NSValue valueWithCATransform3D:CATransform3DIdentity], [NSValue valueWithCATransform3D:CATransform3DConcat(CATransform3DMakeScale(1.25, 1.25, 1), CATransform3DMakeRotation(sw.on ? -0.2 : 0.2, 0, 0, 1))], [NSValue valueWithCATransform3D:CATransform3DMakeScale(0.92, 0.92, 1)], [NSValue valueWithCATransform3D:CATransform3DIdentity]];
+        hop.keyTimes = @[@0, @0.35, @0.7, @1]; hop.duration = 0.5;
+        [cell.imageView.layer addAnimation:hop forKey:@"hop"];
+        CASpringAnimation *sw2 = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+        sw2.additive = YES; sw2.fromValue = @0.03; sw2.toValue = @0; sw2.stiffness = 300; sw2.damping = 12; sw2.duration = sw2.settlingDuration;
+        [cell.layer addAnimation:sw2 forKey:@"swell"];
+    }
+    { __weak UITableView *wtv = self.tableView; NSInteger sec = sw.tag;
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+          UITableView *tv2 = wtv; if (!tv2 || sec >= tv2.numberOfSections) return;
+          [tv2 performBatchUpdates:^{ [tv2 reloadSections:[NSIndexSet indexSetWithIndex:sec] withRowAnimation:UITableViewRowAnimationAutomatic]; } completion:nil];
+      }); }
 }
 - (void)reactSound:(UISwitch *)sw { [[NSUserDefaults standardUserDefaults] setBool:sw.on forKey:@"m26.reactSound"]; }
 - (void)lockSecs:(UISegmentedControl *)sg { [[NSUserDefaults standardUserDefaults] setInteger:[(NSNumber *)@[@0, @180, @300, @-1][sg.selectedSegmentIndex] integerValue] forKey:@"m26.lockSecs"]; [gUnlockedAt removeAllObjects]; }
@@ -5337,7 +5384,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.3.4 debug\n %@\n %@\n %@\n %@\n pans:%@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans];
+    l.text = [NSString stringWithFormat:@" Messages26 1.3.5 debug\n %@\n %@\n %@\n %@\n pans:%@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -5407,6 +5454,7 @@ static void MsgAuthFail(CFNotificationCenterRef c, void *o, CFNotificationName n
 static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(-1); }); }
 #include "MsgViewer.h"
 #include "MsgAudio.h"
+#include "M26Contact.h"
 #include "../shared/NanoSettings.h"
 #include "M26Settings.h"
 
@@ -5475,7 +5523,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         }
         MSHookMessageEx([UIApplication class], @selector(sendEvent:), (IMP)SendEvent, (IMP *)&origSendEvent);
         HookViewer();
-        @try { StartSpeaker(); StartAudioBubbles(); } @catch (__unused id ex) {}
+        @try { StartSpeaker(); StartAudioBubbles(); StartContactAnim(); } @catch (__unused id ex) {}
         { __block int tries = 0;
           [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *vt) { HookViewer(); if (MVQLClass() || ++tries > 300) [vt invalidate]; }]; }
         [NSTimer scheduledTimerWithTimeInterval:SlowDevice() ? 0.5 : 0.3 repeats:YES block:^(__unused NSTimer *t) { @try { Tick(); } @catch (__unused id ex) {} }];
