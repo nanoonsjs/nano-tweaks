@@ -712,7 +712,7 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     [moon addTarget:v action:@selector(sleepTap) forControlEvents:UIControlEventTouchUpInside];
     [content addSubview:moon];
     // share a story card of the song, and Music's own song menu
-    NSArray *extra = @[@[@"square.and.arrow.up", NSStringFromSelector(@selector(shareTap:))], @[@"ellipsis", NSStringFromSelector(@selector(menuTap))]];
+    NSArray *extra = @[@[@"square.and.arrow.up", NSStringFromSelector(@selector(shareTap:))]];
     for (NSUInteger i = 0; i < extra.count; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
         [b setImage:[UIImage systemImageNamed:extra[i][0] withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];

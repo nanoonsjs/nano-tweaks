@@ -7,6 +7,13 @@
 
 #pragma mark - shared bits
 
+// a full-window holder that only keeps touches on what's inside it
+@interface MPPassView : UIView
+@end
+@implementation MPPassView
+- (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e { UIView *h = [super hitTest:p withEvent:e]; return h == self ? nil : h; }
+@end
+
 static CGRect XPillOnScreen(UIView **outPill) {
     MPMiniPill *pill = (MPMiniPill *)gPillObj;
     UIView *v = ([pill isKindOfClass:[MPMiniPill class]] && pill.window && !pill.hidden && pill.alpha > 0.05) ? pill : nil;
@@ -32,7 +39,7 @@ static UIView *XIslandShape(CGRect f) {
 static UIView *XGrowFromPill(UIView *pill, CGRect to, UIView *content, UIView **outShape) {
     UIWindow *w = pill.window; if (!w) return nil;
     CGRect from = [pill convertRect:pill.bounds toView:w];
-    UIView *holder = [[UIView alloc] initWithFrame:w.bounds];
+    UIView *holder = [[MPPassView alloc] initWithFrame:w.bounds];
     holder.userInteractionEnabled = NO;
     UIView *shape = XIslandShape(from);
     UIView *snap = [pill snapshotViewAfterScreenUpdates:NO];
@@ -80,6 +87,14 @@ static void XShrinkToPill(UIView *holder, UIView *shape, UIView *content, UIView
     [UIView animateWithDuration:0.14 delay:0.1 options:UIViewAnimationOptionCurveEaseOut animations:^{ snap.alpha = 1; } completion:nil];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [holder removeFromSuperview]; });
 }
+// the size an expanded pill gets: from the pill's bottom, at least a comfortable width, on screen
+static CGRect XExpandRect(CGRect pr, CGFloat H) {
+    CGFloat SW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat W = MIN(SW - 16, MAX(pr.size.width + 12, MIN(360, SW - 32)));
+    CGFloat x = MAX(8, MIN(SW - 8 - W, CGRectGetMidX(pr) - W / 2));
+    return CGRectMake(x, CGRectGetMaxY(pr) - H + 2, W, H);
+}
+static CFTimeInterval gPeekBlockUntil;   // while peeking (and just after), Music may not open the player
 static BOOL XPillBusy(void) {
     UIWindow *w = gLastTabBar.window;
     if (!w || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return YES;
@@ -117,8 +132,8 @@ static BOOL XPillBusy(void) {
             while (st.count && g++ < 200) {
                 UIView *v = st.lastObject; [st removeLastObject];
                 for (UIGestureRecognizer *r in v.gestureRecognizers) {
-                    NSString *n = NSStringFromClass(r.class);
-                    if (r.enabled && ([n containsString:@"Click"] || [n containsString:@"ContextMenu"] || [n containsString:@"Preview"] || [n containsString:@"TouchDuration"])) { r.enabled = NO; [_paused addObject:r]; }
+                    if (!r.enabled || r.delegate == (id)self) continue;
+                    r.enabled = NO; [_paused addObject:r];   // taps, Music's hold menu, our swipe: all wait
                 }
                 [st addObjectsFromArray:v.subviews];
             }
@@ -139,8 +154,9 @@ static BOOL XPillBusy(void) {
     [self pauseMusicMenu:pill pause:YES];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     _pill = pill;
-    CGFloat H = 158, W = pr.size.width + 12;
-    CGRect to = CGRectMake(CGRectGetMidX(pr) - W / 2, CGRectGetMaxY(pr) - H + 2, W, H);
+    CGFloat H = 158;
+    CGRect to = XExpandRect(pr, H); CGFloat W = to.size.width;
+    gPeekBlockUntil = CACurrentMediaTime() + 3600;
     UIView *c = [UIView new];
     _art = [[UIImageView alloc] initWithFrame:CGRectMake(16, 16, 64, 64)];
     _art.contentMode = UIViewContentModeScaleAspectFill; _art.clipsToBounds = YES; _art.layer.cornerRadius = 12; _art.layer.cornerCurve = kCACornerCurveContinuous;
@@ -194,6 +210,7 @@ static BOOL XPillBusy(void) {
     [UIView transitionWithView:l duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ l.text = t; l.textColor = self->_lyrics ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.6]; } completion:nil];
 }
 - (void)close {
+    gPeekBlockUntil = CACurrentMediaTime() + 0.45;
     if (_timer) { dispatch_source_cancel(_timer); _timer = nil; }
     [self pauseMusicMenu:nil pause:NO];
     UIView *h = _holder, *s = _shape, *c = _content, *p = _pill;
@@ -206,52 +223,113 @@ static void AddPeek(UIView *v) {
     if (!v || objc_getAssociatedObject(v, kPeek)) return;
     objc_setAssociatedObject(v, kPeek, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPPeek shared] action:@selector(held:)];
-    lp.minimumPressDuration = 0.3; lp.allowableMovement = 14;
+    lp.minimumPressDuration = 0.25; lp.allowableMovement = 14; lp.cancelsTouchesInView = YES;
     lp.delegate = [MPPeek shared];
     [v addGestureRecognizer:lp];
 }
 
 #pragma mark - song change splash
 
-static NSString *gSplashLast;
-static CFTimeInterval gSplashChangedAt;
-static UIView *gSplashHolder;
-static void ShowSplash(void) {
+@interface MPSplash : NSObject
++ (instancetype)shared;
+- (void)show;
+@end
+@implementation MPSplash {
+    UIView *_holder, *_shape, *_content; __weak UIView *_pill;
+    CADisplayLink *_link; CGRect _lastPill; CGFloat _H;
+    NSUInteger _gen;
+}
++ (instancetype)shared { static MPSplash *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [MPSplash new]; }); return s; }
+- (BOOL)up { return _holder.superview != nil; }
+- (void)show {
     UIView *pill = nil; CGRect pr = XPillOnScreen(&pill);
-    if (!pill || pr.size.width < 50 || XPillBusy() || gSplashHolder.superview) return;
-    CGFloat H = 112, W = pr.size.width + 12;
-    CGRect to = CGRectMake(CGRectGetMidX(pr) - W / 2, CGRectGetMaxY(pr) - H + 2, W, H);
+    if (!pill || pr.size.width < 30 || XPillBusy() || [self up]) return;
+    _H = 112;
+    CGRect to = XExpandRect(pr, _H); CGFloat W = to.size.width;
     UIView *c = [UIView new];
     UIImageView *art = [[UIImageView alloc] initWithFrame:CGRectMake(14, 14, 84, 84)];
     art.image = gXArt; art.contentMode = UIViewContentModeScaleAspectFill; art.clipsToBounds = YES;
-    art.layer.cornerRadius = 14; art.layer.cornerCurve = kCACornerCurveContinuous;
+    art.layer.cornerRadius = 16; art.layer.cornerCurve = kCACornerCurveContinuous;
     [c addSubview:art];
-    UILabel *k = XLabel(@"NOW PLAYING", 11, UIFontWeightBold, MusicPink()); k.frame = CGRectMake(112, 24, W - 126, 14); [c addSubview:k];
+    // a soft glow of the cover's color behind everything
+    CAGradientLayer *glow = [CAGradientLayer layer]; glow.type = kCAGradientLayerRadial;
+    UIColor *gc = XColorsOf(gXArt).firstObject ?: MusicPink();
+    glow.colors = @[(id)[gc colorWithAlphaComponent:0.55].CGColor, (id)[gc colorWithAlphaComponent:0].CGColor];
+    glow.startPoint = CGPointMake(0.15, 0.5); glow.endPoint = CGPointMake(0.9, 1.4);
+    glow.frame = CGRectMake(0, 0, W, _H);
+    [c.layer insertSublayer:glow atIndex:0];
+    MPWave *wave = [[MPWave alloc] initWithFrame:CGRectMake(112, 20, 22, 16)]; wave.backgroundColor = UIColor.clearColor; [c addSubview:wave]; [wave setPlaying:YES];
+    UILabel *k = XLabel(@"NOW PLAYING", 11, UIFontWeightBold, MusicPink()); k.frame = CGRectMake(138, 21, W - 152, 14); [c addSubview:k];
     UILabel *t = XLabel(gXTitle ?: @"", 19, UIFontWeightBold, nil); t.frame = CGRectMake(112, 40, W - 126, 24); t.adjustsFontSizeToFitWidth = NO; t.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:t];
     UILabel *a = XLabel(gXArtist ?: @"", 15, UIFontWeightMedium, [UIColor colorWithWhite:1 alpha:0.6]); a.frame = CGRectMake(112, 64, W - 126, 20); a.adjustsFontSizeToFitWidth = NO; a.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:a];
+    // the words come in one after another, from the right
+    NSArray *slide = @[k, t, a];
+    for (NSUInteger i = 0; i < slide.count; i++) {
+        UIView *v = slide[i]; v.alpha = 0; v.transform = CGAffineTransformMakeTranslation(18, 0);
+        [UIView animateWithDuration:0.5 delay:0.12 + i * 0.05 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{ v.alpha = 1; v.transform = CGAffineTransformIdentity; } completion:nil];
+    }
     UIView *shape = nil;
     UIView *h = XGrowFromPill(pill, to, c, &shape);
-    gSplashHolder = h;
-    // the cover lands with a small pop
+    if (!h) return;
+    _holder = h; _shape = shape; _content = c; _pill = pill; _lastPill = pr;
+    // tap it to open the player
+    h.userInteractionEnabled = YES; shape.userInteractionEnabled = YES;
+    [shape addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped)]];
+    UIView *pass = [[UIView alloc] initWithFrame:h.bounds]; (void)pass;
     CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
     pop.values = @[@0.7, @1.08, @0.97, @1]; pop.keyTimes = @[@0, @0.45, @0.75, @1]; pop.duration = 0.5; pop.beginTime = CACurrentMediaTime() + 0.08;
     pop.fillMode = kCAFillModeBackwards;
     [art.layer addAnimation:pop forKey:@"pop"];
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
-    __weak UIView *wp = pill;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (gSplashHolder == h) gSplashHolder = nil;
-        XShrinkToPill(h, shape, c, wp);
-    });
+    [_link invalidate];
+    _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(follow)];
+    [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    NSUInteger g = ++_gen;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (self->_gen == g) [self hide]; });
 }
+// the pill minimizes / expands while you scroll: the splash moves with it, and anything that covers the pill closes it
+- (void)follow {
+    if (!_holder.superview) { [_link invalidate]; _link = nil; return; }
+    if (XPillBusy()) { [self hide]; return; }
+    UIView *pill = nil; CGRect pr = XPillOnScreen(&pill);
+    if (!pill) { [self hide]; return; }
+    if (pill != _pill) _pill = pill;
+    if (fabs(CGRectGetMaxY(pr) - CGRectGetMaxY(_lastPill)) < 0.5 && fabs(CGRectGetMidX(pr) - CGRectGetMidX(_lastPill)) < 0.5 && fabs(pr.size.width - _lastPill.size.width) < 0.5) return;
+    _lastPill = pr;
+    CGRect to = XExpandRect(pr, _H);
+    UIView *shape = _shape, *c = _content;
+    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+        shape.frame = to;
+        c.center = CGPointMake(to.size.width / 2, to.size.height / 2);
+    } completion:nil];
+}
+- (void)tapped {
+    UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
+    [self hide];
+    if (mini) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ OpenPlayer(mini); });
+}
+- (void)hide {
+    _gen++;
+    [_link invalidate]; _link = nil;
+    UIView *h = _holder, *s = _shape, *c = _content, *p = _pill;
+    _holder = nil; _shape = nil; _content = nil;
+    if (h) { h.userInteractionEnabled = NO; XShrinkToPill(h, s, c, p); }
+}
+@end
+static NSString *gSplashLast;
+static CFTimeInterval gSplashChangedAt;
 static void SplashTick(void) {
     if (!gSplashPref || !gRound) { gSplashLast = gXTitle; return; }
     NSString *now = gXTitle.length ? [NSString stringWithFormat:@"%@|%@", gXTitle, gXArtist ?: @""] : nil;
     if (!now) return;
     if (!gSplashLast) { gSplashLast = now; return; }   // not when Music opens
-    if (![now isEqualToString:gSplashLast]) { gSplashLast = now; gSplashChangedAt = CACurrentMediaTime(); return; }
+    if (![now isEqualToString:gSplashLast]) {
+        gSplashLast = now; gSplashChangedAt = CACurrentMediaTime();
+        if ([[MPSplash shared] up]) [[MPSplash shared] hide];   // a quicker skip: the old one goes first
+        return;
+    }
     // wait a beat after the change so the new cover is in
-    if (gSplashChangedAt > 0 && CACurrentMediaTime() - gSplashChangedAt > 0.45) { gSplashChangedAt = 0; if (gXArt) ShowSplash(); }
+    if (gSplashChangedAt > 0 && CACurrentMediaTime() - gSplashChangedAt > 0.45) { gSplashChangedAt = 0; if (gXArt) [[MPSplash shared] show]; }
 }
 
 #pragma mark - share card (story size)
@@ -313,9 +391,11 @@ static void ShareNowPlaying(UIView *from) {
     [top presentViewController:av animated:YES completion:nil];
 }
 
+static void StartPeekGuard(void);
 static void StartPeek(void) {
     static dispatch_source_t t;
     if (t) return;
+    StartPeekGuard();
     t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
     dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), (uint64_t)(0.25 * NSEC_PER_SEC), (uint64_t)(0.05 * NSEC_PER_SEC));
     dispatch_source_set_event_handler(t, ^{
@@ -328,4 +408,15 @@ static void StartPeek(void) {
         } @catch (__unused id e) {}
     });
     dispatch_resume(t);
+}
+
+// while you hold to peek, Music's own hold (which opens the player) is kept from opening it
+static void (*origMPPresent)(UIViewController *, SEL, UIViewController *, BOOL, id);
+static void MPPresent(UIViewController *self, SEL _cmd, UIViewController *vc, BOOL anim, id completion) {
+    if (CACurrentMediaTime() < gPeekBlockUntil && IsPlayerVC(vc)) return;
+    origMPPresent(self, _cmd, vc, anim, completion);
+}
+static void StartPeekGuard(void) {
+    static BOOL done; if (done) return; done = YES;
+    MSHookMessageEx([UIViewController class], @selector(presentViewController:animated:completion:), (IMP)MPPresent, (IMP *)&origMPPresent);
 }

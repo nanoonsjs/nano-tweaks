@@ -1,4 +1,5 @@
-// MusicPill 1.3.5 - made by nano
+// MusicPill 1.3.6 - made by nano
+// 1.3.6: no ... in Insights; hold to peek wins over Music opening the player; splash: comfortable size, follows the pill when it minimizes / expands, tap opens the player
 // 1.3.5: hold the pill to peek (cover, live lyric line, time), song change splash (switch), share card + Music's menu in Insights
 // 1.3.4: Dynamic Pill closing redone: top comes down first, sides pull in with a tiny squish, pull it down with your finger
 // 1.3.3: closing the Dynamic Pill uses a fresh picture of the pill (art and text no longer drop into place after)
@@ -1443,7 +1444,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.3.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.3.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
