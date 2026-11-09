@@ -1,4 +1,5 @@
-// MusicPill 1.2.86 - made by nano
+// MusicPill 1.2.87 - made by nano
+// 1.2.87: tap outside the island closes it (crashed before), smaller swipe stretch
 // 1.2.86: swipe jelly and touch light now play on the pill you see (they played on Music's invisible bar under it)
 // 1.2.85: island closes smoothly back to the pill, scrolling Insights no longer shrinks the pill, Sleep Timer morphs out of the island
 // 1.2.84: pill no longer grows after landscape; landscape uses plain icons, timed lyrics on the right with controls kept, top buttons hide with Insights; swipe up grows the pill into Insights like the Dynamic Island
@@ -1434,7 +1435,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.86 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.87 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];

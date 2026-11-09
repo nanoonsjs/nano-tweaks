@@ -723,8 +723,11 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     [UIView animateWithDuration:0.45 delay:0.22 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ content.alpha = 1; content.transform = CGAffineTransformIdentity; } completion:nil];
     [UIView animateWithDuration:0.4 animations:^{ v.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3]; }];
 }
-- (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
-    CGPoint p = [g locationInView:_shape], vel = [g velocityInView:_shape];
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g {
+    // UIKit also asks this view about its own tap (tap outside to close): that one always goes.
+    // (1.2.86 asked a tap for its speed here, which crashed Music.)
+    if (![g isKindOfClass:[UIPanGestureRecognizer class]]) return YES;
+    CGPoint p = [g locationInView:_shape], vel = [(UIPanGestureRecognizer *)g velocityInView:_shape];
     return p.y < 96 && vel.y > fabs(vel.x);   // pull down on the header
 }
 - (void)pullDown:(UIPanGestureRecognizer *)g {
@@ -800,7 +803,7 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
 
 static CGFloat XRubber(CGFloat x, CGFloat lim) { CGFloat a = fabs(x); return (x < 0 ? -1 : 1) * lim * (1 - 1 / (a / lim * 0.6 + 1)); }
 static void SetDrag(UIView *v, CGFloat dx, CGFloat dy) {
-    CGFloat sx = 1 + MIN(0.10, fabs(dx) / 520) - MIN(0.05, fabs(dy) / 900), sy = 1 - MIN(0.07, fabs(dx) / 700) + MIN(0.10, fabs(dy) / 420);
+    CGFloat sx = 1 + MIN(0.045, fabs(dx) / 900) - MIN(0.025, fabs(dy) / 1400), sy = 1 - MIN(0.03, fabs(dx) / 1300) + MIN(0.045, fabs(dy) / 700);
     CATransform3D t = CATransform3DScale(CATransform3DMakeTranslation(dx, dy, 0), sx, sy, 1);
     objc_setAssociatedObject(v, kDragT, [NSValue valueWithCATransform3D:t], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     ApplyPillST(v);
@@ -824,16 +827,16 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     ApplyPillST(v);
     [v.layer removeAnimationForKey:@"mp.release"];
     (void)d;
-    CGFloat sxd = MIN(0.10, fabs(dx) / 520), syd = MIN(0.10, fabs(dy) / 420);
+    CGFloat sxd = MIN(0.045, fabs(dx) / 900), syd = MIN(0.045, fabs(dy) / 700);
     NSArray *kt = @[@0, @0.22, @0.5, @0.75, @1];
     CAKeyframeAnimation *tx = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
-    tx.values = go ? @[@(dx), @(dx * 1.35), @(-dx * 0.22), @(dx * 0.08), @0] : @[@(dx), @(-dx * 0.18), @(dx * 0.07), @(-dx * 0.02), @0];
+    tx.values = go ? @[@(dx), @(dx * 1.2), @(-dx * 0.16), @(dx * 0.05), @0] : @[@(dx), @(-dx * 0.18), @(dx * 0.07), @(-dx * 0.02), @0];
     CAKeyframeAnimation *ty = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
     ty.values = @[@(dy), @(-dy * 0.2), @(dy * 0.08), @0, @0];
     CAKeyframeAnimation *sx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"];
-    sx.values = @[@(sxd - syd * 0.5), @(-0.05), @(0.03), @(-0.01), @0];
+    sx.values = @[@(sxd - syd * 0.5), @(-0.025), @(0.015), @(-0.005), @0];
     CAKeyframeAnimation *sy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
-    sy.values = @[@(syd - sxd * 0.7), @(0.06), @(-0.03), @(0.01), @0];
+    sy.values = @[@(syd - sxd * 0.7), @(0.03), @(-0.015), @(0.005), @0];
     CAAnimationGroup *g = [CAAnimationGroup animation];
     for (CAKeyframeAnimation *k in @[tx, ty, sx, sy]) { k.additive = YES; k.keyTimes = kt; k.timingFunctions = @[[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut], [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]]; }
     g.animations = @[tx, ty, sx, sy];
@@ -900,8 +903,8 @@ static UIView *XVisualPill(UIView *touched) {
     else XTouchLight(v, CGPointZero, NO);
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
         [v.layer removeAnimationForKey:@"mp.release"];
-        if (_axis == 1) SetDrag(v, XRubber(t.x, 70), 0);
-        else SetDrag(v, 0, XRubber(MIN(0, t.y), 46));
+        if (_axis == 1) SetDrag(v, XRubber(t.x, 38), 0);
+        else SetDrag(v, 0, XRubber(MIN(0, t.y), 26));
         return;
     }
     BOOL ended = g.state == UIGestureRecognizerStateEnded;
@@ -914,10 +917,10 @@ static UIView *XVisualPill(UIView *touched) {
             id pillObj = gPillObj;
             if (pillObj && pillObj != v && [pillObj respondsToSelector:@selector(refresh)]) [pillObj performSelector:@selector(refresh)];
         }
-        XBounce(v, XRubber(t.x, 70), 0, go);
+        XBounce(v, XRubber(t.x, 38), 0, go);
     } else {
         BOOL go = ended && (t.y < -34 || vel.y < -420);
-        XBounce(v, 0, XRubber(MIN(0, t.y), 46), NO);
+        XBounce(v, 0, XRubber(MIN(0, t.y), 26), NO);
         if (go) [MPIsland expandFrom:v];
     }
 }
