@@ -1,4 +1,5 @@
-// MusicPill 1.3.4 - made by nano
+// MusicPill 1.3.5 - made by nano
+// 1.3.5: hold the pill to peek (cover, live lyric line, time), song change splash (switch), share card + Music's menu in Insights
 // 1.3.4: Dynamic Pill closing redone: top comes down first, sides pull in with a tiny squish, pull it down with your finger
 // 1.3.3: closing the Dynamic Pill uses a fresh picture of the pill (art and text no longer drop into place after)
 // 1.3.2: the pill is never hidden under the Dynamic Pill (no half-second jump after closing)
@@ -411,7 +412,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 #define COLLAPSE_TAG 0x4D50434C
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
-static BOOL gPillHoldPref, gWavePref, gTapOpenPref = YES, gLandscapePref, gLibMiniPref;
+static BOOL gPillHoldPref, gWavePref, gTapOpenPref = YES, gLandscapePref, gLibMiniPref, gSplashPref;
 static BOOL OnLibraryTab(void);   // read into the extras (Extras.h) below
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
@@ -538,6 +539,7 @@ static void LoadPrefs(void) {
     gDebug  = PrefBool(file, @"debug", NO);
     gSwipe  = PrefBool(file, @"swipe", YES);
     gPillHoldPref = PrefBool(file, @"pillhold", NO);
+    gSplashPref = PrefBool(file, @"splash", NO);
     gWavePref = PrefBool(file, @"wave", NO);
     gTapOpenPref = PrefBool(file, @"tapopen", YES);
     gLandscapePref = PrefBool(file, @"landscape", NO);
@@ -1441,7 +1443,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.3.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.3.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -8056,6 +8058,8 @@ static void ShowAboutSheet(UIView *from, NSDictionary *about) {
 
 #include "Extras.h"
 #include "Landscape.h"
+#include "PillPeek.h"
+static void ShareNowPlayingFwd(UIView *from) { ShareNowPlaying(from); }
 #include "Settings.h"
 
 %ctor {
@@ -8068,5 +8072,5 @@ static void ShowAboutSheet(UIView *from, NSDictionary *about) {
     HookMenuClasses();
     HookResponses();
     HookSymbolButton();
-    dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); StartExtras(); StartLandscape(); });
+    dispatch_async(dispatch_get_main_queue(), ^{ StartWatchdog(); StartExtras(); StartLandscape(); StartPeek(); });
 }

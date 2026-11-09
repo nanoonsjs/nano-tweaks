@@ -4,6 +4,7 @@
 // (Included from Tweak.x just before %ctor, so everything above is available here.)
 
 #define gPillHold gPillHoldPref
+static void ShareNowPlayingFwd(UIView *from);
 #define gWave gWavePref
 #define gTapOpen gTapOpenPref
 
@@ -710,6 +711,16 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     moon.frame = CGRectMake(content.bounds.size.width - 104, 22, 38, 38); moon.layer.cornerRadius = 19;
     [moon addTarget:v action:@selector(sleepTap) forControlEvents:UIControlEventTouchUpInside];
     [content addSubview:moon];
+    // share a story card of the song, and Music's own song menu
+    NSArray *extra = @[@[@"square.and.arrow.up", NSStringFromSelector(@selector(shareTap:))], @[@"ellipsis", NSStringFromSelector(@selector(menuTap))]];
+    for (NSUInteger i = 0; i < extra.count; i++) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+        [b setImage:[UIImage systemImageNamed:extra[i][0] withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+        b.tintColor = UIColor.whiteColor; b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+        b.frame = CGRectMake(content.bounds.size.width - 150 - i * 46, 22, 38, 38); b.layer.cornerRadius = 19;
+        [b addTarget:v action:NSSelectorFromString(extra[i][1]) forControlEvents:UIControlEventTouchUpInside];
+        [content addSubview:b];
+    }
     v->_shape = shape; v->_content = content;
     [v addSubview:shape];
     [w addSubview:v];
@@ -794,6 +805,15 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     } completion:nil];
 }
 - (void)bgTap:(UITapGestureRecognizer *)g { if (!CGRectContainsPoint(_shape.frame, [g locationInView:self])) [self collapse]; }
+- (void)shareTap:(UIButton *)b { [[UISelectionFeedbackGenerator new] selectionChanged]; ShareNowPlayingFwd(b); }
+- (void)menuTap {
+    [self collapse];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.55 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
+        UIContextMenuInteraction *mi = mini ? MenuInteractionNear(mini) : nil;
+        if (mi) OpenMenu(mini, mi);
+    });
+}
 - (void)sleepTap {
     // the island changes shape into the Sleep Timer (like the Dynamic Island going from one activity to another)
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
@@ -1037,7 +1057,7 @@ static void XBarSwipes(UIView *mini, BOOL off) {
 @implementation MPHoldMenu
 + (instancetype)shared { static MPHoldMenu *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [MPHoldMenu new]; }); return s; }
 - (void)held:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
+    if (g.state != UIGestureRecognizerStateBegan || gPillHold) return;   // with Dynamic Pill, holding peeks instead (PillPeek.h)
     UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
     UIContextMenuInteraction *mi = mini ? MenuInteractionNear(mini) : nil;
     if (mi) { [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred]; OpenMenu(mini, mi); }

@@ -1,0 +1,331 @@
+// ===================== MusicPill: Dynamic Pill extras =====================
+// - Hold to peek: hold the pill and it grows a little (like holding the Dynamic Island): cover, song,
+//   a live lyric line and the time bar. Let go and it shrinks back. (With Dynamic Pill on.)
+// - Song change splash: a new song makes the pill grow for a moment with the big cover and title. (Switch.)
+// - Share card: a story-size picture of what you're playing, from Insights' share button.
+// Included from Tweak.x after Landscape.h.
+
+#pragma mark - shared bits
+
+static CGRect XPillOnScreen(UIView **outPill) {
+    MPMiniPill *pill = (MPMiniPill *)gPillObj;
+    UIView *v = ([pill isKindOfClass:[MPMiniPill class]] && pill.window && !pill.hidden && pill.alpha > 0.05) ? pill : nil;
+    if (!v) { UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil; if (mini.window && mini.alpha > 0.05) v = mini; }
+    if (outPill) *outPill = v;
+    return v ? [v convertRect:v.bounds toView:v.window] : CGRectZero;
+}
+// a dark island shape like the Dynamic Pill's
+static UIView *XIslandShape(CGRect f) {
+    UIView *shape = [[UIView alloc] initWithFrame:f];
+    shape.clipsToBounds = YES; shape.layer.cornerCurve = kCACornerCurveContinuous; shape.layer.cornerRadius = f.size.height / 2;
+    shape.layer.borderWidth = 0.8; shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+    shape.userInteractionEnabled = NO;
+    UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+    blur.frame = shape.bounds; blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [shape addSubview:blur];
+    UIView *ink = [[UIView alloc] initWithFrame:shape.bounds];
+    ink.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; ink.autoresizingMask = blur.autoresizingMask;
+    [shape addSubview:ink];
+    return shape;
+}
+// grow out of the pill into `to`, contents fade in; returns the shape (inside a full-window holder)
+static UIView *XGrowFromPill(UIView *pill, CGRect to, UIView *content, UIView **outShape) {
+    UIWindow *w = pill.window; if (!w) return nil;
+    CGRect from = [pill convertRect:pill.bounds toView:w];
+    UIView *holder = [[UIView alloc] initWithFrame:w.bounds];
+    holder.userInteractionEnabled = NO;
+    UIView *shape = XIslandShape(from);
+    UIView *snap = [pill snapshotViewAfterScreenUpdates:NO];
+    if (snap) { snap.frame = shape.bounds; snap.tag = 0x534E; snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin; [shape addSubview:snap]; }
+    content.frame = CGRectMake(0, 0, to.size.width, to.size.height);
+    content.center = CGPointMake(from.size.width / 2, from.size.height / 2);
+    content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.94, 0.94);
+    [shape addSubview:content];
+    [holder addSubview:shape];
+    [w addSubview:holder];
+    [UIView animateWithDuration:0.46 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        shape.frame = to; shape.layer.cornerRadius = MIN(34, to.size.height / 2);
+        content.center = CGPointMake(to.size.width / 2, to.size.height / 2);
+        content.transform = CGAffineTransformIdentity;
+    } completion:nil];
+    [UIView animateWithDuration:0.1 animations:^{ snap.alpha = 0; }];
+    [UIView animateWithDuration:0.16 delay:0.03 options:UIViewAnimationOptionCurveEaseOut animations:^{ content.alpha = 1; } completion:nil];
+    if (outShape) *outShape = shape;
+    return holder;
+}
+// shrink back onto the pill (fresh picture of it fades in), then gone
+static void XShrinkToPill(UIView *holder, UIView *shape, UIView *content, UIView *pill) {
+    if (!holder.superview) return;
+    CGRect to = pill.window ? [pill convertRect:pill.bounds toView:holder] : shape.frame;
+    CALayer *pl = shape.layer.presentationLayer;
+    CGRect cur = pl ? pl.frame : shape.frame;
+    [shape.layer removeAllAnimations]; shape.frame = cur;
+    [[shape viewWithTag:0x534E] removeFromSuperview];
+    UIView *snap = pill.window ? [pill snapshotViewAfterScreenUpdates:NO] : nil;
+    if (snap) {
+        snap.alpha = 0; snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+        snap.frame = CGRectMake((cur.size.width - to.size.width) / 2, cur.size.height - to.size.height, to.size.width, to.size.height);
+        [shape addSubview:snap];
+    }
+    [UIView animateWithDuration:0.1 animations:^{ content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.94, 0.94); }];
+    CGRect mid = CGRectMake(cur.origin.x, CGRectGetMinY(to), cur.size.width, to.size.height);
+    [UIView animateWithDuration:0.36 delay:0 usingSpringWithDamping:0.95 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        shape.frame = mid; shape.layer.cornerRadius = to.size.height / 2;
+        content.center = CGPointMake(mid.size.width / 2, mid.size.height / 2);
+    } completion:nil];
+    [UIView animateWithDuration:0.42 delay:0.04 usingSpringWithDamping:0.76 initialSpringVelocity:0 options:0 animations:^{
+        shape.frame = to;
+        content.center = CGPointMake(to.size.width / 2, to.size.height / 2);
+    } completion:^(__unused BOOL f) { [holder removeFromSuperview]; }];
+    [UIView animateWithDuration:0.14 delay:0.1 options:UIViewAnimationOptionCurveEaseOut animations:^{ snap.alpha = 1; } completion:nil];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [holder removeFromSuperview]; });
+}
+static BOOL XPillBusy(void) {
+    UIWindow *w = gLastTabBar.window;
+    if (!w || UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return YES;
+    if (gIsland.window || [MPLandscape shared].superview) return YES;
+    UIViewController *pp = PresentedPlayer(w.rootViewController);
+    return pp != nil && !pp.isBeingDismissed;
+}
+
+#pragma mark - hold to peek
+
+@interface MPPeek : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+@implementation MPPeek {
+    UIView *_holder, *_shape, *_content;
+    __weak UIView *_pill;
+    UILabel *_title, *_artist, *_lyric, *_el, *_rem;
+    UIImageView *_art;
+    UIView *_track, *_fill;
+    dispatch_source_t _timer;
+    MPLyrics *_lyrics; NSString *_lyricsKey; NSInteger _line;
+    NSHashTable *_paused;
+}
++ (instancetype)shared { static MPPeek *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [MPPeek new]; }); return s; }
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g { return gPillHold && gRound && !XPillBusy(); }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return NO; }
+// Music's own hold menu waits while we peek
+- (void)pauseMusicMenu:(UIView *)near pause:(BOOL)p {
+    if (p) {
+        _paused = [NSHashTable weakObjectsHashTable];
+        UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
+        for (UIView *root in @[mini ?: (id)NSNull.null, near ?: (id)NSNull.null]) {
+            if (![root isKindOfClass:[UIView class]]) continue;
+            NSMutableArray *st = [NSMutableArray arrayWithObject:root]; int g = 0;
+            while (st.count && g++ < 200) {
+                UIView *v = st.lastObject; [st removeLastObject];
+                for (UIGestureRecognizer *r in v.gestureRecognizers) {
+                    NSString *n = NSStringFromClass(r.class);
+                    if (r.enabled && ([n containsString:@"Click"] || [n containsString:@"ContextMenu"] || [n containsString:@"Preview"] || [n containsString:@"TouchDuration"])) { r.enabled = NO; [_paused addObject:r]; }
+                }
+                [st addObjectsFromArray:v.subviews];
+            }
+        }
+    } else {
+        for (UIGestureRecognizer *r in [_paused allObjects]) r.enabled = YES;
+        [_paused removeAllObjects];
+    }
+}
+- (void)held:(UILongPressGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan) [self open];
+    else if (g.state >= UIGestureRecognizerStateEnded) [self close];
+}
+- (void)open {
+    if (_holder) return;
+    UIView *pill = nil; CGRect pr = XPillOnScreen(&pill);
+    if (!pill || pr.size.width < 50) return;
+    [self pauseMusicMenu:pill pause:YES];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    _pill = pill;
+    CGFloat H = 158, W = pr.size.width + 12;
+    CGRect to = CGRectMake(CGRectGetMidX(pr) - W / 2, CGRectGetMaxY(pr) - H + 2, W, H);
+    UIView *c = [UIView new];
+    _art = [[UIImageView alloc] initWithFrame:CGRectMake(16, 16, 64, 64)];
+    _art.contentMode = UIViewContentModeScaleAspectFill; _art.clipsToBounds = YES; _art.layer.cornerRadius = 12; _art.layer.cornerCurve = kCACornerCurveContinuous;
+    _art.image = gXArt; [c addSubview:_art];
+    _title = XLabel(gXTitle ?: @"", 17, UIFontWeightBold, nil); _title.frame = CGRectMake(92, 18, W - 108, 22); _title.adjustsFontSizeToFitWidth = NO; _title.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:_title];
+    _artist = XLabel(gXArtist ?: @"", 14, UIFontWeightMedium, [UIColor colorWithWhite:1 alpha:0.6]); _artist.frame = CGRectMake(92, 40, W - 108, 18); _artist.adjustsFontSizeToFitWidth = NO; _artist.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:_artist];
+    _lyric = XLabel(gXAlbum ?: @"", 14, UIFontWeightSemibold, [UIColor colorWithWhite:1 alpha:0.85]); _lyric.frame = CGRectMake(92, 60, W - 108, 20); _lyric.adjustsFontSizeToFitWidth = NO; _lyric.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:_lyric];
+    _el = XLabel(@"0:00", 12, UIFontWeightSemibold, [UIColor colorWithWhite:1 alpha:0.55]); _el.frame = CGRectMake(16, H - 44, 50, 14); [c addSubview:_el];
+    _rem = XLabel(@"-0:00", 12, UIFontWeightSemibold, [UIColor colorWithWhite:1 alpha:0.55]); _rem.textAlignment = NSTextAlignmentRight; _rem.frame = CGRectMake(W - 66, H - 44, 50, 14); [c addSubview:_rem];
+    _track = [[UIView alloc] initWithFrame:CGRectMake(16, H - 26, W - 32, 6)]; _track.backgroundColor = [UIColor colorWithWhite:1 alpha:0.22]; _track.layer.cornerRadius = 3; _track.clipsToBounds = YES; [c addSubview:_track];
+    _fill = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, 6)]; _fill.backgroundColor = UIColor.whiteColor; [_track addSubview:_fill];
+    _content = c;
+    UIView *shape = nil;
+    _holder = XGrowFromPill(pill, to, c, &shape);
+    _shape = shape;
+    _line = -2;
+    [self loadLyrics];
+    [self tick];
+    _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(_timer, dispatch_time(DISPATCH_TIME_NOW, 0), (uint64_t)(0.2 * NSEC_PER_SEC), (uint64_t)(0.03 * NSEC_PER_SEC));
+    __weak MPPeek *ws = self;
+    dispatch_source_set_event_handler(_timer, ^{ @try { [ws tick]; } @catch (__unused id e) {} });
+    dispatch_resume(_timer);
+}
+- (void)loadLyrics {
+    NSString *key = [NSString stringWithFormat:@"%@|%@", gXTitle ?: @"", gXArtist ?: @""];
+    if ([key isEqualToString:_lyricsKey]) return;
+    _lyricsKey = key; _lyrics = nil; _line = -2;
+    __weak MPPeek *ws = self;
+    XFetchLyrics(gXTitle, gXArtist, gXAlbum, gXDuration, ^(MPLyrics *l) {
+        MPPeek *s = ws; if (!s || ![key isEqualToString:s->_lyricsKey]) return;
+        s->_lyrics = l.times.count ? l : nil;   // only timed lyrics can follow the song
+        s->_line = -2;
+        [s tick];
+    });
+}
+- (void)tick {
+    if (!_holder) return;
+    double e = XElapsedNow(), D = gXDuration;
+    _el.text = XTime(e); _rem.text = [@"-" stringByAppendingString:XTime(MAX(0, D - e))];
+    _fill.frame = CGRectMake(0, 0, _track.bounds.size.width * (D > 0 ? MAX(0, MIN(1, e / D)) : 0), 6);
+    if (_art.image != gXArt) _art.image = gXArt;
+    if (![_title.text isEqualToString:gXTitle ?: @""]) { _title.text = gXTitle ?: @""; _artist.text = gXArtist ?: @""; [self loadLyrics]; }
+    // the line being sung right now (or the album when there are no timed lyrics)
+    NSInteger cur = -1;
+    for (NSUInteger i = 0; i < _lyrics.times.count; i++) { if ([_lyrics.times[i] doubleValue] <= e + 0.25) cur = i; else break; }
+    if (cur == _line) return;
+    _line = cur;
+    NSString *t = !_lyrics ? (gXAlbum ?: @"") : (cur >= 0 ? _lyrics.lines[cur] : @"♪");
+    UILabel *l = _lyric;
+    [UIView transitionWithView:l duration:0.25 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ l.text = t; l.textColor = self->_lyrics ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.6]; } completion:nil];
+}
+- (void)close {
+    if (_timer) { dispatch_source_cancel(_timer); _timer = nil; }
+    [self pauseMusicMenu:nil pause:NO];
+    UIView *h = _holder, *s = _shape, *c = _content, *p = _pill;
+    _holder = nil; _shape = nil; _content = nil;
+    if (h) XShrinkToPill(h, s, c, p);
+}
+@end
+static void AddPeek(UIView *v) {
+    static const void *kPeek = &kPeek;
+    if (!v || objc_getAssociatedObject(v, kPeek)) return;
+    objc_setAssociatedObject(v, kPeek, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:[MPPeek shared] action:@selector(held:)];
+    lp.minimumPressDuration = 0.3; lp.allowableMovement = 14;
+    lp.delegate = [MPPeek shared];
+    [v addGestureRecognizer:lp];
+}
+
+#pragma mark - song change splash
+
+static NSString *gSplashLast;
+static CFTimeInterval gSplashChangedAt;
+static UIView *gSplashHolder;
+static void ShowSplash(void) {
+    UIView *pill = nil; CGRect pr = XPillOnScreen(&pill);
+    if (!pill || pr.size.width < 50 || XPillBusy() || gSplashHolder.superview) return;
+    CGFloat H = 112, W = pr.size.width + 12;
+    CGRect to = CGRectMake(CGRectGetMidX(pr) - W / 2, CGRectGetMaxY(pr) - H + 2, W, H);
+    UIView *c = [UIView new];
+    UIImageView *art = [[UIImageView alloc] initWithFrame:CGRectMake(14, 14, 84, 84)];
+    art.image = gXArt; art.contentMode = UIViewContentModeScaleAspectFill; art.clipsToBounds = YES;
+    art.layer.cornerRadius = 14; art.layer.cornerCurve = kCACornerCurveContinuous;
+    [c addSubview:art];
+    UILabel *k = XLabel(@"NOW PLAYING", 11, UIFontWeightBold, MusicPink()); k.frame = CGRectMake(112, 24, W - 126, 14); [c addSubview:k];
+    UILabel *t = XLabel(gXTitle ?: @"", 19, UIFontWeightBold, nil); t.frame = CGRectMake(112, 40, W - 126, 24); t.adjustsFontSizeToFitWidth = NO; t.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:t];
+    UILabel *a = XLabel(gXArtist ?: @"", 15, UIFontWeightMedium, [UIColor colorWithWhite:1 alpha:0.6]); a.frame = CGRectMake(112, 64, W - 126, 20); a.adjustsFontSizeToFitWidth = NO; a.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:a];
+    UIView *shape = nil;
+    UIView *h = XGrowFromPill(pill, to, c, &shape);
+    gSplashHolder = h;
+    // the cover lands with a small pop
+    CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    pop.values = @[@0.7, @1.08, @0.97, @1]; pop.keyTimes = @[@0, @0.45, @0.75, @1]; pop.duration = 0.5; pop.beginTime = CACurrentMediaTime() + 0.08;
+    pop.fillMode = kCAFillModeBackwards;
+    [art.layer addAnimation:pop forKey:@"pop"];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+    __weak UIView *wp = pill;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (gSplashHolder == h) gSplashHolder = nil;
+        XShrinkToPill(h, shape, c, wp);
+    });
+}
+static void SplashTick(void) {
+    if (!gSplashPref || !gRound) { gSplashLast = gXTitle; return; }
+    NSString *now = gXTitle.length ? [NSString stringWithFormat:@"%@|%@", gXTitle, gXArtist ?: @""] : nil;
+    if (!now) return;
+    if (!gSplashLast) { gSplashLast = now; return; }   // not when Music opens
+    if (![now isEqualToString:gSplashLast]) { gSplashLast = now; gSplashChangedAt = CACurrentMediaTime(); return; }
+    // wait a beat after the change so the new cover is in
+    if (gSplashChangedAt > 0 && CACurrentMediaTime() - gSplashChangedAt > 0.45) { gSplashChangedAt = 0; if (gXArt) ShowSplash(); }
+}
+
+#pragma mark - share card (story size)
+
+static UIImage *MakeShareCard(void) {
+    CGSize S = CGSizeMake(1080, 1920);
+    NSArray *cols = XColorsOf(gXArt);
+    UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat defaultFormat]; fmt.scale = 1;
+    return [[[UIGraphicsImageRenderer alloc] initWithSize:S format:fmt] imageWithActions:^(UIGraphicsImageRendererContext *rc) {
+        CGContextRef ctx = rc.CGContext;
+        [[UIColor colorWithWhite:0.04 alpha:1] setFill]; CGContextFillRect(ctx, CGRectMake(0, 0, S.width, S.height));
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        CGPoint spots[3] = {{220, 420}, {900, 760}, {420, 1600}};
+        for (int i = 0; i < 3; i++) {
+            UIColor *c = cols[i % cols.count];
+            CGFloat comps[8]; [c getRed:&comps[0] green:&comps[1] blue:&comps[2] alpha:&comps[3]];
+            comps[3] = 0.9; comps[4] = comps[0]; comps[5] = comps[1]; comps[6] = comps[2]; comps[7] = 0;
+            CGGradientRef gr = CGGradientCreateWithColorComponents(cs, comps, (CGFloat[]){0, 1}, 2);
+            CGContextDrawRadialGradient(ctx, gr, spots[i], 0, spots[i], 1000, 0);
+            CGGradientRelease(gr);
+        }
+        CGColorSpaceRelease(cs);
+        [[UIColor colorWithWhite:0 alpha:0.25] setFill]; CGContextFillRect(ctx, CGRectMake(0, 0, S.width, S.height));
+        // the cover, big, with a soft shadow
+        CGRect ar = CGRectMake(150, 430, 780, 780);
+        CGContextSaveGState(ctx);
+        CGContextSetShadowWithColor(ctx, CGSizeMake(0, 40), 90, [UIColor colorWithWhite:0 alpha:0.55].CGColor);
+        [[UIColor blackColor] setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:ar cornerRadius:56] fill];
+        CGContextRestoreGState(ctx);
+        CGContextSaveGState(ctx);
+        [[UIBezierPath bezierPathWithRoundedRect:ar cornerRadius:56] addClip];
+        [gXArt drawInRect:ar];
+        CGContextRestoreGState(ctx);
+        NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = NSTextAlignmentCenter; ps.lineBreakMode = NSLineBreakByTruncatingTail;
+        [@"LISTENING TO" drawInRect:CGRectMake(80, 300, 920, 50) withAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:36 weight:UIFontWeightBold], NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.7], NSParagraphStyleAttributeName: ps, NSKernAttributeName: @4}];
+        [(gXTitle ?: @"") drawInRect:CGRectMake(80, 1280, 920, 90) withAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:68 weight:UIFontWeightHeavy], NSForegroundColorAttributeName: UIColor.whiteColor, NSParagraphStyleAttributeName: ps}];
+        [(gXArtist ?: @"") drawInRect:CGRectMake(80, 1380, 920, 64) withAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:46 weight:UIFontWeightSemibold], NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.75], NSParagraphStyleAttributeName: ps}];
+        // a glass pill with a little waveform, like the now playing pill
+        CGRect pillR = CGRectMake(340, 1540, 400, 96);
+        [[UIColor colorWithWhite:1 alpha:0.16] setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:pillR cornerRadius:48] fill];
+        [[UIColor colorWithWhite:1 alpha:0.35] setStroke];
+        UIBezierPath *rim = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(pillR, 1.5, 1.5) cornerRadius:46.5]; rim.lineWidth = 3; [rim stroke];
+        [UIColor.whiteColor setFill];
+        CGFloat hs[9] = {20, 38, 56, 30, 64, 44, 26, 50, 22};
+        for (int i = 0; i < 9; i++) [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(pillR.origin.x + 92 + i * 26, CGRectGetMidY(pillR) - hs[i] / 2, 12, hs[i]) cornerRadius:6] fill];
+        [@"MusicPill" drawInRect:CGRectMake(80, 1780, 920, 44) withAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:30 weight:UIFontWeightSemibold], NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.45], NSParagraphStyleAttributeName: ps}];
+    }];
+}
+static void ShareNowPlaying(UIView *from) {
+    if (!gXTitle.length) return;
+    UIImage *img = MakeShareCard();
+    UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:@[img] applicationActivities:nil];
+    UIViewController *top = from.window.rootViewController;
+    while (top.presentedViewController && !top.presentedViewController.isBeingDismissed) top = top.presentedViewController;
+    av.popoverPresentationController.sourceView = from;
+    av.popoverPresentationController.sourceRect = from.bounds;
+    [top presentViewController:av animated:YES completion:nil];
+}
+
+static void StartPeek(void) {
+    static dispatch_source_t t;
+    if (t) return;
+    t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), (uint64_t)(0.25 * NSEC_PER_SEC), (uint64_t)(0.05 * NSEC_PER_SEC));
+    dispatch_source_set_event_handler(t, ^{
+        @try {
+            SplashTick();
+            UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
+            MPMiniPill *pill = (MPMiniPill *)gPillObj;
+            if (mini && gRound) AddPeek(mini);
+            if ([pill isKindOfClass:[MPMiniPill class]]) AddPeek(pill);
+        } @catch (__unused id e) {}
+    });
+    dispatch_resume(t);
+}

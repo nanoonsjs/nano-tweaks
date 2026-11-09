@@ -137,7 +137,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Swipe up on the now playing pill and it grows into Insights, like holding the Dynamic Island: your listening this week, your streak, top artist and songs, and all time. Tap the moon for the Sleep Timer. Tap anywhere outside to close it.</string>
+			<string>Swipe up on the now playing pill and it grows into Insights, like the Dynamic Island: your week, streak, top artist and songs, and all time. Share makes a story card of the song, ... opens Music's song menu, the moon is the Sleep Timer. Hold the pill to peek: the cover, the lyric being sung and the time, until you let go. Song Change Splash: a new song makes the pill grow for a moment with the big cover.</string>
 			<key>label</key>
 			<string>Dynamic Pill</string>
 		</dict>
@@ -166,6 +166,22 @@
 			<string>MP_DEMO</string>
 			<key>label</key>
 			<string></string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>id</key>
+			<string>MP_SPLASH</string>
+			<key>key</key>
+			<string>splash</string>
+			<key>label</key>
+			<string>Song Change Splash</string>
 		</dict>
 		<dict>
 			<key>cell</key>
