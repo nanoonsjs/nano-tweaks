@@ -16,8 +16,32 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>height</key>
+			<integer>110</integer>
+			<key>id</key>
+			<string>NANO_HEADER</string>
+			<key>label</key>
+			<string></string>
+			<key>nanoIcon</key>
+			<string>/var/jb/usr/share/Photos26/icon.png</string>
+			<key>nanoName</key>
+			<string>Photos26</string>
+			<key>nanoSub</key>
+			<string>Photos, iOS 26 style</string>
+			<key>nanoVersion</key>
+			<string>2.6.1</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Glass pills for the photo and video viewer, like iOS 26: round share and delete buttons, a middle capsule with favorite, info and edit, a glass video player above the thumbnails, and glass buttons at the top. Close Photos from the app switcher and reopen it after changing.</string>
+			<string>Turns everything below on or off. Close Photos from the app switcher if a change doesn't show.</string>
+			<key>label</key>
+			<string>General</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -32,6 +56,14 @@
 			<string>enabled</string>
 			<key>label</key>
 			<string>Enabled</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Glass Top Buttons: a glass back circle, date capsule and ... circle. Glass Video Player: a floating glass player with play, a scrubber and mute; hold the slider for a big timer. Loop Videos: videos start over when they end. The bottom gets round share and delete buttons and a capsule with favorite, info and edit.</string>
+			<key>label</key>
+			<string>Photo &amp; Video Viewer</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -79,9 +111,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Photos and videos you open from a chat in Messages use the same viewer as Photos, so they get the same glass buttons and glass video player. Close Messages from the app switcher after changing this.</string>
+			<string>For the Liquid (Gl)ass tweak. On: where LiquidAss draws its glass buttons (like back buttons), Photos26's own glass steps aside so only LiquidAss's shows. Off: Photos26's glass shows there and LiquidAss's under it is hidden. Reopen the app after changing.</string>
 			<key>label</key>
-			<string>Messages</string>
+			<string>LiquidAss</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -93,15 +125,17 @@
 			<key>defaults</key>
 			<string>com.user.photos26</string>
 			<key>key</key>
-			<string>messages</string>
+			<string>lgcompat</string>
 			<key>label</key>
-			<string>Use in Messages</string>
+			<string>LiquidAss Compatibility</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
 			<string>Shows a purple box with what Photos26 found. Send a screenshot if something looks off, then turn it off.</string>
+			<key>label</key>
+			<string>Troubleshooting</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -122,28 +156,6 @@
 			<string>PSGroupCell</string>
 			<key>footerText</key>
 			<string>Made by nano</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>For the Liquid (Gl)ass tweak. On: where LiquidAss draws its glass buttons (like back buttons), Photos26's own glass steps aside so only LiquidAss's shows. Off: Photos26's glass shows there and LiquidAss's under it is hidden. Reopen the app after changing.</string>
-			<key>label</key>
-			<string>LiquidAss</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.photos26/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.photos26</string>
-			<key>key</key>
-			<string>lgcompat</string>
-			<key>label</key>
-			<string>LiquidAss Compatibility</string>
 		</dict>
 	</array>
 	<key>title</key>

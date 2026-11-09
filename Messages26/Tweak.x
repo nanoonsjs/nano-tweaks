@@ -1,4 +1,5 @@
-// Messages26 1.2 - made by nano
+// Messages26 1.3 - made by nano
+// 1.3: iOS 26 photo / video viewer (glass X, big play with -10 / +10, glass time bar, tapback / reply / save / share pills), new settings page
 // 1.2: "iOS 26 Contact Photo" switch (glass back / FaceTime work without the bigger photo), Messages26 icon in its settings
 // 1.1: public release of 1.0.1-1.0.3 (name capsule fixes, smoother on older iPhones)
 // 1.0.3: the small original name no longer peeks out above the name capsule
@@ -148,6 +149,7 @@ static void LockPreview(UIView *avatar, NSString *key);
 #define DOM CFSTR("com.nano.messages26")
 static BOOL gBigPfp = YES;
 static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
+static BOOL gViewerOn = YES;   // 1.3: iOS 26 photo / video viewer (MsgViewer.h)
 static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
     id v = file[key];
     if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM); if (cf) v = (__bridge_transfer id)cf; }
@@ -172,6 +174,7 @@ static void LoadPrefs(void) {
     gSearchOn = gOn && PrefBool(file, @"searchpill", YES);
     gBubblesOn = gOn && PrefBool(file, @"bubbles", YES);
     gSwipeOn = gOn && PrefBool(file, @"swipereply", YES);
+    gViewerOn = gOn && PrefBool(file, @"viewer", YES);
     gPrefDebug = PrefBool(file, @"debug", NO);
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
@@ -5333,7 +5336,11 @@ static void SBAuthRequest(CFNotificationCenterRef c, void *o, CFNotificationName
 static void MsgAuthOK(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(1); }); }
 static void MsgAuthFail(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(0); }); }
 static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(-1); }); }
+#include "MsgViewer.h"
+#include "../shared/NanoSettings.h"
+
 %ctor {
+    if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.Preferences"]) { StartNanoSettings(); return; }
     if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, SBAuthRequest, CFSTR("com.nano.messages26/auth.req"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         return;
@@ -5396,6 +5403,9 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
             MSHookMessageEx(CB, @selector(didMoveToSuperview), (IMP)BalloonMove, (IMP *)&origBalloonMove);
         }
         MSHookMessageEx([UIApplication class], @selector(sendEvent:), (IMP)SendEvent, (IMP *)&origSendEvent);
+        HookViewer();
+        { __block int tries = 0;
+          [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *vt) { HookViewer(); if (MVQLClass() || ++tries > 300) [vt invalidate]; }]; }
         [NSTimer scheduledTimerWithTimeInterval:SlowDevice() ? 0.5 : 0.3 repeats:YES block:^(__unused NSTimer *t) { @try { Tick(); } @catch (__unused id ex) {} }];
     });
 }

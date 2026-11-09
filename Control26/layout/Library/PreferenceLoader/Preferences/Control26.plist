@@ -4,138 +4,261 @@
 <dict>
 	<key>entry</key>
 	<dict>
-		<key>cell</key><string>PSLinkCell</string>
-		<key>label</key><string>Control26</string>
-		<key>icon</key><string>Control26.png</string>
+		<key>cell</key>
+		<string>PSLinkCell</string>
+		<key>icon</key>
+		<string>Control26.png</string>
+		<key>label</key>
+		<string>Control26</string>
 	</dict>
-	<key>title</key><string>Control26</string>
 	<key>items</key>
 	<array>
 		<dict>
-			<key>cell</key><string>PSGroupCell</string>
-			<key>footerText</key><string>Close and reopen Control Center after changing these.</string>
+			<key>cell</key>
+			<string>PSGroupCell</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Enabled</string>
-			<key>key</key><string>enabled</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>height</key>
+			<integer>110</integer>
+			<key>id</key>
+			<string>NANO_HEADER</string>
+			<key>label</key>
+			<string></string>
+			<key>nanoIcon</key>
+			<string>/var/jb/usr/share/Control26/icon.png</string>
+			<key>nanoName</key>
+			<string>Control26</string>
+			<key>nanoSub</key>
+			<string>Control Center, iOS 26 style</string>
+			<key>nanoVersion</key>
+			<string>1.2.1</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSGroupCell</string>
-			<key>label</key><string>iOS 26 Look</string>
-			<key>footerText</key><string>Music module with album artwork and a round AirPlay button. Orange sun and blue speaker on the sliders. Sliders stretch and bounce at the ends.</string>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Close and reopen Control Center after changing these.</string>
+			<key>label</key>
+			<string>General</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Music Module</string>
-			<key>key</key><string>music</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>enabled</string>
+			<key>label</key>
+			<string>Enabled</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Slider Icon Colors</string>
-			<key>key</key><string>colors</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Music module with album artwork and a round AirPlay button. Orange sun and blue speaker on the sliders. Sliders stretch and bounce at the ends.</string>
+			<key>label</key>
+			<string>iOS 26 Look</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Slider Bounce</string>
-			<key>key</key><string>bounce</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>music</string>
+			<key>label</key>
+			<string>Music Module</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Jelly Buttons</string>
-			<key>key</key><string>jelly</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>colors</string>
+			<key>label</key>
+			<string>Slider Icon Colors</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>iOS 26 Connectivity Cards</string>
-			<key>key</key><string>conn</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>bounce</string>
+			<key>label</key>
+			<string>Slider Bounce</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Stop Auto-Brightness</string>
-			<key>key</key><string>noauto</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>jelly</string>
+			<key>label</key>
+			<string>Jelly Buttons</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSGroupCell</string>
-			<key>label</key><string>Look</string>
-			<key>footerText</key><string>iOS 26: liquid glass with light rims and shine. iOS 18: flat frosted tiles like iOS 18. Module Shapes makes small controls round and sliders capsule-shaped like iOS 18 and iOS 26 (no other tweak needed). Close and reopen Control Center to see a change.</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>conn</string>
+			<key>label</key>
+			<string>iOS 26 Connectivity Cards</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSegmentCell</string>
-			<key>key</key><string>style</string>
-			<key>default</key><integer>26</integer>
-			<key>validValues</key><array><integer>26</integer><integer>18</integer></array>
-			<key>validTitles</key><array><string>iOS 26</string><string>iOS 18</string></array>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>noauto</string>
+			<key>label</key>
+			<string>Stop Auto-Brightness</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Module Shapes</string>
-			<key>key</key><string>shapes</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>iOS 26: liquid glass with light rims and shine. iOS 18: flat frosted tiles like iOS 18. Module Shapes makes small controls round and sliders capsule-shaped like iOS 18 and iOS 26 (no other tweak needed). Close and reopen Control Center to see a change.</string>
+			<key>label</key>
+			<string>Look</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSGroupCell</string>
-			<key>label</key><string>Extras</string>
-			<key>footerText</key><string>Opening Animation: controls drop in one by one when Control Center opens. Settings Page: Settings &gt; Control Center gets the iOS 18 look with a Reset button (the + button in edit mode replaces the old control lists).</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSegmentCell</string>
+			<key>default</key>
+			<integer>26</integer>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>style</string>
+			<key>validTitles</key>
+			<array>
+				<string>iOS 26</string>
+				<string>iOS 18</string>
+			</array>
+			<key>validValues</key>
+			<array>
+				<integer>26</integer>
+				<integer>18</integer>
+			</array>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Opening Animation</string>
-			<key>key</key><string>dropin</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>shapes</string>
+			<key>label</key>
+			<string>Module Shapes</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>New Settings Page</string>
-			<key>key</key><string>ccsettings</string>
-			<key>default</key><true/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Opening Animation: controls drop in one by one when Control Center opens. Settings Page: Settings &gt; Control Center gets the iOS 18 look with a Reset button (the + button in edit mode replaces the old control lists).</string>
+			<key>label</key>
+			<string>Extras</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSGroupCell</string>
-			<key>label</key><string>Debug</string>
-			<key>footerText</key><string>Shows a purple box with what Control26 found. Send a screenshot if something looks off, then turn it off.</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>dropin</string>
+			<key>label</key>
+			<string>Opening Animation</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSSwitchCell</string>
-			<key>label</key><string>Show Debug Info</string>
-			<key>key</key><string>debug</string>
-			<key>default</key><false/>
-			<key>defaults</key><string>com.user.control26</string>
-			<key>PostNotification</key><string>com.user.control26/prefschanged</string>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>ccsettings</string>
+			<key>label</key>
+			<string>New Settings Page</string>
 		</dict>
 		<dict>
-			<key>cell</key><string>PSGroupCell</string>
-			<key>footerText</key><string>Made by nano</string>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Shows a purple box with what Control26 found. Send a screenshot if something looks off, then turn it off.</string>
+			<key>label</key>
+			<string>Troubleshooting</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.control26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.control26</string>
+			<key>key</key>
+			<string>debug</string>
+			<key>label</key>
+			<string>Show Debug Info</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Made by nano</string>
 		</dict>
 	</array>
+	<key>title</key>
+	<string>Control26</string>
 </dict>
 </plist>

@@ -1,4 +1,5 @@
-// Photos26 2.6 - made by nano
+// Photos26 2.6.1 - made by nano
+// 2.6.1: new settings page; Messages' viewer moved to Messages26 (it's Quick Look there, not Photos).
 // 2.6: Messages too: the photo/video viewer you open from a chat is Photos' own, so it gets the same glass buttons and video player.
 // 2.5.1: back to the 2.3.0 look (the Albums tab changes in 2.4.0 - 2.5.0 are
 //        removed); numbered higher so it installs over them.
@@ -1947,8 +1948,11 @@ static void InitOverlay(void) {
 static void InitScrubber(void) { static BOOL done; if (done) return; done = YES; %init(Scrubber); }
 static void InitMain(void) { static BOOL done; if (done) return; done = YES; %init; }
 
+#include "../shared/NanoSettings.h"
+
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+    if ([bid isEqualToString:@"com.apple.Preferences"]) { StartNanoSettings(); return; }
     if ([bid isEqualToString:@"com.apple.MobileSMS"]) {
         // Messages: only the photo / video viewer (glass buttons, the glass video player, round thumbnails)
         gInMessages = YES;

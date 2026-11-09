@@ -16,8 +16,32 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>height</key>
+			<integer>110</integer>
+			<key>id</key>
+			<string>NANO_HEADER</string>
+			<key>label</key>
+			<string></string>
+			<key>nanoIcon</key>
+			<string>/var/jb/usr/share/Messages26/icon.png</string>
+			<key>nanoName</key>
+			<string>Messages26</string>
+			<key>nanoSub</key>
+			<string>Messages, iOS 26 style</string>
+			<key>nanoVersion</key>
+			<string>1.3</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
 			<key>footerText</key>
 			<string>Changes apply right away. If not, close Messages from the app switcher and reopen it.</string>
+			<key>label</key>
+			<string>General</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -37,7 +61,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Glass message field with a glass + button (the camera and App Store buttons are removed).</string>
+			<string>Glass Message Bar: a glass message field with a glass + button (the camera and App Store buttons are removed). Glass + Menu: tapping + opens a liquid glass menu with Photos, Camera and your iMessage apps.</string>
+			<key>label</key>
+			<string>Message Bar</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -52,12 +78,6 @@
 			<string>bar</string>
 			<key>label</key>
 			<string>Glass Message Bar</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>Tapping + opens a liquid glass menu with Photos, Camera and your iMessage apps. The app row above the keyboard is hidden.</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -77,7 +97,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Glass Top Bar: glass back and FaceTime buttons at the top of a conversation, without the bar background. iOS 26 Contact Photo: the bigger photo with the name in a glass capsule under it (turn it off to keep the normal small photo and name).</string>
+			<string>Glass Top Bar: glass back and FaceTime buttons at the top of a chat. iOS 26 Contact Photo: the bigger contact photo with the name under it. Glass Bubbles: a glass rim on received messages and a deeper blue for yours (reopen the chat to see it). Swipe to Reply: swipe right on any message to reply.</string>
+			<key>label</key>
+			<string>Conversation</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -108,32 +130,6 @@
 			<string>iOS 26 Contact Photo</string>
 		</dict>
 		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>A glass Search pill and compose button at the bottom of your conversation list, like iOS 26.</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.nano.messages26/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.nano.messages26</string>
-			<key>key</key>
-			<string>searchpill</string>
-			<key>label</key>
-			<string>Bottom Search Pill</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>A glass rim on received messages and a deeper blue for your iMessages. Reopen the chat to see it.</string>
-		</dict>
-		<dict>
 			<key>PostNotification</key>
 			<string>com.nano.messages26/prefschanged</string>
 			<key>cell</key>
@@ -146,12 +142,6 @@
 			<string>bubbles</string>
 			<key>label</key>
 			<string>Glass Bubbles</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>Swipe right on any message to reply to it.</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -171,7 +161,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Shows what Messages26 finds on screen. Made by nano.</string>
+			<string>Tap a photo or video in a chat for the iOS 26 viewer: a glass X, a big play button with 10 second skips, a glass time bar with a ... menu (speed, loop), and glass tapback, reply, save and share buttons.</string>
+			<key>label</key>
+			<string>Photos &amp; Videos</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -179,13 +171,35 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
-			<false/>
+			<true/>
 			<key>defaults</key>
 			<string>com.nano.messages26</string>
 			<key>key</key>
-			<string>debug</string>
+			<string>viewer</string>
 			<key>label</key>
-			<string>Debug</string>
+			<string>iOS 26 Photo Viewer</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>A glass Search pill and compose button at the bottom of your conversation list, like iOS 26.</string>
+			<key>label</key>
+			<string>Conversation List</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.nano.messages26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.nano.messages26</string>
+			<key>key</key>
+			<string>searchpill</string>
+			<key>label</key>
+			<string>Bottom Search Pill</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -208,6 +222,34 @@
 			<string>lgcompat</string>
 			<key>label</key>
 			<string>LiquidAss Compatibility</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Shows what Messages26 finds on screen. Send a screenshot if something looks off, then turn it off.</string>
+			<key>label</key>
+			<string>Troubleshooting</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.nano.messages26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.nano.messages26</string>
+			<key>key</key>
+			<string>debug</string>
+			<key>label</key>
+			<string>Show Debug Info</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Made by nano</string>
 		</dict>
 	</array>
 	<key>title</key>

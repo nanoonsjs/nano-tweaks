@@ -5321,9 +5321,12 @@ static void InstallCCSettingsHooks(void) {
     MSHookMessageEx(PS, @selector(viewDidAppear:), (IMP)PSDidAppear, (IMP *)&origPSDidAppear);
 }
 
+#include "../shared/NanoSettings.h"
+
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
     if ([bid isEqualToString:@"com.apple.Preferences"]) {
+        StartNanoSettings();
         LoadPrefs();
         if (gEnabled && gCCPage) InstallCCSettingsHooks();
         return;
