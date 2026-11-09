@@ -239,19 +239,31 @@ static void XRim(CALayer *l, CGFloat to, CFTimeInterval dur) {
 @property (nonatomic, weak) MPSheet *sheet;
 @property (nonatomic, weak) UILabel *status;
 @property (nonatomic, strong) NSMutableArray *chips;
+@property (nonatomic, copy) void (^closer)(void);
+- (void)buildIn:(UIView *)c width:(CGFloat)W close:(void (^)(void))close;
 @end
 @implementation MPSleepCtl
 + (instancetype)shared { static MPSleepCtl *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [MPSleepCtl new]; }); return s; }
 - (void)showIn:(UIWindow *)w {
     MPSheet *sh = [MPSheet showIn:w height:300];
     self.sheet = sh;
-    UIView *c = sh.panel.contentView; CGFloat W = sh.panel.bounds.size.width;
+    __weak MPSheet *wsh = sh;
+    [self buildIn:sh.panel.contentView width:sh.panel.bounds.size.width close:^{ [wsh close]; }];
+}
+- (void)buildIn:(UIView *)c width:(CGFloat)W close:(void (^)(void))close {
+    self.closer = close;
     UIImageView *moon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"moon.zzz.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightSemibold]]];
     moon.tintColor = [UIColor colorWithRed:0.62 green:0.55 blue:1 alpha:1]; moon.frame = CGRectMake(22, 22, 30, 30); moon.contentMode = UIViewContentModeCenter;
     [c addSubview:moon];
-    UILabel *t = XLabel(@"Sleep Timer", 22, UIFontWeightBold, nil); t.frame = CGRectMake(60, 22, W - 80, 30); [c addSubview:t];
+    UILabel *t = XLabel(@"Sleep Timer", 22, UIFontWeightBold, nil); t.frame = CGRectMake(60, 22, W - 130, 30); [c addSubview:t];
     UILabel *st = XLabel(@"", 15, UIFontWeightMedium, [UIColor colorWithWhite:1 alpha:0.6]); st.frame = CGRectMake(22, 58, W - 44, 20); [c addSubview:st];
     self.status = st;
+    UIButton *x = [UIButton buttonWithType:UIButtonTypeSystem];
+    [x setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+    x.tintColor = UIColor.whiteColor; x.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    x.frame = CGRectMake(W - 58, 20, 38, 38); x.layer.cornerRadius = 19;
+    [x addTarget:self action:@selector(closeTap) forControlEvents:UIControlEventTouchUpInside];
+    [c addSubview:x];
     NSArray *opts = @[@[@"15 min", @15], @[@"30 min", @30], @[@"45 min", @45], @[@"1 hour", @60], @[@"End of Song", @-1], @[@"Off", @0]];
     self.chips = [NSMutableArray array];
     CGFloat gap = 10, cw = (W - 44 - gap * 2) / 3, ch = 58;
@@ -266,9 +278,12 @@ static void XRim(CALayer *l, CGFloat to, CFTimeInterval dur) {
         b.tag = [opts[i][1] intValue];
         [b addTarget:self action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
         [c addSubview:b]; [self.chips addObject:b];
+        b.alpha = 0; b.transform = CGAffineTransformMakeScale(0.85, 0.85);
+        [UIView animateWithDuration:0.5 delay:0.12 + i * 0.03 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ b.alpha = 1; b.transform = CGAffineTransformIdentity; } completion:nil];
     }
     [self update];
 }
+- (void)closeTap { if (self.closer) self.closer(); }
 - (void)pick:(UIButton *)b {
     XJelly(b);
     [[UISelectionFeedbackGenerator new] selectionChanged];
@@ -276,7 +291,7 @@ static void XRim(CALayer *l, CGFloat to, CFTimeInterval dur) {
     gSleepPick = (int)b.tag;
     gSleepEnd = b.tag > 0 ? CFAbsoluteTimeGetCurrent() + b.tag * 60 : 0;
     [self update];
-    if (b.tag != 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self.sheet close]; });
+    if (b.tag != 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (self.closer) self.closer(); });
 }
 - (void)update {
     NSString *s = SleepStatus();
@@ -724,38 +739,60 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
 }
 - (void)bgTap:(UITapGestureRecognizer *)g { if (!CGRectContainsPoint(_shape.frame, [g locationInView:self])) [self collapse]; }
 - (void)sleepTap {
-    UIWindow *w = self.window;
-    [self collapse];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (w) [[MPSleepCtl shared] showIn:w]; });
+    // the island changes shape into the Sleep Timer (like the Dynamic Island going from one activity to another)
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    UIView *old = _content, *shape = _shape;
+    CGFloat h = 300;
+    CGRect to = CGRectMake(_to.origin.x, CGRectGetMaxY(_to) - h, _to.size.width, h);
+    UIView *nc = [[UIView alloc] initWithFrame:CGRectMake(0, 0, to.size.width, h)];
+    __weak MPIsland *ws = self;
+    [[MPSleepCtl shared] buildIn:nc width:to.size.width close:^{ [ws collapse]; }];
+    nc.alpha = 0; nc.transform = CGAffineTransformMakeScale(0.92, 0.92);
+    // keep the new contents pinned to the bottom of the shape while it shrinks
+    nc.center = CGPointMake(to.size.width / 2, shape.bounds.size.height - h / 2);
+    [shape addSubview:nc];
+    _content = nc;
+    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ old.alpha = 0; old.transform = CGAffineTransformMakeScale(0.94, 0.94); } completion:^(__unused BOOL f) { [old removeFromSuperview]; }];
+    CGRect squeeze = CGRectInset(shape.frame, 6, 0);
+    [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ shape.frame = squeeze; nc.center = CGPointMake(squeeze.size.width / 2, squeeze.size.height - h / 2); } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.76 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            shape.frame = to;
+            shape.layer.cornerRadius = 40;
+            nc.center = CGPointMake(to.size.width / 2, h / 2);
+        } completion:nil];
+    }];
+    [UIView animateWithDuration:0.42 delay:0.2 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ nc.alpha = 1; nc.transform = CGAffineTransformIdentity; } completion:nil];
+    _to = to;
 }
 - (void)collapse {
     if (self.tag == 0x4D50) return;
     self.tag = 0x4D50;
     self.userInteractionEnabled = NO;
     UIView *pill = _pill;
-    CGRect to = (pill.window == self.window) ? XPillRect(pill, self) : _from;
+    BOOL back = pill.window == self.window;
+    CGRect to = back ? XPillRect(pill, self) : _from;
     CGFloat r = to.size.height / 2;
     UIView *shape = _shape, *content = _content, *snap = _snap;
     CGRect cur = shape.layer.presentationLayer ? shape.layer.presentationLayer.frame : shape.frame;
     shape.transform = CGAffineTransformIdentity; shape.frame = cur;
-    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.92, 0.92); } completion:nil];
-    [UIView animateWithDuration:0.5 delay:0.02 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+    // contents go first, then the island shrinks straight back to the pill's normal size
+    [UIView animateWithDuration:0.14 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.94, 0.94); } completion:nil];
+    [UIView animateWithDuration:0.55 delay:0.03 usingSpringWithDamping:0.92 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
         shape.frame = to;
         shape.layer.cornerRadius = r;
         content.center = CGPointMake(to.size.width / 2, to.size.height / 2);
         self.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
-    } completion:^(__unused BOOL f) {
-        pill.alpha = 1;
-        [UIView animateWithDuration:0.12 animations:^{ shape.alpha = 0; } completion:^(__unused BOOL d) { [self removeFromSuperview]; }];
-        if (pill) {   // the pill settles with a small squish, like the island landing
-            CASpringAnimation *a = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
-            a.additive = YES; a.fromValue = @0.05; a.toValue = @0; a.stiffness = 320; a.damping = 11; a.duration = a.settlingDuration;
-            [pill.layer addAnimation:a forKey:@"mp.absorb"];
-        }
-    }];
-    [UIView animateWithDuration:0.22 delay:0.2 options:0 animations:^{ snap.alpha = 1; } completion:nil];
+    } completion:nil];
+    // the pill's own look fades back in as the island gets small...
+    [UIView animateWithDuration:0.24 delay:0.16 options:UIViewAnimationOptionCurveEaseInOut animations:^{ snap.alpha = 1; } completion:nil];
+    // ...and right as it lands, the island hands over to the real pill (no pop)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.38 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseInOut | UIViewAnimationOptionBeginFromCurrentState animations:^{
+            pill.alpha = 1; shape.alpha = 0;
+        } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
+    });
     // safety: the pill always comes back
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (pill.alpha < 0.01) pill.alpha = 1; });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (pill.alpha < 0.01) pill.alpha = 1; if (self.superview) [self removeFromSuperview]; });
 }
 @end
 

@@ -1,4 +1,5 @@
-// MusicPill 1.2.84 - made by nano
+// MusicPill 1.2.85 - made by nano
+// 1.2.85: island closes smoothly back to the pill, scrolling Insights no longer shrinks the pill, Sleep Timer morphs out of the island
 // 1.2.84: pill no longer grows after landscape; landscape uses plain icons, timed lyrics on the right with controls kept, top buttons hide with Insights; swipe up grows the pill into Insights like the Dynamic Island
 // 1.2.83: landscape v2 - Music really turns (home bar along the bottom, no status bar), lyrics button, glass control capsule, normal AirPlay icon, still background with Increase Contrast
 // 1.2.82: landscape player (turn the phone: cover left, glass controls right, colors from the cover, Insights in two columns), smaller pill on Library
@@ -1432,7 +1433,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.84 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.85 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2771,6 +2772,8 @@ static void AvatarEval(void);
     if (!tb || self.window != tb.window) return;
     UIViewController *root = self.window.rootViewController;
     if (PresentedPlayer(root) && !PresentedPlayer(root).isBeingDismissed) return; // full player
+    // our own panels (Insights, Sleep Timer, landscape) scroll without touching the pill or the tab bar
+    for (UIView *p = self.superview; p; p = p.superview) { NSString *n = NSStringFromClass(p.class); if ([n hasPrefix:@"MPIsland"] || [n hasPrefix:@"MPSheet"] || [n hasPrefix:@"MPLandscape"]) return; }
     PageScrolled(self, dy, offset.y);
 }
 %end
