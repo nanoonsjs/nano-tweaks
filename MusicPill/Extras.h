@@ -800,7 +800,7 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     CGFloat vy = [g velocityInView:self].y;
     if (g.state == UIGestureRecognizerStateEnded && (p > 0.28 || vy > 600)) { [self collapseWithVelocity:vy]; return; }
     // not far enough: back up
-    { CABasicAnimation *bc = [CABasicAnimation animationWithKeyPath:@"borderColor"]; bc.fromValue = (id)_shape.layer.borderColor; bc.toValue = (id)[UIColor colorWithWhite:1 alpha:0.16].CGColor; bc.duration = 0.3; [_shape.layer addAnimation:bc forKey:@"mp.border"]; }
+    { CABasicAnimation *bc = [CABasicAnimation animationWithKeyPath:@"borderColor"]; bc.fromValue = (__bridge id)_shape.layer.borderColor; bc.toValue = (__bridge id)[UIColor colorWithWhite:1 alpha:0.16].CGColor; bc.duration = 0.3; [_shape.layer addAnimation:bc forKey:@"mp.border"]; }
     UIViewPropertyAnimator *up = [[UIViewPropertyAnimator alloc] initWithDuration:0.5 timingParameters:[[UISpringTimingParameters alloc] initWithDampingRatio:0.84 initialVelocity:CGVectorMake(0, MIN(3, fabs(vy) / 800))]];
     [up addAnimations:^{ [self morphTo:self->_to progress:0]; }];
     [up addCompletion:^(__unused UIViewAnimatingPosition pos) { self->_content.layer.shouldRasterize = NO; }];
@@ -893,7 +893,7 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     [shape bringSubviewToFront:_snap];
     content.layer.shouldRasterize = YES; content.layer.rasterizationScale = UIScreen.mainScreen.scale;
     { CABasicAnimation *bc = [CABasicAnimation animationWithKeyPath:@"borderColor"];
-      bc.fromValue = (id)(((CALayer *)shape.layer.presentationLayer).borderColor ?: shape.layer.borderColor); bc.toValue = (id)[UIColor colorWithWhite:1 alpha:0].CGColor; bc.duration = 0.18;
+      bc.fromValue = (__bridge id)(((CALayer *)shape.layer.presentationLayer).borderColor ?: shape.layer.borderColor); bc.toValue = (__bridge id)[UIColor colorWithWhite:1 alpha:0].CGColor; bc.duration = 0.18;
       shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0].CGColor; [shape.layer addAnimation:bc forKey:@"mp.border"]; }
     // how far along the close already is (a pull-down hands over mid-way)
     CGFloat span = MAX(1, CGRectGetMinY(to) - CGRectGetMinY(_to));
