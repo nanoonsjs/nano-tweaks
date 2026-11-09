@@ -1,4 +1,5 @@
-// Messages26 1.3.5 - made by nano
+// Messages26 1.3.6 - made by nano
+// 1.3.6: Dynamic Island removed; contact expand works when the page is pushed or presented (own window, no flash)
 // 1.3.5: viewer buttons read by their action (photos are photos), no reply / reactions there, faster FaceTime panel, top-of-screen Dynamic Island, springy settings sheet, contact page grows out of the photo
 // 1.3.4: photos are photos (Live Photos too), strips behind the viewer bars hidden, reactions open the picker, FaceTime opens a glass panel, Dynamic Island in the Messages26 sheet
 // 1.3.3: viewer: photos never show video controls, no bottom background, Reply / reactions are real taps on Apple's buttons, reaction icon with a burst, no drag-to-seek on the video
@@ -132,7 +133,11 @@ static BOOL SlowDevice(void) {
 static BOOL gTouching = NO;
 static NSTimeInterval gTouchEnd = 0;
 static void (*origSendEvent)(id, SEL, UIEvent *);
+static NSString *gContactDebug = @"contact: -";
+static CFTimeInterval gTopTapAt;   // a tap near the top of a chat (the photo / name), M26Contact.h
+static void M26NoteTouch(UIEvent *e);
 static void SendEvent(UIApplication *self, SEL _cmd, UIEvent *e) {
+    @try { M26NoteTouch(e); } @catch (__unused id ex) {}
     if (e.type == UIEventTypeTouches) {
         BOOL down = NO;
         for (UITouch *t in e.allTouches) if (t.phase != UITouchPhaseEnded && t.phase != UITouchPhaseCancelled) { down = YES; break; }
@@ -4866,7 +4871,7 @@ static void M26TopIsland(UIView *from, NSString *title, NSString *icon, UIColor 
         }];
     });
 }
-static void M26SheetIsland(UIView *host, NSString *title, NSString *icon, UIColor *color, BOOL on) { M26TopIsland(host, title, icon, color, on); }
+static void M26SheetIsland(UIView *host, NSString *title, NSString *icon, UIColor *color, BOOL on) { (void)host; (void)title; (void)icon; (void)color; (void)on; }   // 1.3.6: island removed
 @interface M26SettingsVC : UITableViewController
 @end
 @implementation M26SettingsVC
@@ -5384,7 +5389,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.3.5 debug\n %@\n %@\n %@\n %@\n pans:%@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans];
+    l.text = [NSString stringWithFormat:@" Messages26 1.3.6 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

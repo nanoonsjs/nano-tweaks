@@ -212,7 +212,7 @@ static UIImageView *M26Sym(UIView *in, NSString *name, CGFloat pt, CGPoint c, UI
     if (old) [_screen insertSubview:old aboveSubview:nw];
     [UIView animateWithDuration:0.35 animations:^{ nw.alpha = 1; old.alpha = 0; } completion:^(__unused BOOL f) { [old removeFromSuperview]; }];
     // the real Dynamic Island at the top of the screen says what changed
-    M26TopIsland(self, n[0], n[1], on ? UIColor.systemBlueColor : UIColor.systemGrayColor, on);
+    (void)n;
     NSUInteger g = ++_gen;
     [self after:0.7 gen:g do:^{ [self loop:g]; }];
 }
@@ -327,7 +327,7 @@ static void M26PreviewLayout(UITableViewCell *self, SEL _cmd) {
         UILabel *t = [UILabel new]; t.tag = 0x4D323651; t.numberOfLines = 0;
         t.text = @"Live Preview"; t.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold]; t.textColor = UIColor.labelColor;
         UILabel *b = [UILabel new]; b.tag = 0x4D323652; b.numberOfLines = 0;
-        b.text = @"Your chat with Messages26. Flip a switch below and watch it change: the Dynamic Island tells you what's on.";
+        b.text = @"Your chat with Messages26. Flip a switch below and watch it change: it changes right away.";
         b.font = [UIFont systemFontOfSize:15]; b.textColor = UIColor.secondaryLabelColor;
         M26Phone *ph = [[M26Phone alloc] initWithFrame:CGRectMake(0, 0, 100, 206)]; ph.tag = 0x4D323650;
         [cv addSubview:t]; [cv addSubview:b]; [cv addSubview:ph];
