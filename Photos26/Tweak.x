@@ -1945,6 +1945,7 @@ static void InitOverlay(void) {
     if (objc_getClass("_PXCuratedLibraryZoomLevelSegmentedControl")) %init(SegCtl);
 }
 static void InitScrubber(void) { static BOOL done; if (done) return; done = YES; %init(Scrubber); }
+static void InitMain(void) { static BOOL done; if (done) return; done = YES; %init; }
 
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
@@ -1954,7 +1955,7 @@ static void InitScrubber(void) { static BOOL done; if (done) return; done = YES;
         LoadPrefs();
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
         if (!gMessagesPref) return;
-        %init;
+        InitMain();
         if (objc_getClass("PUScrubberView")) InitScrubber();
         dispatch_async(dispatch_get_main_queue(), ^{
             __block int tries = 0;
@@ -1968,7 +1969,7 @@ static void InitScrubber(void) { static BOOL done; if (done) return; done = YES;
     if (![bid isEqualToString:@"com.apple.mobileslideshow"]) return;
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
-    %init;
+    InitMain();
     // The grid's top buttons live outside the bars: check them a few times a second.
     dispatch_async(dispatch_get_main_queue(), ^{
         [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *tm) {
