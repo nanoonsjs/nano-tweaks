@@ -1,4 +1,5 @@
-// Messages26 1.3.3 - made by nano
+// Messages26 1.3.4 - made by nano
+// 1.3.4: photos are photos (Live Photos too), strips behind the viewer bars hidden, reactions open the picker, FaceTime opens a glass panel, Dynamic Island in the Messages26 sheet
 // 1.3.3: viewer: photos never show video controls, no bottom background, Reply / reactions are real taps on Apple's buttons, reaction icon with a burst, no drag-to-seek on the video
 // 1.3.2: settings: a live preview phone that plays the features and follows your switches, with a Dynamic Island that says what changed
 // 1.3.1: viewer: Reply works on videos, Apple's own tapback / reply icons, photos no longer show video controls, ... opens a glass panel (speed, loop); bigger audio bubbles, audio messages on the speaker
@@ -153,7 +154,9 @@ static void LockPreview(UIView *avatar, NSString *key);
 static BOOL gBigPfp = YES;
 static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
 static BOOL gViewerOn = YES;   // 1.3: iOS 26 photo / video viewer (MsgViewer.h)
-static BOOL gAudioBig = YES, gSpeakerOn = YES;   // 1.3.1: bigger audio bubbles, audio messages on the speaker (MsgAudio.h)
+static BOOL gAudioBig = YES, gSpeakerOn = YES;
+static NSString *gMVDebug = @"viewer: -", *gMVItems = @"", *gMVPans = @"";   // viewer debug (MsgViewer.h)
+static void M26FTInstall(UIButton *b);   // 1.3.1: bigger audio bubbles, audio messages on the speaker (MsgAudio.h)
 static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
     id v = file[key];
     if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM); if (cf) v = (__bridge_transfer id)cf; }
@@ -1290,7 +1293,8 @@ static void StyleOneNav(UINavigationBar *nb, NSMutableArray *found, BOOL chat) {
                     if ([x isKindOfClass:[UILabel class]]) { UIColor *c = IsDark(nb) ? UIColor.blackColor : UIColor.whiteColor; if (![((UILabel *)x).textColor isEqual:c]) ((UILabel *)x).textColor = c; }
                     [ls addObjectsFromArray:x.subviews]; }
             }
-            // (no FaceTime morph on tap anymore)
+            // FaceTime: Audio / Video open in one glass panel that grows out of the button
+            if (right && chat && [v isKindOfClass:[UIButton class]] && ((UIButton *)v).menu) M26FTInstall((UIButton *)v);
             if (right && gSearchOn && !chat) {
                 UIViewController *lv = SearchList();
                 if (lv && lv.navigationController.navigationBar == nb && lv.navigationController.topViewController == lv && v.tag != GEAR_TAG) {
@@ -4786,6 +4790,63 @@ static UIImage *IconTile(NSString *sym, UIColor *c) {
     cache[key] = img;
     return img;
 }
+// Settings sheet: a Dynamic Island at the top that grows to say what you just turned on or off
+static void M26SheetIsland(UIView *host, NSString *title, NSString *icon, UIColor *color, BOOL on) {
+    if (!host) return;
+    static const void *kIsl = &kIsl;
+    static const void *kGen = &kGen;
+    UIView *isl = objc_getAssociatedObject(host, kIsl);
+    CGFloat W = host.bounds.size.width;
+    CGRect small = CGRectMake(W / 2 - 50, 10, 100, 30), big = CGRectMake(14, 10, W - 28, 64);
+    if (!isl) {
+        isl = [[UIView alloc] initWithFrame:small];
+        isl.backgroundColor = UIColor.blackColor; isl.layer.cornerCurve = kCACornerCurveContinuous; isl.clipsToBounds = YES;
+        isl.layer.borderWidth = 0.6; isl.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
+        isl.userInteractionEnabled = NO;
+        objc_setAssociatedObject(host, kIsl, isl, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [host addSubview:isl];
+    for (UIView *v in [isl.subviews copy]) [v removeFromSuperview];
+    [isl.layer removeAllAnimations];
+    UIView *c = [[UIView alloc] initWithFrame:CGRectMake(0, 0, big.size.width, big.size.height)];
+    UIImageView *ic = [[UIImageView alloc] initWithImage:IconTile(icon, color)];
+    ic.frame = CGRectMake(14, 14, 36, 36); ic.layer.cornerRadius = 9; ic.clipsToBounds = YES; [c addSubview:ic];
+    UILabel *t = [UILabel new]; t.text = title; t.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; t.textColor = UIColor.whiteColor;
+    t.frame = CGRectMake(62, 12, big.size.width - 150, 22); [c addSubview:t];
+    UILabel *s = [UILabel new]; s.text = on ? @"Turned on" : @"Turned off"; s.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium]; s.textColor = [UIColor colorWithWhite:1 alpha:0.55];
+    s.frame = CGRectMake(62, 34, big.size.width - 150, 18); [c addSubview:s];
+    UILabel *pill = [UILabel new]; pill.text = on ? @"ON" : @"OFF"; pill.textAlignment = NSTextAlignmentCenter;
+    pill.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold]; pill.textColor = on ? UIColor.blackColor : UIColor.whiteColor;
+    pill.backgroundColor = on ? UIColor.systemGreenColor : [UIColor colorWithWhite:1 alpha:0.18];
+    pill.frame = CGRectMake(big.size.width - 70, 20, 56, 24); pill.layer.cornerRadius = 12; pill.clipsToBounds = YES; [c addSubview:pill];
+    c.alpha = 0; c.center = CGPointMake(isl.bounds.size.width / 2, isl.bounds.size.height / 2);
+    [isl addSubview:c];
+    isl.alpha = 1;
+    if (isl.bounds.size.width < 1) { isl.frame = small; }
+    isl.layer.cornerRadius = isl.bounds.size.height / 2;
+    [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.4 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        isl.frame = big; isl.layer.cornerRadius = 32;
+        c.center = CGPointMake(big.size.width / 2, big.size.height / 2);
+    } completion:nil];
+    [UIView animateWithDuration:0.25 delay:0.12 options:0 animations:^{ c.alpha = 1; } completion:nil];
+    CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    pop.values = @[@0.6, @1.18, @0.95, @1]; pop.keyTimes = @[@0, @0.4, @0.7, @1]; pop.duration = 0.5; pop.beginTime = CACurrentMediaTime() + 0.15;
+    [pill.layer addAnimation:pop forKey:@"pop"];
+    NSNumber *gen = @([objc_getAssociatedObject(isl, kGen) integerValue] + 1);
+    objc_setAssociatedObject(isl, kGen, gen, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIView *wi = isl;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIView *i = wi; if (!i || ![objc_getAssociatedObject(i, kGen) isEqual:gen]) return;
+        [UIView animateWithDuration:0.15 animations:^{ c.alpha = 0; }];
+        [UIView animateWithDuration:0.5 delay:0.05 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+            i.frame = small; i.layer.cornerRadius = 15;
+            c.center = CGPointMake(small.size.width / 2, small.size.height / 2);
+        } completion:^(__unused BOOL f) {
+            if (![objc_getAssociatedObject(i, kGen) isEqual:gen]) return;
+            [UIView animateWithDuration:0.25 animations:^{ i.alpha = 0; i.transform = CGAffineTransformMakeScale(0.6, 0.6); } completion:^(__unused BOOL d) { i.transform = CGAffineTransformIdentity; if ([objc_getAssociatedObject(i, kGen) isEqual:gen]) [i removeFromSuperview]; }];
+        }];
+    });
+}
 @interface M26SettingsVC : UITableViewController
 @end
 @implementation M26SettingsVC
@@ -4934,8 +4995,10 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     return c;
 }
 - (void)toggle:(UISwitch *)sw {
-    [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     SetOpt(FeatRows()[sw.tag - 1][0], sw.on);
+    NSArray *row = FeatRows()[sw.tag - 1];
+    M26SheetIsland(self.navigationController.view ?: self.view, row[1], row[2], row[3], sw.on);
     [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:sw.tag] withRowAnimation:UITableViewRowAnimationFade];
 }
 - (void)reactSound:(UISwitch *)sw { [[NSUserDefaults standardUserDefaults] setBool:sw.on forKey:@"m26.reactSound"]; }
@@ -5274,7 +5337,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.1 debug\n %@\n %@\n %@", gDebug, gNavDebug, gSearchDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.3.4 debug\n %@\n %@\n %@\n %@\n pans:%@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

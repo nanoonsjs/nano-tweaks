@@ -105,7 +105,8 @@ static double MVDur(AVPlayer *p) {
     d = p.currentItem.asset.duration;
     return (CMTIME_IS_NUMERIC(d) && CMTimeGetSeconds(d) > 0) ? CMTimeGetSeconds(d) : 0;
 }
-static BOOL gMVAnyPlayerLayer;   // Quick Look plays videos right here (so no player in the middle = not a video)
+static BOOL gMVAnyPlayerLayer;
+   // Quick Look plays videos right here (so no player in the middle = not a video)
 static AVPlayer *MVPlayerIn(UIView *root) {
     if (!root) return nil;
     gMVAnyPlayerLayer = NO;
@@ -118,6 +119,7 @@ static AVPlayer *MVPlayerIn(UIView *root) {
             AVPlayer *p = ((AVPlayerLayer *)l).player;
             BOOL seen = YES;
             for (CALayer *u = l.superlayer; u && u != root.layer; u = u.superlayer) if (u.hidden || u.opacity < 0.01) { seen = NO; break; }
+            for (CALayer *u = l; u && seen; u = u.superlayer) { id d = u.delegate; if ([d isKindOfClass:[UIView class]] && [NSStringFromClass([d class]) rangeOfString:@"LivePhoto"].location != NSNotFound) seen = NO; }
             if (!seen || !p.currentItem) continue;
             CGRect f = [l convertRect:l.bounds toLayer:root.layer];
             CGPoint mid = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
@@ -307,7 +309,34 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     UIViewController *pres = q.navigationController ?: q;
     [pres dismissViewControllerAnimated:YES completion:nil];
 }
-- (void)doTap { [self haptic]; MVForward(_iTap, self.tb ?: (UIView *)self.nb); }
+- (void)doTap {
+    [self reactBurst];
+    UIBarButtonItem *it = _iTap; if (!it) return;
+    UIView *v = it.customView; if (!v) { @try { v = [it valueForKey:@"view"]; } @catch (__unused id e) {} }
+    UIControl *ctl = nil;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:v ?: [UIView new]];
+    while (st.count && !ctl) { UIView *x = st.firstObject; [st removeObjectAtIndex:0]; if ([x isKindOfClass:[UIControl class]]) ctl = (UIControl *)x; [st addObjectsFromArray:x.subviews]; }
+    // 1. a menu (the reaction picker): open it right where our button is
+    if (@available(iOS 14.0, *)) {
+        UIContextMenuInteraction *mi = ctl.contextMenuInteraction;
+        if (!mi) for (id<UIInteraction> x in (ctl ?: v).interactions) if ([x isKindOfClass:[UIContextMenuInteraction class]]) mi = (UIContextMenuInteraction *)x;
+        SEL pm = NSSelectorFromString(@"_presentMenuAtLocation:");
+        if ((it.menu || mi) && mi && [mi respondsToSelector:pm]) {
+            CGPoint p = [self convertPoint:_tap.center toView:mi.view];
+            ((void (*)(id, SEL, CGPoint))objc_msgSend)(mi, pm, p);
+            return;
+        }
+        id pa = it.primaryAction; SEL ps = NSSelectorFromString(@"performWithSender:target:");
+        if (pa && [pa respondsToSelector:ps]) { ((void (*)(id, SEL, id, id))objc_msgSend)(pa, ps, ctl ?: it, nil); return; }
+    }
+    // 2. its action, sent from its own button (some actions look at where the sender is)
+    if (it.action) {
+        id target = it.target;
+        if (!target) for (UIResponder *r = self.tb; r; r = r.nextResponder) if ([r respondsToSelector:it.action]) { target = r; break; }
+        if (target) { [[UIApplication sharedApplication] sendAction:it.action to:target from:(ctl ?: (id)it) forEvent:nil]; return; }
+    }
+    [ctl sendActionsForControlEvents:UIControlEventTouchUpInside];
+}
 - (void)doReply { [self haptic]; MVForward(_iReply, self.tb ?: (UIView *)self.nb); }
 - (void)doShare { [self haptic]; MVForward(_iShare, self.tb ?: (UIView *)self.nb); }
 - (void)doSave {
@@ -371,13 +400,20 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
 - (void)scan {
     UINavigationBar *nb = self.nb; UIToolbar *tb = self.tb;
     _iShare = _iPlay = _iReply = _iTap = _iDone = nil;
+    NSMutableArray *dbg = [NSMutableArray array];
     for (UIBarButtonItem *it in tb.items) {
         NSString *k = MVKind(it);
+        if (![k isEqualToString:@"space"]) {
+            UIView *iv = nil; @try { iv = [it valueForKey:@"view"]; } @catch (__unused id e) {}
+            [dbg addObject:[NSString stringWithFormat:@"%@(%@%@%@%@)", k, it.action ? NSStringFromSelector(it.action) : @"-", it.target ? @"+t" : @"", it.menu ? @" menu" : @"", it.primaryAction ? @" pa" : @""]];
+            (void)iv;
+        }
         if ([k isEqualToString:@"share"]) _iShare = it;
         else if ([k isEqualToString:@"play"]) _iPlay = it;
         else if ([k isEqualToString:@"reply"]) _iReply = it;
         else if ([k isEqualToString:@"tapback"] && !_iTap) _iTap = it;
     }
+    gMVItems = [dbg componentsJoinedByString:@" "];
     UINavigationItem *top = nb.topItem;
     for (UIBarButtonItem *it in [(top.rightBarButtonItems ?: @[]) arrayByAddingObjectsFromArray:top.leftBarButtonItems ?: @[]]) {
         NSString *k = MVKind(it);
@@ -391,7 +427,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     // Apple's buttons that aren't ours (play, spaces) take no touches; reply / tapback / share are moved under ours
     for (UIBarButtonItem *it in tb.items) {
         UIView *v = nil; @try { v = [it valueForKey:@"view"]; } @catch (__unused id e) {}
-        if ([v isKindOfClass:[UIView class]] && it != _iReply && it != _iTap && it != _iShare) v.userInteractionEnabled = NO;
+        if ([v isKindOfClass:[UIView class]] && it != _iReply && it != _iShare) v.userInteractionEnabled = NO;
     }
     UIView *root = self.superview;
     CGFloat W = root.bounds.size.width;
@@ -414,12 +450,16 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
         [st addObjectsFromArray:v.subviews];
     }
     _photo = photo;
+    [self hideStrips:root];
     [self killScrubPans:root];
     _player = MVPlayerIn(root);
     // a video only when Apple shows its play button for this item (photos have none), or a player is in the middle
     UIView *pv = nil; @try { pv = [_iPlay valueForKey:@"view"]; } @catch (__unused id e) {}
     BOOL playShown = _iPlay && _iPlay.enabled && (!pv || (pv.window && !pv.hidden && pv.alpha > 0.01 && pv.bounds.size.width > 2));
-    _video = _player != nil || (playShown && !gMVAnyPlayerLayer);
+    // Quick Look's bottom bar has a play button only for videos (photos, and Live Photos, don't)
+    (void)playShown;
+    _video = _iPlay != nil;
+    gMVDebug = [NSString stringWithFormat:@"viewer: video=%d player=%d layers=%d items=%@", _video, _player != nil, gMVAnyPlayerLayer, gMVItems];
     if (!_video) _player = nil;
     // Apple's own icons for tapback and reply
     for (NSArray *pair in @[@[_reply, _iReply ?: (id)NSNull.null]]) {
@@ -431,6 +471,22 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
             if (t.isSymbolImage) t = [t imageByApplyingSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]];
             [b setImage:t forState:UIControlStateNormal];
         }
+    }
+}
+- (void)hideStrips:(UIView *)root {
+    CGFloat W = root.bounds.size.width, H = root.bounds.size.height;
+    NSMutableArray *st = [NSMutableArray arrayWithObject:root ?: [UIView new]]; int guard = 0;
+    while (st.count && guard++ < 3000) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (v == self || v.hidden) continue;
+        CGRect r = [v convertRect:v.bounds toView:root];
+        BOOL strip = r.size.width >= W - 2 && r.size.height >= 40 && r.size.height <= 160 && (CGRectGetMaxY(r) >= H - 2 || CGRectGetMinY(r) <= 2);
+        BOOL looks = [v isKindOfClass:[UIVisualEffectView class]] || [NSStringFromClass(v.class) rangeOfString:@"Background"].location != NSNotFound ||
+                     [NSStringFromClass(v.class) rangeOfString:@"Backdrop"].location != NSNotFound || [NSStringFromClass(v.class) rangeOfString:@"Shadow"].location != NSNotFound ||
+                     (v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) > 0.05 && v.subviews.count == 0);
+        if (strip && looks) { MVMask(v); continue; }
+        if (strip && v.backgroundColor && CGColorGetAlpha(v.backgroundColor.CGColor) > 0.05) v.backgroundColor = UIColor.clearColor;
+        [st addObjectsFromArray:v.subviews];
     }
 }
 // Quick Look's drag-on-the-video to rewind / fast-forward: off (swiping between items stays)
@@ -446,7 +502,12 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
             @try { d = [[g valueForKey:@"_targets"] description] ?: @""; } @catch (__unused id e) {}
             d = [d stringByAppendingString:NSStringFromClass(g.class)];
             NSString *l = d.lowercaseString;
-            if ([l containsString:@"scrub"] || [l containsString:@"seek"] || [l containsString:@"skim"]) g.enabled = NO;
+            NSString *vn = NSStringFromClass(v.class).lowercaseString;
+            BOOL media = [vn containsString:@"video"] || [vn containsString:@"media"] || [vn containsString:@"player"] || [vn containsString:@"movie"] || [vn containsString:@"avplayer"];
+            if ([l containsString:@"scrub"] || [l containsString:@"seek"] || [l containsString:@"skim"] || [l containsString:@"timepan"] || (media && ![l containsString:@"dismiss"] && ![l containsString:@"transition"])) {
+                g.enabled = NO;
+                gMVPans = [gMVPans stringByAppendingFormat:@" off:%@", NSStringFromClass(v.class)];
+            }
         }
         [st addObjectsFromArray:v.subviews];
     }
@@ -454,7 +515,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
 // Apple's own reply / tapback / share buttons (invisible) sit right under ours, so a tap is a real tap on them
 static const void *kMVOurs = &kMVOurs;
 - (void)alignApple {
-    for (NSArray *pair in @[@[_iReply ?: (id)NSNull.null, _reply], @[_iTap ?: (id)NSNull.null, _tap], @[_iShare ?: (id)NSNull.null, _share]]) {
+    for (NSArray *pair in @[@[_iReply ?: (id)NSNull.null, _reply], @[_iShare ?: (id)NSNull.null, _share]]) {
         UIBarButtonItem *it = pair[0] == NSNull.null ? nil : pair[0]; UIButton *ours = pair[1];
         UIView *v = nil; @try { v = [it valueForKey:@"view"]; } @catch (__unused id e) {}
         if (![v isKindOfClass:[UIView class]] || !v.superview || ours.hidden || !self.tb.window) { ours.userInteractionEnabled = YES; continue; }
@@ -485,6 +546,7 @@ static const void *kMVOurs = &kMVOurs;
 }
 // the reaction button: a wiggle and a few reactions float up out of it
 - (void)reactBurst {
+    static CFTimeInterval last; if (CACurrentMediaTime() - last < 0.4) return; last = CACurrentMediaTime();
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     CAKeyframeAnimation *sc = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
     sc.values = @[@1, @1.35, @0.88, @1.08, @1]; sc.keyTimes = @[@0, @0.25, @0.5, @0.75, @1]; sc.duration = 0.55;
@@ -671,4 +733,114 @@ static void HookViewer(void) {
     done = YES;
     MSHookMessageEx(q, @selector(viewDidLayoutSubviews), (IMP)QLLayout, (IMP *)&origQLLayout);
     MSHookMessageEx(q, @selector(viewDidAppear:), (IMP)QLAppear, (IMP *)&origQLAppear);
+}
+
+
+#pragma mark - FaceTime: one glass panel that grows out of the button (Audio / Video in the same place)
+
+@interface M26FTPanel : NSObject
++ (instancetype)shared;
+- (void)open:(UIButton *)b;
+@end
+@implementation M26FTPanel {
+    UIView *_catcher, *_panel; UIVisualEffectView *_glass;
+    __weak UIButton *_btn; NSArray<UIAction *> *_acts;
+    CGRect _from;
+}
+static const void *kM26FTMenu = &kM26FTMenu;
++ (instancetype)shared { static M26FTPanel *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [M26FTPanel new]; }); return s; }
+static void M26FTFlatten(UIMenu *m, NSMutableArray *out) {
+    for (UIMenuElement *e in m.children) {
+        if ([e isKindOfClass:[UIMenu class]]) M26FTFlatten((UIMenu *)e, out);
+        else if ([e isKindOfClass:[UIAction class]]) [out addObject:e];
+    }
+}
+- (void)open:(UIButton *)b {
+    if (_panel) { [self close]; return; }
+    UIMenu *m = objc_getAssociatedObject(b, kM26FTMenu);
+    NSMutableArray *acts = [NSMutableArray array]; M26FTFlatten(m, acts);
+    if (!acts.count || !b.window) return;
+    _btn = b; _acts = acts;
+    UIWindow *w = b.window;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    UIView *g0 = objc_getAssociatedObject(b, &kGlassKey);
+    _from = g0.window ? [g0 convertRect:g0.bounds toView:w] : [b convertRect:b.bounds toView:w];
+    CGFloat RH = 52, PW = 236, PH = acts.count * RH + 12;
+    CGRect to = CGRectMake(CGRectGetMaxX(_from) - PW, CGRectGetMinY(_from), PW, PH);
+    _catcher = [[UIView alloc] initWithFrame:w.bounds];
+    [_catcher addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(close)]];
+    [w addSubview:_catcher];
+    _glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial]];
+    _glass.frame = _from; _glass.clipsToBounds = YES; _glass.layer.cornerCurve = kCACornerCurveContinuous; _glass.layer.cornerRadius = _from.size.height / 2;
+    _glass.layer.borderWidth = 0.8; _glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.3].CGColor;
+    [w addSubview:_glass];
+    _panel = [[UIView alloc] initWithFrame:_from]; _panel.clipsToBounds = YES; _panel.alpha = 0;
+    [w addSubview:_panel];
+    UIView *rows = [[UIView alloc] initWithFrame:CGRectMake(PW - _from.size.width - (PW - _from.size.width), 0, PW, PH)];
+    rows.frame = CGRectMake(-(PW - _from.size.width), 0, PW, PH);
+    rows.tag = 7;
+    for (NSUInteger i = 0; i < acts.count; i++) {
+        UIAction *a = acts[i];
+        UIButton *r = [UIButton buttonWithType:UIButtonTypeCustom];
+        r.frame = CGRectMake(6, 6 + i * RH, PW - 12, RH); r.tag = 100 + i;
+        r.layer.cornerRadius = 20; r.layer.cornerCurve = kCACornerCurveContinuous;
+        [r addTarget:self action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
+        [r addTarget:self action:@selector(down:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
+        [r addTarget:self action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchDragExit];
+        UIImageView *ic = [[UIImageView alloc] initWithImage:[a.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
+        ic.tintColor = UIColor.labelColor; ic.contentMode = UIViewContentModeCenter; ic.frame = CGRectMake(12, 0, 30, RH); ic.userInteractionEnabled = NO;
+        [r addSubview:ic];
+        UILabel *t = [UILabel new]; t.text = a.title; t.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium]; t.textColor = UIColor.labelColor;
+        t.frame = CGRectMake(50, 0, PW - 74, RH); t.userInteractionEnabled = NO; [r addSubview:t];
+        [rows addSubview:r];
+        r.alpha = 0; r.transform = CGAffineTransformMakeTranslation(0, -8);
+        [UIView animateWithDuration:0.45 delay:0.12 + i * 0.05 usingSpringWithDamping:0.75 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ r.alpha = 1; r.transform = CGAffineTransformIdentity; } completion:nil];
+    }
+    [_panel addSubview:rows];
+    [UIView animateWithDuration:0.15 animations:^{ b.alpha = 0; }];
+    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        self->_glass.frame = to; self->_glass.layer.cornerRadius = 26;
+        self->_panel.frame = to;
+        rows.frame = CGRectMake(0, 0, PW, PH);
+    } completion:nil];
+    [UIView animateWithDuration:0.2 delay:0.08 options:0 animations:^{ self->_panel.alpha = 1; } completion:nil];
+}
+- (void)down:(UIButton *)r { [UIView animateWithDuration:0.12 animations:^{ r.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.18]; r.transform = CGAffineTransformMakeScale(0.97, 0.97); }]; }
+- (void)up:(UIButton *)r { [UIView animateWithDuration:0.3 animations:^{ r.backgroundColor = UIColor.clearColor; r.transform = CGAffineTransformIdentity; }]; }
+- (void)pick:(UIButton *)r {
+    [self up:r];
+    [[UISelectionFeedbackGenerator new] selectionChanged];
+    NSUInteger i = r.tag - 100;
+    UIAction *a = i < _acts.count ? _acts[i] : nil;
+    UIButton *b = _btn;
+    [self close];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        SEL ps = NSSelectorFromString(@"performWithSender:target:");
+        if (a && [a respondsToSelector:ps]) ((void (*)(id, SEL, id, id))objc_msgSend)(a, ps, b, nil);
+    });
+}
+- (void)close {
+    UIView *p = _panel, *c = _catcher; UIVisualEffectView *g = _glass; UIButton *b = _btn;
+    _panel = nil; _catcher = nil; _glass = nil;
+    if (!p) return;
+    [c removeFromSuperview];
+    CGRect to = _from;
+    UIView *rows = [p viewWithTag:7];
+    [UIView animateWithDuration:0.12 animations:^{ p.alpha = 0; }];
+    [UIView animateWithDuration:0.42 delay:0.02 usingSpringWithDamping:1 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        g.frame = to; g.layer.cornerRadius = to.size.height / 2; p.frame = to;
+        rows.frame = CGRectMake(-(rows.bounds.size.width - to.size.width), 0, rows.bounds.size.width, rows.bounds.size.height);
+    } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.14 animations:^{ g.alpha = 0; b.alpha = 1; } completion:^(__unused BOOL d) { [g removeFromSuperview]; [p removeFromSuperview]; }];
+    }];
+}
+@end
+static void M26FTInstall(UIButton *b) {
+    if (!b || objc_getAssociatedObject(b, kM26FTMenu)) return;
+    UIMenu *m = b.menu;
+    if (!m) return;
+    objc_setAssociatedObject(b, kM26FTMenu, m, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    b.showsMenuAsPrimaryAction = NO;
+    b.menu = nil;
+    [b addTarget:[M26FTPanel shared] action:@selector(open:) forControlEvents:UIControlEventTouchUpInside];
 }
