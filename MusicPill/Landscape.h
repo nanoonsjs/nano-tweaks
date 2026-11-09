@@ -336,6 +336,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
 + (instancetype)shared;
 - (void)showIn:(UIWindow *)w turn:(UIDeviceOrientation)o;
 - (void)hide;
+- (void)hideNow;
 @end
 @implementation MPLandscape {
     UIView *_bg, *_tint, *_root, *_insights, *_artHost;
@@ -346,6 +347,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     UIButton *_prev, *_play, *_next, *_close, *_stats, *_lyricsBtn;
     MPVolumeView *_vol;
     int _volLevel; BOOL _volFull, _volMute, _volHooked;
+    UIView *_mini, *_miniFill;
     AVRoutePickerView *_route;
     MPLyricsView *_lyrics;
     NSString *_lyricsSong;
@@ -376,6 +378,13 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     _root = [UIView new]; [self addSubview:_root];
 
     _artHost = [UIView new];
+    // the cover is a control too: tap = play / pause, swipe = change song (used by "Big Cover With Lyrics")
+    UITapGestureRecognizer *at = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(artTap)];
+    [_artHost addGestureRecognizer:at];
+    for (NSNumber *d in @[@(UISwipeGestureRecognizerDirectionLeft), @(UISwipeGestureRecognizerDirectionRight)]) {
+        UISwipeGestureRecognizer *sw = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(artSwipe:)];
+        sw.direction = d.unsignedIntegerValue; [_artHost addGestureRecognizer:sw];
+    }
     _artHost.layer.shadowColor = UIColor.blackColor.CGColor; _artHost.layer.shadowOpacity = 0.45; _artHost.layer.shadowRadius = 24; _artHost.layer.shadowOffset = CGSizeMake(0, 14);
     _art = [UIImageView new]; _art.contentMode = UIViewContentModeScaleAspectFill; _art.clipsToBounds = YES;
     _art.layer.cornerCurve = kCACornerCurveContinuous; _art.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
@@ -387,6 +396,8 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     _artist = XLabel(@"", 21, UIFontWeightMedium, [UIColor colorWithWhite:1 alpha:0.7]); _artist.adjustsFontSizeToFitWidth = NO; _artist.lineBreakMode = NSLineBreakByTruncatingTail; [_root addSubview:_artist];
     _album = XLabel(@"", 15, UIFontWeightRegular, [UIColor colorWithWhite:1 alpha:0.5]); _album.adjustsFontSizeToFitWidth = NO; _album.lineBreakMode = NSLineBreakByTruncatingTail; [_root addSubview:_album];
     _scrub = [MPScrub new]; [_root addSubview:_scrub];
+    _mini = [UIView new]; _mini.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2]; _mini.layer.cornerRadius = 2; _mini.clipsToBounds = YES; _mini.alpha = 0;
+    _miniFill = [UIView new]; _miniFill.backgroundColor = [UIColor colorWithWhite:1 alpha:0.85]; [_mini addSubview:_miniFill]; [_root addSubview:_mini];
     __weak MPLandscape *ws = self;
     _scrub.moving = ^(double v) { MPLandscape *s = ws; s->_el.text = XTime(v * gXDuration); s->_rem.text = [@"-" stringByAppendingString:XTime(gXDuration * (1 - v))]; };
     _scrub.done = ^(double v) { if (gXDuration > 0) { XSeek(v * gXDuration); gXElapsed = v * gXDuration; gXStamp = CFAbsoluteTimeGetCurrent(); } };
@@ -448,6 +459,35 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
         CAKeyframeAnimation *s = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; s.values = @[@1, @1.2, @1]; s.duration = 0.35;
         [l addAnimation:t forKey:@"hop.t"]; [l addAnimation:s forKey:@"hop.s"];
     }
+}
+- (BOOL)bigCover { return gLSArtLyricsPref && _showLyrics; }
+- (void)artTap {
+    if (![self bigCover]) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    XSend(2); gXPlaying = !gXPlaying;
+    // a play / pause sign blooms on the cover
+    UIImageView *sign = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:gXPlaying ? @"play.fill" : @"pause.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:54 weight:UIImageSymbolWeightBold]]];
+    sign.tintColor = UIColor.whiteColor; sign.contentMode = UIViewContentModeCenter;
+    sign.layer.shadowColor = UIColor.blackColor.CGColor; sign.layer.shadowOpacity = 0.4; sign.layer.shadowRadius = 12;
+    sign.frame = _artHost.bounds; sign.alpha = 0; sign.transform = CGAffineTransformMakeScale(0.6, 0.6);
+    [_artHost addSubview:sign];
+    [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{ sign.alpha = 1; sign.transform = CGAffineTransformIdentity; } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.35 delay:0.3 options:0 animations:^{ sign.alpha = 0; sign.transform = CGAffineTransformMakeScale(1.25, 1.25); } completion:^(__unused BOOL d) { [sign removeFromSuperview]; }];
+    }];
+    [self refresh];
+}
+- (void)artSwipe:(UISwipeGestureRecognizer *)g {
+    if (![self bigCover]) return;
+    BOOL next = g.direction == UISwipeGestureRecognizerDirectionLeft;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    XSend(next ? 4 : 5);
+    // the cover flicks out the way you swiped and springs back in with the new one
+    CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+    CGFloat d = next ? -60 : 60; k.values = @[@0, @(d), @(-d * 0.15), @0]; k.keyTimes = @[@0, @0.35, @0.7, @1]; k.duration = 0.55; k.additive = YES;
+    CAKeyframeAnimation *r = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.y"];
+    r.values = @[@0, @(next ? 0.35 : -0.35), @0]; r.duration = 0.55; r.additive = YES;
+    [_artHost.layer addAnimation:k forKey:@"swipe"]; [_artHost.layer addAnimation:r forKey:@"swipeR"];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ XPoll(); });
 }
 - (UISlider *)volSlider { for (UIView *v in _vol.subviews) if ([v isKindOfClass:[UISlider class]]) return (UISlider *)v; return nil; }
 // the speaker icons follow the volume: more waves as it gets louder, a pulse at full, a slash and a shake at zero
@@ -535,24 +575,24 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
         [self setSym:_stats name:@"chart.bar.fill" pt:18]; _stats.tintColor = UIColor.whiteColor;
         [UIView animateWithDuration:0.3 animations:^{
             v.alpha = 0; v.transform = CGAffineTransformMakeScale(0.96, 0.96); self->_root.alpha = 1;
-            self->_close.alpha = 1; self->_lyricsBtn.alpha = 1;
+            self->_close.alpha = 1; self->_lyricsBtn.alpha = 1; self->_stats.alpha = 1; self->_route.alpha = 1;
         } completion:^(__unused BOOL f) { [v removeFromSuperview]; }];
-        _close.userInteractionEnabled = _lyricsBtn.userInteractionEnabled = YES;
+        _close.userInteractionEnabled = _lyricsBtn.userInteractionEnabled = _stats.userInteractionEnabled = _route.userInteractionEnabled = YES;
         return;
     }
     UIVisualEffectView *panel = XGlass(30);
     CGRect b = self.bounds; UIEdgeInsets sa = self.safeAreaInsets;
     CGFloat L = MAX(16, sa.left), R = MAX(16, sa.right);
-    panel.frame = CGRectMake(L, 12, b.size.width - L - R - 56, b.size.height - 12 - MAX(12, sa.bottom));
+    panel.frame = CGRectMake(L, 12, b.size.width - L - R, b.size.height - 12 - MAX(12, sa.bottom));
     [MPInsightsCtl buildIn:panel.contentView size:panel.bounds.size closeTarget:self action:@selector(toggleInsights)];
     [self insertSubview:panel belowSubview:_lyricsBtn];
     _insights = panel;
     _stats.tintColor = MusicPink();
-    _close.userInteractionEnabled = _lyricsBtn.userInteractionEnabled = NO;   // only Insights' own close shows
+    _close.userInteractionEnabled = _lyricsBtn.userInteractionEnabled = _stats.userInteractionEnabled = _route.userInteractionEnabled = NO;   // only Insights' own close shows
     panel.alpha = 0; panel.transform = CGAffineTransformMakeScale(0.94, 0.94);
     [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{
         panel.alpha = 1; panel.transform = CGAffineTransformIdentity; self->_root.alpha = 0;
-        self->_close.alpha = 0; self->_lyricsBtn.alpha = 0;
+        self->_close.alpha = 0; self->_lyricsBtn.alpha = 0; self->_stats.alpha = 0; self->_route.alpha = 0;
     } completion:nil];
 }
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self setNeedsLayout]; }
@@ -571,7 +611,21 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     _route.frame = CGRectMake(W - R - 118 - 20, 12, 40, 40);
 
     CGFloat x, cw, top;   // the column with the song, bar and controls
-    if (!ly) {
+    BOOL big = gLSArtLyricsPref && ly;
+    for (UIView *v in @[_title, _artist, _scrub, _el, _rem, _prev, _play, _next, _vol, _spkLo, _spkHi]) v.alpha = big ? 0 : 1;
+    if (!big) _album.alpha = ly ? 0 : 1; else _album.alpha = 0;
+    _artHost.userInteractionEnabled = big;
+    _mini.alpha = big ? 1 : 0;
+    if (big) {
+        CGFloat leftW = W * 0.5 - L;
+        CGFloat d = MIN(H - 64 - Bot, leftW - 10);
+        CGRect af = CGRectMake(L + (leftW - d) / 2, 50 + (H - 50 - Bot - d) / 2 - 6, d, d);
+        [self placeArt:af radius:20];
+        _mini.frame = CGRectMake(af.origin.x + 8, CGRectGetMaxY(af) + 12, d - 16, 4);
+        CGFloat lx = W * 0.5 + 10;
+        _lyrics.frame = CGRectMake(lx, 0, W - lx - R, H);
+        x = W * 0.5 + 16; cw = W - x - R; top = H;   // controls are hidden
+    } else if (!ly) {
         // cover on the left half, everything else on the right half
         CGFloat leftW = W * 0.5 - L;
         CGFloat d = MIN(H - 64 - Bot, leftW - 10);
@@ -601,6 +655,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
         CGFloat lx = x + cw + 34;
         _lyrics.frame = CGRectMake(lx, 0, W - lx - R, H);
     }
+    if (big) { [self placeBlobs:W h:H]; return; }
     _scrub.frame = CGRectMake(x, top, cw, 22);
     _el.frame = CGRectMake(x, top + 24, 80, 16);
     _rem.frame = CGRectMake(x + cw - 80, top + 24, 80, 16);
@@ -609,11 +664,14 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     _prev.center = CGPointMake(cx - gap, cy);
     _next.center = CGPointMake(cx + gap, cy);
     CGFloat vy = cy + (ly ? 58 : 66);
-    _spkLo.frame = CGRectMake(x - 2, vy - 10, 20, 20);
-    _spkHi.frame = CGRectMake(x + cw - 22, vy - 10, 24, 20);
-    _vol.frame = CGRectMake(x + 28, vy - 15, cw - 56, 30);
+    _spkLo.bounds = CGRectMake(0, 0, 24, 20); _spkLo.center = CGPointMake(x + 10, vy);
+    _spkHi.bounds = CGRectMake(0, 0, 26, 20); _spkHi.center = CGPointMake(x + cw - 10, vy);
+    _vol.frame = CGRectMake(x + 32, vy - 15, cw - 64, 30);
     if (!_volHooked) { UISlider *sl = [self volSlider]; if (sl) { _volHooked = YES; _volLevel = -1; [sl addTarget:self action:@selector(volChanged) forControlEvents:UIControlEventValueChanged]; [self volChanged]; } }
 
+    [self placeBlobs:W h:H];
+}
+- (void)placeBlobs:(CGFloat)W h:(CGFloat)H {
     NSArray *spots = @[[NSValue valueWithCGPoint:CGPointMake(W * 0.2, H * 0.3)], [NSValue valueWithCGPoint:CGPointMake(W * 0.78, H * 0.25)], [NSValue valueWithCGPoint:CGPointMake(W * 0.55, H * 0.9)]];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (NSUInteger i = 0; i < _blobs.count; i++) { CALayer *l = _blobs[i]; l.bounds = CGRectMake(0, 0, W * 1.1, W * 1.1); if (![l animationForKey:@"drift"]) l.position = [spots[i] CGPointValue]; }
@@ -677,6 +735,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
             [_play.imageView.layer addAnimation:k forKey:@"morph"];
         }
     }
+    if (_mini.alpha > 0) _miniFill.frame = CGRectMake(0, 0, _mini.bounds.size.width * (gXDuration > 0 ? MAX(0, MIN(1, e / gXDuration)) : 0), 4);
     // hardware volume buttons move the slider too
     if (_volHooked) [self volChanged];
     CGAffineTransform at = gXPlaying ? CGAffineTransformIdentity : CGAffineTransformMakeScale(0.9, 0.9);   // the cover shrinks a little while paused
@@ -728,6 +787,16 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     gLSActive = NO;
     [self hide];
     if (w) XRequestOrientationFwd(w, UIInterfaceOrientationMaskPortrait);
+}
+- (void)hideNow {
+    if (_timer) { dispatch_source_cancel(_timer); _timer = nil; }
+    if (_insights) { [_insights removeFromSuperview]; _insights = nil; }
+    _root.alpha = 1; _close.alpha = _lyricsBtn.alpha = _stats.alpha = _route.alpha = 1;
+    _close.userInteractionEnabled = _lyricsBtn.userInteractionEnabled = _stats.userInteractionEnabled = _route.userInteractionEnabled = YES;
+    _stats.tintColor = UIColor.whiteColor;
+    [self.layer removeAllAnimations];
+    [self removeFromSuperview];
+    self.transform = CGAffineTransformIdentity; self.alpha = 1;
 }
 - (void)hide {
     if (!self.superview) return;
@@ -875,6 +944,22 @@ static void LSPillBack(void) {
 static void StartLandscape(void) {
     [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
     [[NSNotificationCenter defaultCenter] addObserver:[MPOrient class] selector:@selector(changed:) name:UIDeviceOrientationDidChangeNotification object:nil];
+    // going Home: the landscape player goes away right then (it stayed stuck on top when you came back in portrait)
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) {
+        if (!gLSActive && ![MPLandscape shared].superview) return;
+        UIWindow *w = gLastTabBar.window ?: [MPLandscape shared].window;
+        gLSActive = NO;
+        [[MPLandscape shared] hideNow];
+        if (w) XRequestOrientation(w, UIInterfaceOrientationMaskPortrait);
+        LSPillBack();
+    }];
+    // coming back: if the phone is still sideways, it comes back up
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) {
+        if ([MPLandscape shared].superview && !gLSActive) [[MPLandscape shared] hideNow];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (UIDeviceOrientationIsLandscape(UIDevice.currentDevice.orientation)) [MPOrient changed:nil];
+        });
+    }];
 }
 
 // a smaller pill while you're on the Library tab

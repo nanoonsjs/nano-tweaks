@@ -1,4 +1,5 @@
-// MusicPill 1.3.7 - made by nano
+// MusicPill 1.3.8 - made by nano
+// 1.3.8: landscape: gone when you go Home (no stuck view), Insights hides AirPlay / Insights buttons, even volume row, "Big Cover With Lyrics" (tap cover = play / pause, swipe = change song)
 // 1.3.7: landscape: animated icons, reactive volume icons, lyrics centered, volume row centered, AirPlay up top, small volume knob
 // 1.3.6: no ... in Insights; hold to peek wins over Music opening the player; splash: comfortable size, follows the pill when it minimizes / expands, tap opens the player
 // 1.3.5: hold the pill to peek (cover, live lyric line, time), song change splash (switch), share card + Music's menu in Insights
@@ -414,7 +415,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 #define COLLAPSE_TAG 0x4D50434C
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
-static BOOL gPillHoldPref, gWavePref, gTapOpenPref = YES, gLandscapePref, gLibMiniPref, gSplashPref;
+static BOOL gPillHoldPref, gWavePref, gTapOpenPref = YES, gLandscapePref, gLibMiniPref, gSplashPref, gLSArtLyricsPref;
 static BOOL OnLibraryTab(void);   // read into the extras (Extras.h) below
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
@@ -542,6 +543,7 @@ static void LoadPrefs(void) {
     gSwipe  = PrefBool(file, @"swipe", YES);
     gPillHoldPref = PrefBool(file, @"pillhold", NO);
     gSplashPref = PrefBool(file, @"splash", NO);
+    gLSArtLyricsPref = PrefBool(file, @"lsartlyrics", NO);
     gWavePref = PrefBool(file, @"wave", NO);
     gTapOpenPref = PrefBool(file, @"tapopen", YES);
     gLandscapePref = PrefBool(file, @"landscape", NO);
@@ -1445,7 +1447,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.3.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.3.8 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
