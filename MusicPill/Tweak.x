@@ -1,4 +1,5 @@
-// MusicPill 1.4.1 - made by nano
+// MusicPill 1.4.2 - made by nano
+// 1.4.2: pill no longer changes size after leaving Music and coming back; new open/close morphs; pill settles in when you come back
 // 1.4.1: Smooth Lyrics in landscape: every frame, glide, karaoke fill, depth + soft focus, breathing ••• in breaks, ± timing nudge per song
 // 1.4: release (hold to peek, song splash, share card, landscape lyrics layouts, favorite, Up Next)
 // 1.3.9: landscape: swipe right = next / left = back (setting to reverse), Hide Home Bar setting, no double-tap favorite through it, Favorite star, Up Next next to lyrics
@@ -1192,10 +1193,22 @@ static CGAffineTransform PillTransform(UIView *m) {
 // our size back no matter what transform Music left on it. Closing the full
 // player leaves Music's own (non-identity) transform behind, which is why
 // 0.5.1 never shrank it again.
+static BOOL gPillAway;               // 1.4.2: Music is in the background: the bar is plain size, hands off
+static CFTimeInterval gPillSnapUntil;  // just came back: put the size on at once, no spring
 static void ApplyPillTransform(UIView *m, BOOL force) {
     // 1.2.84: never size the pill while Music turns: a turned bar with our scale on it got bigger every turn
     if (gLSActive || CACurrentMediaTime() < gLSSettle) return;
+    if (gPillAway) return;
     CGAffineTransform t = PillTransform(m);
+    if (CACurrentMediaTime() < gPillSnapUntil) {
+        if (!CGAffineTransformEqualToTransform(m.transform, t)) {
+            [m.layer removeAnimationForKey:@"transform"];
+            [CATransaction begin]; [CATransaction setDisableActions:YES]; m.transform = t; [CATransaction commit];
+        }
+        objc_setAssociatedObject(m, kApplied, [NSValue valueWithCGAffineTransform:t], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(m, kFight, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return;
+    }
     NSValue *last = objc_getAssociatedObject(m, kApplied);
     // Back-off: if we've had to force it more than 4 times in 2 seconds,
     // something else is fighting us. Stop forcing for 5 seconds so it can't flicker.
@@ -1455,7 +1468,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2290,6 +2303,64 @@ static void SetUnclipped(UIView *mini, UIView *root, BOOL on) {
     }
 }
 
+static CGFloat ScreenCorner(void) {
+    static CGFloat r = -1;
+    if (r < 0) { r = 44; @try { NSNumber *n = [UIScreen.mainScreen valueForKey:@"_displayCornerRadius"]; if ([n isKindOfClass:[NSNumber class]] && n.doubleValue > 1) r = n.doubleValue; } @catch (__unused id e) {} }
+    return r;
+}
+static UIColor *MainColorOf(UIImage *img);
+static UIColor *PillMorphTint(UIImage *art) {
+    UIColor *c = art ? MainColorOf(art) : nil;
+    CGFloat h = 0, sa = 0, b = 0, al = 1;
+    if (c && [c getHue:&h saturation:&sa brightness:&b alpha:&al]) return [UIColor colorWithHue:h saturation:MIN(sa, 0.75) brightness:MAX(0.14, MIN(b * 0.45, 0.32)) alpha:1];
+    return [UIColor colorWithWhite:0.1 alpha:1];
+}
+static void PillOpenMorph(UIView *pillView, UIView *snap, UIWindow *win) {
+    MPMiniPill *pill = (MPMiniPill *)pillView;
+    CGRect from = [pill convertRect:pill.bounds toView:win];
+    CGFloat W = win.bounds.size.width, H = win.bounds.size.height;
+    CGRect to = win.bounds;
+    UIView *wrap = [[UIView alloc] initWithFrame:from];
+    wrap.userInteractionEnabled = NO; wrap.clipsToBounds = YES;
+    wrap.layer.cornerRadius = from.size.height / 2; wrap.layer.cornerCurve = kCACornerCurveContinuous;
+    UIColor *tintC = PillMorphTint(pill.art.image);
+    wrap.backgroundColor = [tintC colorWithAlphaComponent:0];
+    // the pill's look, pinned to the top-left so it doesn't stretch; it fades and drifts up as the glass grows
+    snap.frame = (CGRect){CGPointZero, from.size};
+    snap.autoresizingMask = UIViewAutoresizingNone;
+    [wrap addSubview:snap];
+    [win addSubview:wrap];
+    // the cover flies on its own, above everything
+    UIImageView *art = nil;
+    if (pill.art.image && pill.art.window) {
+        art = [[UIImageView alloc] initWithImage:pill.art.image];
+        art.contentMode = UIViewContentModeScaleAspectFill; art.clipsToBounds = YES;
+        art.frame = [pill.art convertRect:pill.art.bounds toView:win];
+        art.layer.cornerRadius = pill.art.layer.cornerRadius > 0 ? pill.art.layer.cornerRadius : art.bounds.size.width / 2;
+        art.layer.cornerCurve = kCACornerCurveContinuous;
+        [win addSubview:art];
+        pill.art.alpha = 0;
+    }
+    CGFloat side = MIN(W - 60, H * 0.42), top = win.safeAreaInsets.top + MAX(48, H * 0.075);
+    CGRect artTo = CGRectMake((W - side) / 2, top, side, side);
+    UISpringTimingParameters *sp = [[UISpringTimingParameters alloc] initWithDampingRatio:0.86 initialVelocity:CGVectorMake(0, 0.4)];
+    UIViewPropertyAnimator *grow = [[UIViewPropertyAnimator alloc] initWithDuration:0.52 timingParameters:sp];
+    [grow addAnimations:^{
+        wrap.frame = to;
+        wrap.layer.cornerRadius = ScreenCorner();
+        wrap.backgroundColor = tintC;
+        snap.transform = CGAffineTransformMakeTranslation(0, -18);
+        art.frame = artTo; art.layer.cornerRadius = 14;
+    }];
+    [grow startAnimation];
+    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ snap.alpha = 0; } completion:nil];
+    // hand over to the real player once it's up underneath
+    [UIView animateWithDuration:0.2 delay:0.3 options:UIViewAnimationOptionCurveEaseInOut animations:^{ wrap.alpha = 0; art.alpha = 0; } completion:^(__unused BOOL d) {
+        [wrap removeFromSuperview]; [art removeFromSuperview]; pill.art.alpha = 1;
+    }];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+}
+
 // Our pill stands in for Music's bar in both states. Expanded, it sits exactly
 // where Music's (hidden) bar is; while the full player is up, Music's bar is back.
 static __weak UIView *gHiddenMini;
@@ -2309,35 +2380,12 @@ static void SyncPill(void) {
         // Full player opening: Music's bar stays hidden (no old-bar flash);
         // our pill fades away as a snapshot (fading the blur itself breaks it).
         if (gCollapsed) SetCollapsed(NO, NO);
-        // The player grows out of the pill: a copy of the pill swells up to
-        // full screen and melts away while the player comes up.
+        // 1.4.2: the pill becomes the player. Its glass stretches up to the full screen with the screen's
+        // own corner shape, tinted with the album's color, while the cover flies from the pill to where the
+        // big cover sits and the pill's text melts away. Then it hands over to the real player.
         UIWindow *win = tb.window;
         UIView *snap = pill.window ? [pill snapshotViewAfterScreenUpdates:NO] : nil;
-        if (snap && win) {
-            CGRect from = [pill convertRect:pill.bounds toView:win];
-            UIView *wrap = [[UIView alloc] initWithFrame:from];
-            wrap.userInteractionEnabled = NO;
-            wrap.clipsToBounds = YES;
-            wrap.layer.cornerRadius = from.size.height / 2;
-            wrap.layer.cornerCurve = kCACornerCurveContinuous;
-            snap.frame = wrap.bounds;
-            snap.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            [wrap addSubview:snap];
-            UIView *tint = [[UIView alloc] initWithFrame:wrap.bounds];
-            tint.backgroundColor = [UIColor colorWithWhite:0.1 alpha:1];
-            tint.alpha = 0;
-            tint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            [wrap addSubview:tint];
-            [win addSubview:wrap];
-            CGRect to = CGRectInset(win.bounds, 0, 0);
-            to.origin.y += 44; to.size.height -= 44;
-            [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0.3 options:0 animations:^{
-                wrap.frame = to;
-                wrap.layer.cornerRadius = 38;
-                tint.alpha = 1;
-            } completion:nil];
-            [UIView animateWithDuration:0.18 delay:0.22 options:0 animations:^{ wrap.alpha = 0; } completion:^(BOOL d) { [wrap removeFromSuperview]; }];
-        }
+        if (snap && win) PillOpenMorph(pill, snap, win);
         pill.hidden = YES;
         return;
     }
@@ -2368,7 +2416,9 @@ static void SyncPill(void) {
     BOOL cool = CACurrentMediaTime() < gPlayerCooldownUntil;
     if (mini.userInteractionEnabled == cool) mini.userInteractionEnabled = !cool;
     HideMini(mini, YES);
-    if (!gCollapsed && !pill.layer.animationKeys.count && !gLSActive && CACurrentMediaTime() >= gLSSettle) {
+    BOOL pillAnimating = NO;
+    for (NSString *k in pill.layer.animationKeys) if (![k hasPrefix:@"mp."]) pillAnimating = YES;
+    if (!gCollapsed && !pillAnimating && !gLSActive && !gPillAway && CACurrentMediaTime() >= gLSSettle) {
         CGRect r = [mini convertRect:mini.bounds toView:host];
         if (!CGRectEqualToRect(pill.frame, r)) { pill.compact = NO; pill.frame = r; [pill setNeedsLayout]; }
     }
@@ -2399,35 +2449,64 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
         CGRect tr = tb.window ? [tb convertRect:tb.bounds toView:win] : CGRectMake(0, WH - 100, WW, 100);
         to = CGRectMake(16, CGRectGetMinY(tr) - 64, WW - 32, 56);
     }
-    // The player keeps its shape: it scales down to the pill's width and folds
-    // its height into the pill while gliding there.
+    // 1.4.2: the player keeps its shape and folds into the pill. Its picture fades out while a picture of the
+    // pill fades in, so at the end the morph IS the pill; then the real pill takes over (no double pill) and
+    // gives a small landing squash. A flick carries its speed into the spring.
     UIView *wrap = [[UIView alloc] initWithFrame:from];
     wrap.userInteractionEnabled = NO;
     wrap.clipsToBounds = YES;
-    wrap.layer.cornerRadius = 40;
+    wrap.layer.cornerRadius = ScreenCorner();
     wrap.layer.cornerCurve = kCACornerCurveContinuous;
-    wrap.backgroundColor = [UIColor colorWithWhite:0.12 alpha:1];
+    wrap.backgroundColor = PillMorphTint(pill.art.image);
     snap.frame = wrap.bounds;
     snap.autoresizingMask = UIViewAutoresizingNone;
     [wrap addSubview:snap];
+    UIView *pillPic = nil;
+    if (target == pill) {
+        pillPic = [pill snapshotViewAfterScreenUpdates:YES];
+        pill.alpha = 0;
+    }
+    if (pillPic) {
+        pillPic.frame = wrap.bounds; pillPic.alpha = 0;
+        pillPic.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [wrap addSubview:pillPic];
+    }
     [win addSubview:wrap];
     CGFloat s = to.size.width / MAX(1, from.size.width);
     CGFloat hInner = to.size.height / MAX(0.01, s);
     CGFloat dist = MAX(1, CGRectGetMidY(to) - CGRectGetMidY(from));
     CGFloat v0 = MAX(0, MIN(4, gCloseVelocity / dist));
     gCloseVelocity = 0;
-    [UIView animateWithDuration:0.48 delay:0 usingSpringWithDamping:0.88 initialSpringVelocity:v0 options:0 animations:^{
+    UISpringTimingParameters *sp = [[UISpringTimingParameters alloc] initWithDampingRatio:0.9 initialVelocity:CGVectorMake(v0, v0)];
+    UIViewPropertyAnimator *fold = [[UIViewPropertyAnimator alloc] initWithDuration:0.5 timingParameters:sp];
+    [fold addAnimations:^{
         wrap.bounds = CGRectMake(0, 0, from.size.width, hInner);
         wrap.center = CGPointMake(CGRectGetMidX(to), CGRectGetMidY(to));
         wrap.transform = CGAffineTransformMakeScale(s, s);
         wrap.layer.cornerRadius = hInner / 2;
-    } completion:nil];
-    [UIView animateWithDuration:0.2 delay:0.1 options:0 animations:^{ snap.alpha = 0; } completion:nil];
-    [UIView animateWithDuration:0.14 delay:0.34 options:0 animations:^{ wrap.alpha = 0; } completion:^(BOOL d) { [wrap removeFromSuperview]; }];
-    // The pill gives a little liquid bounce as the player lands in it.
-    CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-    k.values = @[@0.92, @0.92, @1.05, @0.98, @1]; k.keyTimes = @[@0, @0.4, @0.65, @0.85, @1]; k.duration = 0.75;
-    if (target) [target.layer addAnimation:k forKey:@"land"];
+        snap.transform = CGAffineTransformMakeTranslation(0, -from.size.height * 0.08);
+    }];
+    __weak UIView *wt = target; __weak MPMiniPill *wp = pill;
+    void (^land)(void) = ^{
+        UIView *t = wt; MPMiniPill *p = wp;
+        if (p && p.alpha < 0.01) p.alpha = 1;
+        [wrap removeFromSuperview];
+        if (!t) return;
+        CASpringAnimation *sx = [CASpringAnimation animationWithKeyPath:@"transform.scale.x"];
+        sx.fromValue = @1.05; sx.toValue = @1; sx.damping = 11; sx.stiffness = 260; sx.mass = 1; sx.duration = sx.settlingDuration;
+        CASpringAnimation *sy = [CASpringAnimation animationWithKeyPath:@"transform.scale.y"];
+        sy.fromValue = @0.9; sy.toValue = @1; sy.damping = 11; sy.stiffness = 260; sy.mass = 1; sy.duration = sy.settlingDuration;
+        sx.additive = NO; sy.additive = NO;
+        [t.layer addAnimation:sx forKey:@"mp.landx"]; [t.layer addAnimation:sy forKey:@"mp.landy"];
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+    };
+    [fold addCompletion:^(__unused UIViewAnimatingPosition p) { land(); }];
+    [fold startAnimation];
+    [UIView animateWithDuration:0.2 delay:0.02 options:UIViewAnimationOptionCurveEaseIn animations:^{ snap.alpha = 0; } completion:nil];
+    [UIView animateWithDuration:0.22 delay:0.1 options:UIViewAnimationOptionCurveEaseOut animations:^{ pillPic.alpha = 1; } completion:nil];
+    if (!pillPic) [UIView animateWithDuration:0.14 delay:0.34 options:0 animations:^{ wrap.alpha = 0; } completion:nil];
+    // never leave the pill invisible
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ MPMiniPill *p = wp; if (p && p.alpha < 0.01) p.alpha = 1; });
 }
 
 #pragma mark - drag to close
@@ -6857,8 +6936,65 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
     }
 }
 
+// 1.4.2: leaving Music, iOS lays the app out again for its app-switcher picture. With the pill's scale still on
+// Music's bar that layout came out a little off every time, so the pill came back bigger or smaller each visit.
+// Now the bar goes back to plain size while Music is away (our pill keeps its spot and size, so the picture is
+// right), and on the way back the size goes on again at once, before you see it; then the pill settles in.
+static void PillAway(void) {
+    if (gPillAway) return;
+    UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
+    if (!mini || gLSActive || !objc_getAssociatedObject(mini, kStyled)) return;
+    gPillAway = YES;
+    [mini.layer removeAnimationForKey:@"transform"];
+    [CATransaction begin]; [CATransaction setDisableActions:YES]; mini.transform = CGAffineTransformIdentity; [CATransaction commit];
+    objc_setAssociatedObject(mini, kApplied, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(mini, kFight, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+static void PillResnap(void) {
+    UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
+    gPillAway = NO;
+    if (!mini || gLSActive || !objc_getAssociatedObject(mini, kStyled)) return;
+    if (CACurrentMediaTime() >= gPillSnapUntil) gPillSnapUntil = CACurrentMediaTime() + 0.9;
+    ApplyPillTransform(mini, YES);
+    SyncPill();
+}
+static void PillSettleIn(void) {
+    UIView *host = [gLastTabBar.superview viewWithTag:COLLAPSE_TAG];
+    MPMiniPill *pill = nil;
+    for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
+    if (!pill || pill.hidden || !pill.window || pill.alpha < 0.05) return;
+    // a soft rise and swell, like it's coming up to meet you
+    CASpringAnimation *ty = [CASpringAnimation animationWithKeyPath:@"transform.translation.y"];
+    ty.fromValue = @10; ty.toValue = @0; ty.additive = YES; ty.damping = 16; ty.stiffness = 220; ty.mass = 1; ty.duration = ty.settlingDuration;
+    CASpringAnimation *sc = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+    sc.fromValue = @0.93; sc.toValue = @1; sc.damping = 13; sc.stiffness = 240; sc.mass = 1; sc.duration = sc.settlingDuration;
+    CABasicAnimation *op = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    op.fromValue = @0.35; op.toValue = @1; op.duration = 0.28; op.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    [pill.layer addAnimation:ty forKey:@"mp.enterY"]; [pill.layer addAnimation:sc forKey:@"mp.enterS"]; [pill.layer addAnimation:op forKey:@"mp.enterO"];
+}
+static void StartPillAwayWatch(void) {
+    static BOOL done; if (done) return; done = YES;
+    static BOOL wasAway;
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) { wasAway = YES; PillAway(); }];
+    [nc addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) {
+        gPillSnapUntil = CACurrentMediaTime() + 1.2;
+        PillResnap();
+    }];
+    [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *n) {
+        BOOL back = wasAway; wasAway = NO;
+        if (gPillAway || back) gPillSnapUntil = CACurrentMediaTime() + 1.0;
+        PillResnap();
+        if (back) PillSettleIn();
+        // Music can still lay out a moment later: keep it exact for the first second
+        for (NSNumber *d in @[@0.08, @0.25, @0.6]) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (UIApplication.sharedApplication.applicationState == UIApplicationStateActive) PillResnap();
+        });
+    }];
+}
 static void StartWatchdog(void) {
     static int tick = 0;
+    StartPillAwayWatch();
     CADisplayLink *dl = [CADisplayLink displayLinkWithTarget:[MPPillTicker shared] selector:@selector(tick:)];
     if (@available(iOS 15.0, *)) dl.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
     [dl addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
