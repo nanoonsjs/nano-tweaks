@@ -1,6 +1,6 @@
 Package: com.nano.fasthaptic
 Name: FastHaptic
-Version: 2.0
+Version: 2.1
 Architecture: iphoneos-arm
 Description: Faster Haptic Touch everywhere: long-press menus open quicker in every app, on the Home Screen and in Control Center. Pick how fast in Settings. For iOS 15 and 16. Made by nano.
 Maintainer: nano

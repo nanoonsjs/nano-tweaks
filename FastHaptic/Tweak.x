@@ -1,4 +1,5 @@
-// FastHaptic 2.0 - made by nano
+// FastHaptic 2.1 - made by nano
+// 2.1: live ms counter on the Hold Me button; Fastest is 75% quicker
 // Faster Haptic Touch everywhere: every long-press menu (apps, Home Screen icons, Control Center,
 // links, photos...) opens sooner. Works in every app, because it speeds up iOS's own Haptic Touch
 // timer in UIKit itself, not one app's buttons.
@@ -15,7 +16,7 @@
 
 #define DOM CFSTR("com.nano.fasthaptic")
 static BOOL gOn = YES;
-static double gFactor = 0.55;   // 0.75 fast, 0.55 faster, 0.35 fastest
+static double gFactor = 0.5;   // 0.75 fast (25% quicker), 0.5 faster (50%), 0.25 fastest (75%)
 
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
@@ -28,8 +29,10 @@ static void LoadPrefs(void) {
     if (!on) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("enabled"), DOM); if (cf) on = (__bridge_transfer id)cf; }
     if (!sp) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("speed"), DOM); if (cf) sp = (__bridge_transfer id)cf; }
     gOn = on ? [on boolValue] : YES;
-    double s = sp ? [sp doubleValue] : 0.55;
-    gFactor = (s >= 0.2 && s <= 1) ? s : 0.55;
+    double s = sp ? [sp doubleValue] : 0.5;
+    if (fabs(s - 0.55) < 0.001) s = 0.5;    // 2.0's old steps
+    if (fabs(s - 0.35) < 0.001) s = 0.25;
+    gFactor = (s >= 0.1 && s <= 1) ? s : 0.5;
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { LoadPrefs(); }
 static double Factor(void) { return gOn ? gFactor : 1.0; }
@@ -128,11 +131,58 @@ static void DOBegan(UIGestureRecognizer *self, SEL _cmd, NSSet *t, UIEvent *e) {
 
 #pragma mark - Settings: a "hold me" button to feel the speed
 
+// the "Hold Me" button: a live ms counter from your touch until the menu opens
+@interface FHHoldView : UIView
+@end
 @interface FHTry : NSObject <UIContextMenuInteractionDelegate>
 + (instancetype)shared;
+@property (nonatomic, weak) UILabel *counter;
+@property (nonatomic, weak) UIView *button;
+- (void)began;
+- (void)ended;
 @end
-@implementation FHTry
+@implementation FHHoldView
+- (void)touchesBegan:(NSSet *)t withEvent:(UIEvent *)e { [super touchesBegan:t withEvent:e]; [[FHTry shared] began]; }
+- (void)touchesEnded:(NSSet *)t withEvent:(UIEvent *)e { [super touchesEnded:t withEvent:e]; [[FHTry shared] ended]; }
+- (void)touchesCancelled:(NSSet *)t withEvent:(UIEvent *)e { [super touchesCancelled:t withEvent:e]; [[FHTry shared] ended]; }
+@end
+@implementation FHTry {
+    CFTimeInterval _start; CADisplayLink *_link; BOOL _opened; double _best;
+}
 + (instancetype)shared { static FHTry *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [FHTry new]; }); return s; }
+- (void)show:(NSString *)t color:(UIColor *)c {
+    UILabel *l = self.counter; if (!l) return;
+    l.text = t; l.textColor = c ?: UIColor.labelColor;
+}
+- (void)began {
+    _start = CACurrentMediaTime(); _opened = NO;
+    [_link invalidate];
+    _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick)];
+    [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    [self tick];
+}
+- (void)tick {
+    double ms = (CACurrentMediaTime() - _start) * 1000;
+    [self show:[NSString stringWithFormat:@"%.0f ms", ms] color:UIColor.secondaryLabelColor];
+}
+- (void)ended {
+    if (_opened || !_link) return;
+    [_link invalidate]; _link = nil;
+    double ms = (CACurrentMediaTime() - _start) * 1000;
+    [self show:[NSString stringWithFormat:@"Let go at %.0f ms, hold a bit longer", ms] color:UIColor.secondaryLabelColor];
+}
+- (void)contextMenuInteraction:(UIContextMenuInteraction *)i willDisplayMenuForConfiguration:(UIContextMenuConfiguration *)c animator:(id)a {
+    if (_opened || _start <= 0) return;
+    _opened = YES;
+    [_link invalidate]; _link = nil;
+    double ms = (CACurrentMediaTime() - _start) * 1000;
+    if (_best <= 0 || ms < _best) _best = ms;
+    [self show:[NSString stringWithFormat:@"Opened in %.0f ms", ms] color:UIColor.systemPurpleColor];
+    UILabel *l = self.counter;
+    CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    pop.values = @[@1, @1.25, @0.95, @1]; pop.keyTimes = @[@0, @0.35, @0.7, @1]; pop.duration = 0.4;
+    [l.layer addAnimation:pop forKey:@"pop"];
+}
 - (UIContextMenuConfiguration *)contextMenuInteraction:(UIContextMenuInteraction *)i configurationForMenuAtLocation:(CGPoint)p {
     return [UIContextMenuConfiguration configurationWithIdentifier:nil previewProvider:nil actionProvider:^UIMenu *(NSArray *s) {
         UIAction *a = [UIAction actionWithTitle:@"That was FastHaptic" image:[UIImage systemImageNamed:@"bolt.fill"] identifier:nil handler:^(__unused UIAction *x) {}];
@@ -152,7 +202,7 @@ static void FHTryLayout(UITableViewCell *self, SEL _cmd) {
     UIView *b = [cv viewWithTag:0x4648];
     if (!b) {
         self.selectionStyle = UITableViewCellSelectionStyleNone;
-        b = [UIView new]; b.tag = 0x4648;
+        b = [FHHoldView new]; b.tag = 0x4648;
         b.backgroundColor = [UIColor colorWithRed:0.42 green:0.32 blue:0.92 alpha:1];
         b.layer.cornerRadius = 22; b.layer.cornerCurve = kCACornerCurveContinuous;
         UILabel *l = [UILabel new]; l.tag = 1; l.text = @"Hold Me"; l.textColor = UIColor.whiteColor;
@@ -160,10 +210,16 @@ static void FHTryLayout(UITableViewCell *self, SEL _cmd) {
         [b addSubview:l];
         [b addInteraction:[[UIContextMenuInteraction alloc] initWithDelegate:[FHTry shared]]];
         [cv addSubview:b];
+        UILabel *ms = [UILabel new]; ms.tag = 0x4649; ms.textAlignment = NSTextAlignmentCenter;
+        ms.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightSemibold]; ms.textColor = UIColor.secondaryLabelColor;
+        ms.text = @"Hold the button: the time shows here";
+        [cv addSubview:ms];
+        [FHTry shared].counter = ms; [FHTry shared].button = b;
     }
     self.textLabel.hidden = YES; self.detailTextLabel.hidden = YES;
     CGFloat W = cv.bounds.size.width, H = cv.bounds.size.height;
-    b.frame = CGRectMake(W / 2 - 90, H / 2 - 22, 180, 44);
+    b.frame = CGRectMake(W / 2 - 90, H / 2 - 36, 180, 44);
+    [cv viewWithTag:0x4649].frame = CGRectMake(12, H / 2 + 16, W - 24, 22);
     [b viewWithTag:1].frame = b.bounds;
 }
 static NSArray *(*origFHSpecs)(id, SEL);

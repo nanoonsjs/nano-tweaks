@@ -33,7 +33,7 @@
 			<key>nanoSub</key>
 			<string>Faster Haptic Touch everywhere</string>
 			<key>nanoVersion</key>
-			<string>2.0</string>
+			<string>2.1</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -61,7 +61,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Fast: about 25% quicker. Faster: about twice as quick. Fastest: almost instant (you might open menus by accident).</string>
+			<string>Fast: 25% quicker. Faster: 50% quicker. Fastest: 75% quicker (you might open menus by accident).</string>
 			<key>label</key>
 			<string>Speed</string>
 		</dict>
@@ -71,7 +71,7 @@
 			<key>cell</key>
 			<string>PSSegmentCell</string>
 			<key>default</key>
-			<real>0.55</real>
+			<real>0.5</real>
 			<key>defaults</key>
 			<string>com.nano.fasthaptic</string>
 			<key>key</key>
@@ -85,15 +85,15 @@
 			<key>validValues</key>
 			<array>
 				<real>0.75</real>
-				<real>0.55</real>
-				<real>0.35</real>
+				<real>0.5</real>
+				<real>0.25</real>
 			</array>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Hold the button to feel the speed.</string>
+			<string>Hold the button: the counter shows how many milliseconds it took for the menu to open.</string>
 			<key>label</key>
 			<string>Try It</string>
 		</dict>
@@ -101,7 +101,7 @@
 			<key>cell</key>
 			<string>PSStaticTextCell</string>
 			<key>height</key>
-			<integer>76</integer>
+			<integer>110</integer>
 			<key>id</key>
 			<string>FH_TRY</string>
 			<key>label</key>
