@@ -665,11 +665,19 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     v.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
     gIsland = v;
     v->_pill = pill;
-    // the pill at rest: stop the drag stretch and bounce first, so the island starts exactly on it
+    // the island starts exactly where the pill is on screen right now: still stretched up by your swipe
+    NSValue *dragV = objc_getAssociatedObject(pill, kDragT);
+    CGRect rest = [pill convertRect:pill.bounds toView:w];
+    CGRect seen = rest;
+    if (dragV) {
+        CATransform3D t = dragV.CATransform3DValue;
+        CGFloat sx = t.m11, sy = t.m22, dx = t.m41, dy = t.m42;
+        seen = CGRectMake(CGRectGetMidX(rest) - rest.size.width * sx / 2 + dx, CGRectGetMidY(rest) - rest.size.height * sy / 2 + dy, rest.size.width * sx, rest.size.height * sy);
+    }
     for (NSString *k in @[@"mp.bounce", @"mp.release", @"mp.touchdown", @"mp.jelly", @"mp.absorb"]) [pill.layer removeAnimationForKey:k];
     objc_setAssociatedObject(pill, kDragT, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     ApplyPillST(pill);
-    v->_from = [pill convertRect:pill.bounds toView:w];
+    v->_from = rest;
     v->_fromR = v->_from.size.height / 2;
     UIEdgeInsets sa = w.safeAreaInsets;
     CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
@@ -677,8 +685,8 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     v->_to = CGRectMake(8, sa.top + 6, W - 16, bottom - sa.top - 6);
 
     // the shape: starts exactly as the pill, the pill's picture inside it, then it grows
-    UIView *shape = [[UIView alloc] initWithFrame:v->_from];
-    shape.clipsToBounds = YES; shape.layer.cornerCurve = kCACornerCurveContinuous; shape.layer.cornerRadius = v->_fromR;
+    UIView *shape = [[UIView alloc] initWithFrame:seen];
+    shape.clipsToBounds = YES; shape.layer.cornerCurve = kCACornerCurveContinuous; shape.layer.cornerRadius = seen.size.height / 2;
     shape.layer.borderWidth = 0.8; shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
     UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
     blur.frame = shape.bounds; blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -688,11 +696,11 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     [shape addSubview:ink];
     UIView *snap = [pill snapshotViewAfterScreenUpdates:NO];
     // the pill's picture keeps its size and stays at the bottom while the island grows up out of it (no stretching)
-    if (snap) { snap.frame = shape.bounds; snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin; [shape addSubview:snap]; }
+    if (snap) { snap.frame = CGRectMake((seen.size.width - rest.size.width) / 2, seen.size.height - rest.size.height, rest.size.width, rest.size.height); snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin; [shape addSubview:snap]; }
     v->_snap = snap;
     UIView *content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, v->_to.size.width, v->_to.size.height)];
-    content.center = CGPointMake(v->_from.size.width / 2, v->_from.size.height / 2);
-    content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.9, 0.9);
+    content.center = CGPointMake(seen.size.width / 2, seen.size.height / 2);
+    content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.94, 0.94);
     [shape addSubview:content];
     [MPInsightsCtl buildIn:content size:content.bounds.size closeTarget:v action:@selector(collapse)];
     // Sleep Timer sits in the header next to close
@@ -716,14 +724,17 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     pill.alpha = 0;   // the pill *becomes* the island
     // one spring, straight out of the pill (the same curve every time)
-    [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+    // one spring out of the pill: quick, a touch of overshoot, settles like the Dynamic Island
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.35 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{
         shape.frame = v->_to;
         shape.layer.cornerRadius = 44;
         content.center = CGPointMake(v->_to.size.width / 2, v->_to.size.height / 2);
+        content.transform = CGAffineTransformIdentity;
     } completion:nil];
-    [UIView animateWithDuration:0.16 delay:0.02 options:UIViewAnimationOptionCurveEaseOut animations:^{ snap.alpha = 0; } completion:nil];
-    [UIView animateWithDuration:0.45 delay:0.16 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ content.alpha = 1; content.transform = CGAffineTransformIdentity; } completion:nil];
-    [UIView animateWithDuration:0.4 animations:^{ v.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3]; }];
+    // the pill's picture hands over to Insights right away, so the island is never an empty dark box
+    [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ snap.alpha = 0; } completion:nil];
+    [UIView animateWithDuration:0.16 delay:0.03 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{ content.alpha = 1; } completion:nil];
+    [UIView animateWithDuration:0.35 animations:^{ v.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3]; }];
 }
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g {
     // UIKit also asks this view about its own tap (tap outside to close): that one always goes.
@@ -781,20 +792,24 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     UIView *shape = _shape, *content = _content, *snap = _snap;
     CGRect cur = shape.layer.presentationLayer ? shape.layer.presentationLayer.frame : shape.frame;
     shape.transform = CGAffineTransformIdentity; shape.frame = cur;
-    // contents go first, then the island shrinks straight back to the pill's normal size
-    [UIView animateWithDuration:0.14 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.94, 0.94); } completion:nil];
-    [UIView animateWithDuration:0.5 delay:0.04 usingSpringWithDamping:1 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+    // pull the pill's picture to the bottom of the island at its own size (it fades back in on the way down)
+    if (snap) {
+        snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+        snap.frame = CGRectMake((cur.size.width - to.size.width) / 2, cur.size.height - to.size.height, to.size.width, to.size.height);
+        [shape bringSubviewToFront:snap];
+    }
+    [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.96, 0.96); } completion:nil];
+    [UIView animateWithDuration:0.46 delay:0.02 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
         shape.frame = to;
         shape.layer.cornerRadius = r;
         content.center = CGPointMake(to.size.width / 2, to.size.height / 2);
         self.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
     } completion:^(__unused BOOL f) {
-        // landed exactly on the pill: swap to the real one
-        pill.alpha = 1;
-        [UIView animateWithDuration:0.14 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ shape.alpha = 0; } completion:^(__unused BOOL d) { [self removeFromSuperview]; }];
+        // landed exactly on the pill (which looks the same as its picture): swap in one frame, no ghosting
+        [UIView performWithoutAnimation:^{ pill.alpha = 1; }];
+        [self removeFromSuperview];
     }];
-    // the pill's own look fades back in as the island gets small
-    [UIView animateWithDuration:0.22 delay:0.2 options:UIViewAnimationOptionCurveEaseInOut animations:^{ snap.alpha = 1; } completion:nil];
+    [UIView animateWithDuration:0.18 delay:0.14 options:UIViewAnimationOptionCurveEaseInOut animations:^{ snap.alpha = 1; } completion:nil];
     // safety: the pill always comes back
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (pill.alpha < 0.01) pill.alpha = 1; if (self.superview) [self removeFromSuperview]; });
 }
