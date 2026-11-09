@@ -1,4 +1,5 @@
-// Messages26 1.3.1 - made by nano
+// Messages26 1.3.2 - made by nano
+// 1.3.2: settings: a live preview phone that plays the features and follows your switches, with a Dynamic Island that says what changed
 // 1.3.1: viewer: Reply works on videos, Apple's own tapback / reply icons, photos no longer show video controls, ... opens a glass panel (speed, loop); bigger audio bubbles, audio messages on the speaker
 // 1.3: iOS 26 photo / video viewer (glass X, big play with -10 / +10, glass time bar, tapback / reply / save / share pills), new settings page
 // 1.2: "iOS 26 Contact Photo" switch (glass back / FaceTime work without the bigger photo), Messages26 icon in its settings
@@ -5343,9 +5344,10 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
 #include "MsgViewer.h"
 #include "MsgAudio.h"
 #include "../shared/NanoSettings.h"
+#include "M26Settings.h"
 
 %ctor {
-    if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.Preferences"]) { StartNanoSettings(); return; }
+    if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.Preferences"]) { StartNanoSettings(); StartM26Settings(); return; }
     if ([[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, SBAuthRequest, CFSTR("com.nano.messages26/auth.req"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         return;

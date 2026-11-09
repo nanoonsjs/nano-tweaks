@@ -33,7 +33,21 @@
 			<key>nanoSub</key>
 			<string>Messages, iOS 26 style</string>
 			<key>nanoVersion</key>
-			<string>1.3.1</string>
+			<string>1.3.2</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>height</key>
+			<integer>236</integer>
+			<key>id</key>
+			<string>M26_PREVIEW</string>
+			<key>label</key>
+			<string></string>
 		</dict>
 		<dict>
 			<key>cell</key>
