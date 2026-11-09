@@ -157,7 +157,7 @@ static void XFetchLyrics(NSString *title, NSString *artist, NSString *album, dou
     _msg.numberOfLines = 0; _msg.adjustsFontSizeToFitWidth = NO; [self addSubview:_msg];
     CAGradientLayer *fade = [CAGradientLayer layer];
     fade.colors = @[(id)UIColor.clearColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.clearColor.CGColor];
-    fade.locations = @[@0, @0.14, @0.84, @1];
+    fade.locations = @[@0, @0.2, @0.8, @1];
     self.layer.mask = fade;
     [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapLine:)]];
     return self;
@@ -196,7 +196,7 @@ static void XFetchLyrics(NSString *title, NSString *artist, NSString *album, dou
         y += ceil(s.height) + (_lyrics.times.count ? 22 : 12);
     }
     self.contentSize = CGSizeMake(W, y);
-    self.contentInset = UIEdgeInsetsMake(self.bounds.size.height * 0.32, 0, self.bounds.size.height * 0.6, 0);
+    self.contentInset = UIEdgeInsetsMake(self.bounds.size.height * 0.5 - 20, 0, self.bounds.size.height * 0.5, 0);
     _cur = -2;
 }
 - (void)scrollViewWillBeginDragging:(UIScrollView *)s { _userUntil = CACurrentMediaTime() + 3.5; }
@@ -230,8 +230,8 @@ static void XFetchLyrics(NSString *title, NSString *artist, NSString *album, dou
         } completion:nil];
         if (CACurrentMediaTime() < _userUntil || self.isTracking) return;
         UILabel *x = _labels[MAX(0, cur)];
-        CGFloat want = CGRectGetMidY(x.frame) - self.bounds.size.height * 0.34;
-        want = MAX(-self.contentInset.top, MIN(want, self.contentSize.height - self.bounds.size.height * 0.4));
+        CGFloat want = CGRectGetMidY(x.frame) - self.bounds.size.height * 0.5;   // in the middle
+        want = MAX(-self.contentInset.top, MIN(want, self.contentSize.height - self.bounds.size.height * 0.5));
         [UIView animateWithDuration:a ? 0.7 : 0 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ self.contentOffset = CGPointMake(0, want); } completion:nil];
     } else {
         // not timed: roll along with how far into the song you are
@@ -345,6 +345,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     MPScrub *_scrub;
     UIButton *_prev, *_play, *_next, *_close, *_stats, *_lyricsBtn;
     MPVolumeView *_vol;
+    int _volLevel; BOOL _volFull, _volMute, _volHooked;
     AVRoutePickerView *_route;
     MPLyricsView *_lyrics;
     NSString *_lyricsSong;
@@ -405,6 +406,13 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     _vol.tintColor = UIColor.whiteColor;
     if ([_vol respondsToSelector:@selector(setShowsRouteButton:)]) ((void (*)(id, SEL, BOOL))objc_msgSend)(_vol, @selector(setShowsRouteButton:), NO);
     [_root addSubview:_vol];
+    UIGraphicsImageRendererFormat *kf = [UIGraphicsImageRendererFormat defaultFormat];
+    UIImage *knob = [[[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(30, 30) format:kf] imageWithActions:^(UIGraphicsImageRendererContext *c) {
+        CGContextSetShadowWithColor(c.CGContext, CGSizeMake(0, 1.5), 4, [UIColor colorWithWhite:0 alpha:0.35].CGColor);
+        [UIColor.whiteColor setFill]; [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(5, 5, 20, 20)] fill];
+    }];
+    [_vol setVolumeThumbImage:knob forState:UIControlStateNormal];
+    [_vol setVolumeThumbImage:knob forState:UIControlStateHighlighted];
     // AirPlay: the normal AirPlay icon
     _route = [[AVRoutePickerView alloc] initWithFrame:CGRectMake(0, 0, 40, 40)];
     _route.tintColor = UIColor.whiteColor; _route.activeTintColor = MusicPink();
@@ -412,9 +420,58 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     [_root addSubview:_route];
 
     _lyricsBtn = [self control:@"quote.bubble" size:44 pt:19 action:@selector(toggleLyrics)]; [self addSubview:_lyricsBtn];
+    [_route removeFromSuperview]; [self addSubview:_route];   // AirPlay sits up top with the other buttons
     _stats = [self control:@"chart.bar.fill" size:44 pt:18 action:@selector(toggleInsights)]; [self addSubview:_stats];
     _close = [self control:@"chevron.down" size:44 pt:19 action:@selector(closeTapped)]; [self addSubview:_close];
     return self;
+}
+// little life for the icons
+- (void)hop:(UIView *)v kind:(int)k {
+    CALayer *l = v.layer;
+    if (k == 0) {   // bounce + tilt (lyrics)
+        CAKeyframeAnimation *s = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; s.values = @[@1, @1.3, @0.9, @1.06, @1]; s.keyTimes = @[@0, @0.3, @0.55, @0.8, @1]; s.duration = 0.55;
+        CAKeyframeAnimation *r = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"]; r.values = @[@0, @(-0.25), @0.18, @(-0.06), @0]; r.keyTimes = s.keyTimes; r.duration = 0.55;
+        [l addAnimation:s forKey:@"hop.s"]; [l addAnimation:r forKey:@"hop.r"];
+    } else if (k == 1) {   // bars grow up from the bottom (Insights)
+        CAKeyframeAnimation *s = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"]; s.values = @[@1, @0.35, @1.25, @0.95, @1]; s.keyTimes = @[@0, @0.2, @0.55, @0.8, @1]; s.duration = 0.6;
+        CAKeyframeAnimation *t = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"]; t.values = @[@0, @5, @(-2), @0.5, @0]; t.keyTimes = s.keyTimes; t.duration = 0.6;
+        [l addAnimation:s forKey:@"hop.s"]; [l addAnimation:t forKey:@"hop.t"];
+    } else if (k == 2) {   // a nod down (close)
+        CAKeyframeAnimation *t = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"]; t.values = @[@0, @7, @(-2), @0]; t.keyTimes = @[@0, @0.4, @0.75, @1]; t.duration = 0.4;
+        [l addAnimation:t forKey:@"hop.t"];
+    } else if (k == 3) {   // loud: the waves pulse out
+        CAKeyframeAnimation *s = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; s.values = @[@1, @1.45, @0.92, @1.12, @1]; s.keyTimes = @[@0, @0.3, @0.55, @0.8, @1]; s.duration = 0.6;
+        CAKeyframeAnimation *t = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"]; t.values = @[@0, @3, @(-1), @0]; t.keyTimes = @[@0, @0.3, @0.7, @1]; t.duration = 0.5;
+        [l addAnimation:s forKey:@"hop.s"]; [l addAnimation:t forKey:@"hop.t"];
+    } else {   // muted: a little shake
+        CAKeyframeAnimation *t = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"]; t.values = @[@0, @(-4), @4, @(-3), @2, @0]; t.duration = 0.45;
+        CAKeyframeAnimation *s = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; s.values = @[@1, @1.2, @1]; s.duration = 0.35;
+        [l addAnimation:t forKey:@"hop.t"]; [l addAnimation:s forKey:@"hop.s"];
+    }
+}
+- (UISlider *)volSlider { for (UIView *v in _vol.subviews) if ([v isKindOfClass:[UISlider class]]) return (UISlider *)v; return nil; }
+// the speaker icons follow the volume: more waves as it gets louder, a pulse at full, a slash and a shake at zero
+- (void)volChanged {
+    UISlider *sl = [self volSlider]; if (!sl) return;
+    float v = sl.value;
+    int lvl = v <= 0.001 ? 0 : (v < 0.34 ? 1 : (v < 0.67 ? 2 : 3));
+    if (lvl != _volLevel) {
+        NSString *hi = lvl == 0 ? @"speaker.fill" : [NSString stringWithFormat:@"speaker.wave.%d.fill", lvl];
+        UIImageSymbolConfiguration *sc = [UIImageSymbolConfiguration configurationWithPointSize:12 weight:UIImageSymbolWeightSemibold];
+        [UIView transitionWithView:_spkHi duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ self->_spkHi.image = [UIImage systemImageNamed:hi withConfiguration:sc]; } completion:nil];
+        [UIView transitionWithView:_spkLo duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ self->_spkLo.image = [UIImage systemImageNamed:lvl == 0 ? @"speaker.slash.fill" : @"speaker.fill" withConfiguration:sc]; } completion:nil];
+        if (_volLevel >= 0) {   // a small pop each time a wave comes or goes
+            CAKeyframeAnimation *p = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; p.values = @[@1, @1.18, @1]; p.duration = 0.25;
+            [_spkHi.layer addAnimation:p forKey:@"lvl"];
+        }
+        _volLevel = lvl;
+    }
+    BOOL full = v >= 0.999, mute = v <= 0.001;
+    if (full && !_volFull) { [self hop:_spkHi kind:3]; _spkHi.tintColor = UIColor.whiteColor; [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleRigid] impactOccurred]; }
+    if (!full && _volFull) _spkHi.tintColor = [UIColor colorWithWhite:1 alpha:0.55];
+    if (mute && !_volMute) { [self hop:_spkLo kind:4]; _spkLo.tintColor = UIColor.whiteColor; [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleRigid] impactOccurred]; }
+    if (!mute && _volMute) _spkLo.tintColor = [UIColor colorWithWhite:1 alpha:0.55];
+    _volFull = full; _volMute = mute;
 }
 - (void)down:(UIButton *)b {
     UIView *hl = [b viewWithTag:77];
@@ -433,6 +490,9 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
         CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
         CGFloat d = b == _next ? -16 : 16; k.values = @[@0, @(d), @(-d * 0.25), @0]; k.keyTimes = @[@0, @0.3, @0.7, @1]; k.duration = 0.5; k.additive = YES;
         [_artHost.layer addAnimation:k forKey:@"skip"];
+        CAKeyframeAnimation *ar = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+        ar.values = @[@0, @(-d * 0.6), @(d * 0.15), @0]; ar.keyTimes = @[@0, @0.35, @0.7, @1]; ar.duration = 0.4; ar.additive = YES;
+        [b.imageView.layer addAnimation:ar forKey:@"slide"];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ XPoll(); });
     }
 }
@@ -443,6 +503,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     [[UISelectionFeedbackGenerator new] selectionChanged];
     _showLyrics = !_showLyrics;
     [self setSym:_lyricsBtn name:_showLyrics ? @"quote.bubble.fill" : @"quote.bubble" pt:19];
+    [self hop:_lyricsBtn.imageView kind:0];
     if (_showLyrics) { _lyrics.hidden = NO; [self loadLyrics]; }
     [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
         [self layoutNow];
@@ -468,6 +529,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
 }
 - (void)toggleInsights {
     [[UISelectionFeedbackGenerator new] selectionChanged];
+    [self hop:_stats.imageView kind:1];
     if (_insights) {
         UIView *v = _insights; _insights = nil;
         [self setSym:_stats name:@"chart.bar.fill" pt:18]; _stats.tintColor = UIColor.whiteColor;
@@ -506,6 +568,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     _lyricsBtn.center = CGPointMake(L + 18, 32);
     _close.center = CGPointMake(W - R - 18, 32);
     _stats.center = CGPointMake(W - R - 68, 32);
+    _route.frame = CGRectMake(W - R - 118 - 20, 12, 40, 40);
 
     CGFloat x, cw, top;   // the column with the song, bar and controls
     if (!ly) {
@@ -536,7 +599,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
         _album.frame = CGRectMake(x + 86, top + 60, cw - 86, 18);
         top += 72 + 18;
         CGFloat lx = x + cw + 34;
-        _lyrics.frame = CGRectMake(lx, 52, W - lx - R, H - 52 - Bot);
+        _lyrics.frame = CGRectMake(lx, 0, W - lx - R, H);
     }
     _scrub.frame = CGRectMake(x, top, cw, 22);
     _el.frame = CGRectMake(x, top + 24, 80, 16);
@@ -546,10 +609,10 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     _prev.center = CGPointMake(cx - gap, cy);
     _next.center = CGPointMake(cx + gap, cy);
     CGFloat vy = cy + (ly ? 58 : 66);
-    _spkLo.frame = CGRectMake(x, vy - 10, 16, 20);
-    _route.frame = CGRectMake(x + cw - 36, vy - 20, 40, 40);
-    _spkHi.frame = CGRectMake(x + cw - 66, vy - 10, 24, 20);
-    _vol.frame = CGRectMake(x + 24, vy - 15, cw - 24 - 74, 30);
+    _spkLo.frame = CGRectMake(x - 2, vy - 10, 20, 20);
+    _spkHi.frame = CGRectMake(x + cw - 22, vy - 10, 24, 20);
+    _vol.frame = CGRectMake(x + 28, vy - 15, cw - 56, 30);
+    if (!_volHooked) { UISlider *sl = [self volSlider]; if (sl) { _volHooked = YES; _volLevel = -1; [sl addTarget:self action:@selector(volChanged) forControlEvents:UIControlEventValueChanged]; [self volChanged]; } }
 
     NSArray *spots = @[[NSValue valueWithCGPoint:CGPointMake(W * 0.2, H * 0.3)], [NSValue valueWithCGPoint:CGPointMake(W * 0.78, H * 0.25)], [NSValue valueWithCGPoint:CGPointMake(W * 0.55, H * 0.9)]];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
@@ -604,7 +667,18 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
         _el.text = XTime(e); _rem.text = [@"-" stringByAppendingString:XTime(MAX(0, gXDuration - e))];
     }
     NSString *sym = gXPlaying ? @"pause.fill" : @"play.fill";
-    if (![_play.accessibilityValue isEqualToString:sym]) { _play.accessibilityValue = sym; [self setSym:_play name:sym pt:42]; }
+    if (![_play.accessibilityValue isEqualToString:sym]) {
+        BOOL first = _play.accessibilityValue == nil;
+        _play.accessibilityValue = sym;
+        if (first) [self setSym:_play name:sym pt:42];
+        else {
+            [UIView transitionWithView:_play duration:0.22 options:UIViewAnimationOptionTransitionCrossDissolve | UIViewAnimationOptionAllowUserInteraction animations:^{ [self setSym:self->_play name:sym pt:42]; } completion:nil];
+            CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; k.values = @[@0.7, @1.12, @1]; k.keyTimes = @[@0, @0.6, @1]; k.duration = 0.35;
+            [_play.imageView.layer addAnimation:k forKey:@"morph"];
+        }
+    }
+    // hardware volume buttons move the slider too
+    if (_volHooked) [self volChanged];
     CGAffineTransform at = gXPlaying ? CGAffineTransformIdentity : CGAffineTransformMakeScale(0.9, 0.9);   // the cover shrinks a little while paused
     if (!CGAffineTransformEqualToTransform(_artHost.transform, at)) [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ self->_artHost.transform = at; } completion:nil];
     if (_showLyrics) { [self loadLyrics]; [_lyrics follow:e animated:YES]; }
@@ -649,6 +723,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     }
 }
 - (void)closeTapped {
+    [self hop:_close.imageView kind:2];
     UIWindow *w = self.window;
     gLSActive = NO;
     [self hide];
