@@ -1,4 +1,5 @@
-// Photos26 2.6.1 - made by nano
+// Photos26 2.7 - made by nano
+// 2.7: new icon (settings and header)
 // 2.6.1: new settings page; Messages' viewer moved to Messages26 (it's Quick Look there, not Photos).
 // 2.6: Messages too: the photo/video viewer you open from a chat is Photos' own, so it gets the same glass buttons and video player.
 // 2.5.1: back to the 2.3.0 look (the Albums tab changes in 2.4.0 - 2.5.0 are
