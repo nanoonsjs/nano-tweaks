@@ -797,6 +797,10 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     UIView *shape = _shape, *content = _content, *snap = _snap;
     CGRect cur = shape.layer.presentationLayer ? shape.layer.presentationLayer.frame : shape.frame;
     shape.transform = CGAffineTransformIdentity; shape.frame = cur;
+    // a fresh picture of the pill as it is now (the one from opening still had your swipe's lift in it,
+    // so the art and text sat higher and then dropped when the real pill showed)
+    UIView *fresh = pill.window ? [pill snapshotViewAfterScreenUpdates:NO] : nil;
+    if (fresh) { fresh.alpha = 0; [shape addSubview:fresh]; [snap removeFromSuperview]; snap = fresh; }
     // pull the pill's picture to the bottom of the island at its own size (it fades back in on the way down)
     if (snap) {
         snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;

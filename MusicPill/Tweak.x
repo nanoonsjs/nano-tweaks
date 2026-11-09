@@ -1,4 +1,5 @@
-// MusicPill 1.3.2 - made by nano
+// MusicPill 1.3.3 - made by nano
+// 1.3.3: closing the Dynamic Pill uses a fresh picture of the pill (art and text no longer drop into place after)
 // 1.3.2: the pill is never hidden under the Dynamic Pill (no half-second jump after closing)
 // 1.3.1: Dynamic Pill opens from where the pill is under your finger, contents in at once, one quick spring; closes in one spring and lands with no fade
 // 1.3: release (Dynamic Pill, landscape player with lyrics, new settings, new icon)
@@ -1439,7 +1440,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.3.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.3.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
