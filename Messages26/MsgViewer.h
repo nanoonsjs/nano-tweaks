@@ -466,7 +466,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
 // 0 = not a photo or video (leave it to Apple), 1 = photo, 2 = video, -1 = can't tell
 - (int)fileKind {
     id item = nil; @try { item = [self.ql valueForKey:@"currentPreviewItem"]; } @catch (__unused id e) {}
-    NSURL *u = nil; @try { if ([item respondsToSelector:@selector(previewItemURL)]) u = [item previewItemURL]; } @catch (__unused id e) {}
+    NSURL *u = nil; @try { SEL us = NSSelectorFromString(@"previewItemURL"); if ([item respondsToSelector:us]) { id x = ((id (*)(id, SEL))objc_msgSend)(item, us); if ([x isKindOfClass:[NSURL class]]) u = x; } } @catch (__unused id e) {}
     NSString *ext = u.pathExtension.lowercaseString;
     if (!ext.length) {
         NSString *t = self.nb.topItem.title.lowercaseString;
