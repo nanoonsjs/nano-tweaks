@@ -33,7 +33,7 @@
 			<key>nanoSub</key>
 			<string>Messages, iOS 26 style</string>
 			<key>nanoVersion</key>
-			<string>1.3.6</string>
+			<string>1.3.7</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -111,7 +111,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Glass Top Bar: glass back and FaceTime buttons at the top of a chat. iOS 26 Contact Photo: the bigger contact photo with the name under it. Glass Bubbles: a glass rim on received messages and a deeper blue for yours (reopen the chat to see it). Swipe to Reply: swipe right on any message to reply. Contact Expand Animation: tap the contact at the top and their page grows out of the photo; going back folds it back in.</string>
+			<string>Glass Top Bar: glass back and FaceTime buttons at the top of a chat. iOS 26 Contact Photo: the bigger contact photo with the name under it. Glass Bubbles: a glass rim on received messages and a deeper blue for yours (reopen the chat to see it). Swipe to Reply: swipe right on any message to reply.</string>
 			<key>label</key>
 			<string>Conversation</string>
 		</dict>
@@ -170,20 +170,6 @@
 			<string>swipereply</string>
 			<key>label</key>
 			<string>Swipe to Reply</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.nano.messages26/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.nano.messages26</string>
-			<key>key</key>
-			<string>contactanim</string>
-			<key>label</key>
-			<string>Contact Expand Animation</string>
 		</dict>
 		<dict>
 			<key>cell</key>

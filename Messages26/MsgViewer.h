@@ -154,6 +154,28 @@ static AVPlayer *MVPlayerIn(UIView *root) {
     }
     return best;
 }
+// a fingerprint of a picture (its size and a tiny 8x8 copy), to remember what was already saved
+static NSString *MVImageKey(UIImage *img) {
+    CGImageRef cg = img.CGImage; if (!cg) return nil;
+    unsigned char px[8 * 8 * 4] = {0};
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(px, 8, 8, 8, 32, cs, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, 8, 8), cg);
+    CGContextRelease(ctx); CGColorSpaceRelease(cs);
+    unsigned long h = 5381; for (int i = 0; i < 256; i++) h = h * 33 + (px[i] >> 3);
+    return [NSString stringWithFormat:@"%zux%zu-%lx", CGImageGetWidth(cg), CGImageGetHeight(cg), h];
+}
+static BOOL MVWasSaved(UIImage *img) {
+    NSString *k = MVImageKey(img);
+    return k && [[[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.savedMedia"] containsObject:k];
+}
+static void MVMarkSaved(UIImage *img) {
+    NSString *k = MVImageKey(img); if (!k) return;
+    NSMutableArray *a = [[[NSUserDefaults standardUserDefaults] arrayForKey:@"m26.savedMedia"] mutableCopy] ?: [NSMutableArray array];
+    if (![a containsObject:k]) [a addObject:k];
+    while (a.count > 1000) [a removeObjectAtIndex:0];
+    [[NSUserDefaults standardUserDefaults] setObject:a forKey:@"m26.savedMedia"];
+}
 static NSString *MVClock(double s) { int t = (int)MAX(0, floor(s)); return [NSString stringWithFormat:@"%d:%02d", t / 60, t % 60]; }
 
 static UIVisualEffectView *MVGlass(CGFloat radius) {
@@ -367,10 +389,12 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     UIImage *img = _photo.image;
     if (!img) return;
     UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil);
+    MVMarkSaved(img);
     [[UINotificationFeedbackGenerator new] notificationOccurred:UINotificationFeedbackTypeSuccess];
     [_save setImage:[UIImage systemImageNamed:@"checkmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self->_save setImage:[UIImage systemImageNamed:@"square.and.arrow.down" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{ [self setNeedsLayout]; [self layoutIfNeeded]; } completion:nil];
     });
 }
 - (void)doPlay {
@@ -610,7 +634,8 @@ static const void *kMVOurs = &kMVOurs;
     CGFloat by = H - MAX(14, sa.bottom + 4) - 26;
     CGFloat BH = 54;
     _leftG.hidden = _tap.hidden = _reply.hidden = YES;   // reply / reactions: off (Apple's need the chat behind)
-    BOOL canSave = !_video && _photo.image;
+    // already saved to Photos: no download button
+    BOOL canSave = !_video && _photo.image && !MVWasSaved(_photo.image);
     _save.hidden = !canSave;
     if (canSave) {
         [self place:nil glass:_rightG frame:CGRectMake(W - 22 - 124, by - BH / 2, 124, BH)];

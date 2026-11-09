@@ -1,4 +1,5 @@
-// Messages26 1.3.6 - made by nano
+// Messages26 1.3.7 - made by nano
+// 1.3.7: contact animation removed; contact page: black background, photo and Info tab not cut off, round press highlight on call / video / mail; viewer hides save once saved
 // 1.3.6: Dynamic Island removed; contact expand works when the page is pushed or presented (own window, no flash)
 // 1.3.5: viewer buttons read by their action (photos are photos), no reply / reactions there, faster FaceTime panel, top-of-screen Dynamic Island, springy settings sheet, contact page grows out of the photo
 // 1.3.4: photos are photos (Live Photos too), strips behind the viewer bars hidden, reactions open the picker, FaceTime opens a glass panel, Dynamic Island in the Messages26 sheet
@@ -2118,7 +2119,20 @@ static void HookDetailsTable(void) {
 + (instancetype)shared;
 @end
 @implementation M26Details
-+ (instancetype)shared { static M26Details *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [M26Details new]; }); return t; }
+- (void)tileDown:(UIControl *)t {
+    UIView *g = [t viewWithTag:DGLASS_TAG];
+    CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+    a.additive = YES; a.fromValue = @0; a.toValue = @(-0.12); a.duration = 0.12;
+    a.fillMode = kCAFillModeForwards; a.removedOnCompletion = NO;
+    [g.layer addAnimation:a forKey:@"m26.down"];
+}
+- (void)tileUp:(UIControl *)t {
+    UIView *g = [t viewWithTag:DGLASS_TAG];
+    [g.layer removeAnimationForKey:@"m26.down"];
+    CASpringAnimation *s = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+    s.additive = YES; s.fromValue = @(-0.12); s.toValue = @0; s.stiffness = 320; s.damping = 10; s.duration = s.settlingDuration;
+    [g.layer addAnimation:s forKey:@"m26.up"];
+}
 - (void)edit:(id)sender { UIView *t = gInfoTile; if (!t) gEditDebug = @"no info tile"; else ForwardTap(t); }
 - (void)tab:(UIButton *)b {
     [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
@@ -2152,7 +2166,7 @@ static void CardGlass(UIView *root) {
     if (![root.backgroundColor isEqual:page]) root.backgroundColor = page;
     for (UIView *p = sc; p && p != root.superview; p = p.superview) if (p != root && p.backgroundColor && CGColorGetAlpha(p.backgroundColor.CGColor) > 0) p.backgroundColor = UIColor.clearColor;
     UIView *glow = [root viewWithTag:DPLATE_TAG + 50];
-    if (!glow && dark) {
+    if (!glow && dark && NO) {   // 1.3.7: just black, no blue glow
         glow = [UIView new]; glow.tag = DPLATE_TAG + 50; glow.userInteractionEnabled = NO;
         for (int i = 0; i < 2; i++) {
             CAGradientLayer *gl = [CAGradientLayer layer]; gl.type = kCAGradientLayerRadial;
@@ -2164,7 +2178,7 @@ static void CardGlass(UIView *root) {
         [root insertSubview:glow atIndex:0];
     }
     if (glow) {
-        glow.hidden = !dark;
+        glow.hidden = YES;
         if (!CGRectEqualToRect(glow.frame, root.bounds)) {
             glow.frame = root.bounds;
             for (CAGradientLayer *gl in glow.layer.sublayers) gl.frame = [gl.name isEqualToString:@"a"] ? CGRectMake(W * 0.35, root.bounds.size.height * 0.28, W * 0.9, W * 0.9) : CGRectMake(-W * 0.3, root.bounds.size.height * 0.62, W * 0.9, W * 0.9);
@@ -2327,6 +2341,16 @@ static void StyleDetails(UIWindow *w) {
         if (!gl) { gl = GlassView(t); gl.tag = DGLASS_TAG; [t insertSubview:gl atIndex:0]; }
         CGRect gf = CGRectMake(ic.x - d / 2, ic.y - d / 2, d, d);
         if (!CGRectEqualToRect(gl.frame, gf)) { gl.frame = gf; gl.layer.cornerRadius = d / 2; RimFit(gl, dark); }
+        { CAShapeLayer *cm = (CAShapeLayer *)t.layer.mask;
+          CGRect mr = CGRectInset(gf, -3, -3);
+          if (![cm isKindOfClass:[CAShapeLayer class]] || !CGRectEqualToRect(CGPathGetBoundingBox(cm.path), mr)) {
+              cm = [CAShapeLayer layer]; cm.path = [UIBezierPath bezierPathWithOvalInRect:mr].CGPath; t.layer.mask = cm;
+          }
+          if ([t isKindOfClass:[UIControl class]] && !objc_getAssociatedObject(t, "m26press")) {
+              objc_setAssociatedObject(t, "m26press", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+              [(UIControl *)t addTarget:[M26Details shared] action:@selector(tileDown:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
+              [(UIControl *)t addTarget:[M26Details shared] action:@selector(tileUp:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchDragExit];
+          } }
         BOOL off = [lb.textColor isEqual:UIColor.secondaryLabelColor] || lb.textColor == nil || ({ CGFloat r0, g0, b0, a0; [lb.textColor getRed:&r0 green:&g0 blue:&b0 alpha:&a0]; fabs(r0 - g0) < 0.05 && fabs(g0 - b0) < 0.05; });
         icon.tintColor = [UIColor colorWithWhite:dark ? 1 : 0 alpha:off ? 0.35 : 1];
         if (icon.image.renderingMode != UIImageRenderingModeAlwaysTemplate) icon.image = [icon.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
@@ -2369,8 +2393,8 @@ static void StyleDetails(UIWindow *w) {
     CGFloat total = 0; for (NSNumber *n in bws) total += n.doubleValue;
     total += 4 * (bws.count - 1);
     // few tabs: center them
-    CGFloat left = [root convertPoint:CGPointMake(16, 0) toView:row].x;
-    CGRect tf = CGRectMake(left, T + 31, W - 32, th);
+    CGFloat left = [root convertPoint:CGPointMake(24, 0) toView:row].x;
+    CGRect tf = CGRectMake(left, T + 31, W - 48, th);
     if (!CGRectEqualToRect(tabs.frame, tf)) tabs.frame = tf;
     ((UIScrollView *)tabs).contentSize = CGSizeMake(total, th);
     if (total < tf.size.width) { x = floor((tf.size.width - total) / 2); if (((UIScrollView *)tabs).contentOffset.x != 0) ((UIScrollView *)tabs).contentOffset = CGPointZero; }
@@ -2397,7 +2421,7 @@ static void StyleDetails(UIWindow *w) {
               BOOL above = CGRectGetMaxY(r) <= T + 2 && v != hc && ![row isDescendantOfView:v];
               BOOL isName = [v isKindOfClass:[UILabel class]] && ((UILabel *)v).font.pointSize >= 22;
               BOOL isPic = !([v isKindOfClass:[UILabel class]]) && v.bounds.size.width >= 70 && v.bounds.size.width <= 160 && fabs(v.bounds.size.width - v.bounds.size.height) < 14;
-              if (above && (isName || isPic)) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, -18); if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t; continue; }
+              if (above && (isName || isPic)) { CGAffineTransform t = CGAffineTransformIdentity; if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t; continue; }
               if (![row isDescendantOfView:v] && v != hc && CGRectGetMinY(r) > T) continue;
               [st2 addObjectsFromArray:v.subviews]; }
       }
@@ -2422,7 +2446,7 @@ static void StyleDetails(UIWindow *w) {
             else if (ok && sz.width > bw) { bw = sz.width; pic = v; }
             if (!ok) [st3 addObjectsFromArray:v.subviews]; }
         gPicDebug = pic ? [NSString stringWithFormat:@"pic=%@ %.0fx%.0f", NSStringFromClass([pic class]), pic.bounds.size.width, pic.bounds.size.height] : [NSString stringWithFormat:@"pic=none top=%.0f n=%d [%@]", topY, g3, [seen componentsJoinedByString:@"; "]];
-        if (pic) { CGAffineTransform t = CGAffineTransformMakeTranslation(0, -18);
+        if (pic) { CGAffineTransform t = CGAffineTransformIdentity;
             for (UIView *a = pic.superview; a; a = a.superview) if (CGAffineTransformEqualToTransform(a.transform, t)) { pic = nil; break; }
             if (pic && !CGAffineTransformEqualToTransform(pic.transform, t)) pic.transform = t;
             // don't cut off the top of the moved photo
@@ -5389,7 +5413,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.3.6 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.3.7 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -5528,7 +5552,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         }
         MSHookMessageEx([UIApplication class], @selector(sendEvent:), (IMP)SendEvent, (IMP *)&origSendEvent);
         HookViewer();
-        @try { StartSpeaker(); StartAudioBubbles(); StartContactAnim(); } @catch (__unused id ex) {}
+        @try { StartSpeaker(); StartAudioBubbles(); } @catch (__unused id ex) {}
         { __block int tries = 0;
           [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *vt) { HookViewer(); if (MVQLClass() || ++tries > 300) [vt invalidate]; }]; }
         [NSTimer scheduledTimerWithTimeInterval:SlowDevice() ? 0.5 : 0.3 repeats:YES block:^(__unused NSTimer *t) { @try { Tick(); } @catch (__unused id ex) {} }];
