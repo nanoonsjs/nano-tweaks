@@ -1,4 +1,5 @@
-// MusicPill 1.4 - made by nano
+// MusicPill 1.4.1 - made by nano
+// 1.4.1: Smooth Lyrics in landscape: every frame, glide, karaoke fill, depth + soft focus, breathing ••• in breaks, ± timing nudge per song
 // 1.4: release (hold to peek, song splash, share card, landscape lyrics layouts, favorite, Up Next)
 // 1.3.9: landscape: swipe right = next / left = back (setting to reverse), Hide Home Bar setting, no double-tap favorite through it, Favorite star, Up Next next to lyrics
 // 1.3.8: landscape: gone when you go Home (no stuck view), Insights hides AirPlay / Insights buttons, even volume row, "Big Cover With Lyrics" (tap cover = play / pause, swipe = change song)
@@ -417,7 +418,7 @@ static UIView *GlyphIn(UIView *v, int depth);
 #define COLLAPSE_TAG 0x4D50434C
 
 static BOOL gRename = YES, gRound = YES, gDebug = NO, gSwipe = YES;
-static BOOL gPillHoldPref, gWavePref, gTapOpenPref = YES, gLandscapePref, gLibMiniPref, gSplashPref, gLSArtLyricsPref, gLSHideHomePref, gLSReverseSwipePref;
+static BOOL gPillHoldPref, gWavePref, gTapOpenPref = YES, gLandscapePref, gLibMiniPref, gSplashPref, gLSArtLyricsPref, gLSHideHomePref, gLSReverseSwipePref, gSmoothLyricsPref, gKaraokePref = YES, gLyricsDepthPref = YES;
 static BOOL OnLibraryTab(void);   // read into the extras (Extras.h) below
 static BOOL gCollapse = YES, gCollapsed = NO;
 static NSString *gSwipeDebug = @"-";
@@ -548,6 +549,9 @@ static void LoadPrefs(void) {
     gLSArtLyricsPref = PrefBool(file, @"lsartlyrics", NO);
     gLSHideHomePref = PrefBool(file, @"lshidehome", NO);
     gLSReverseSwipePref = PrefBool(file, @"lsreverseswipe", NO);
+    gSmoothLyricsPref = PrefBool(file, @"smoothlyrics", NO);
+    gKaraokePref = PrefBool(file, @"karaoke", YES);
+    gLyricsDepthPref = PrefBool(file, @"lyricsdepth", YES);
     gWavePref = PrefBool(file, @"wave", NO);
     gTapOpenPref = PrefBool(file, @"tapopen", YES);
     gLandscapePref = PrefBool(file, @"landscape", NO);
@@ -1451,7 +1455,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];

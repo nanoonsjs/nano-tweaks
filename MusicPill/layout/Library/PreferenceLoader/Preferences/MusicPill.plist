@@ -339,6 +339,56 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
+			<string>Smooth Lyrics: the lyrics follow the song every frame and glide to the next line instead of jumping, "•••" breathes during instrumental breaks, and − / + buttons fix lyrics that run early or late (remembered for each song). Karaoke Fill: the line being sung fills in as it goes (timing is estimated from each line's start). Depth: lines further away are smaller, dimmer and softly out of focus.</string>
+			<key>label</key>
+			<string>Landscape Lyrics</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>smoothlyrics</string>
+			<key>label</key>
+			<string>Smooth Lyrics</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>karaoke</string>
+			<key>label</key>
+			<string>Karaoke Fill</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>lyricsdepth</string>
+			<key>label</key>
+			<string>Depth</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
 			<string>Shows the next song above the pill before the current one ends. Tap it to skip, pull it away to dismiss.</string>
 			<key>label</key>
 			<string>Up Next Preview</string>

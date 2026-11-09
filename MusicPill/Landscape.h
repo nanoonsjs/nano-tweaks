@@ -143,16 +143,30 @@ static void XFetchLyrics(NSString *title, NSString *artist, NSString *album, dou
 }
 
 // Apple-style lyrics: the line being sung is bright, the rest dim; it rolls to keep up. Tap a line to jump there.
+// Smooth Lyrics (setting): follows the song every frame, glides instead of jumping, fills the line in as it's
+// sung (karaoke), lines further away are smaller, dimmer and soft, "•••" breathes in instrumental breaks,
+// and a ± nudge fixes lyrics that run early or late (remembered per song).
+static NSString *const kLyricsOffsets = @"mp.lyricsOffset";
 @interface MPLyricsView : UIScrollView <UIScrollViewDelegate>
 @property (nonatomic, strong) MPLyrics *lyrics;
 @property (nonatomic, copy) NSString *message;
+@property (nonatomic, copy) NSString *songKey;
+@property (nonatomic) double offset;   // seconds added to the song time (nudge)
 - (void)follow:(double)t animated:(BOOL)a;
+- (BOOL)smooth;
+- (void)nudge:(double)d;
 @end
-@implementation MPLyricsView { NSMutableArray<UILabel *> *_labels; NSInteger _cur; CFTimeInterval _userUntil; UILabel *_msg; CGFloat _laidW; }
+@implementation MPLyricsView {
+    NSMutableArray<UILabel *> *_labels; NSInteger _cur; CFTimeInterval _userUntil; UILabel *_msg; CGFloat _laidW;
+    CADisplayLink *_link; CFTimeInterval _lastFrame;
+    NSMutableArray *_frags;   // per line: @[ @[@(charStart), @(charEnd), [NSValue rect]] ... ]
+    NSMutableArray *_fill;    // per line: the bright copy that fills in
+}
+- (BOOL)smooth { return gSmoothLyricsPref && _lyrics.times.count > 0; }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
     self.showsVerticalScrollIndicator = NO; self.alwaysBounceVertical = YES; self.delegate = self;
-    _labels = [NSMutableArray array]; _cur = -2;
+    _labels = [NSMutableArray array]; _cur = -2; _frags = [NSMutableArray array]; _fill = [NSMutableArray array];
     _msg = XLabel(@"", 19, UIFontWeightSemibold, [UIColor colorWithWhite:1 alpha:0.55]);
     _msg.numberOfLines = 0; _msg.adjustsFontSizeToFitWidth = NO; [self addSubview:_msg];
     CAGradientLayer *fade = [CAGradientLayer layer];
@@ -163,20 +177,51 @@ static void XFetchLyrics(NSString *title, NSString *artist, NSString *album, dou
     return self;
 }
 - (void)setMessage:(NSString *)m { _message = m; _msg.text = m; _msg.hidden = !m.length; [self setNeedsLayout]; }
+- (void)setSongKey:(NSString *)k {
+    _songKey = [k copy];
+    NSDictionary *d = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kLyricsOffsets];
+    _offset = k ? [d[k] doubleValue] : 0;
+}
+- (void)nudge:(double)d {
+    _offset = MAX(-10, MIN(10, _offset + d));
+    if (_songKey) {
+        NSMutableDictionary *m = [[[NSUserDefaults standardUserDefaults] dictionaryForKey:kLyricsOffsets] mutableCopy] ?: [NSMutableDictionary dictionary];
+        if (fabs(_offset) < 0.01) [m removeObjectForKey:_songKey]; else m[_songKey] = @(_offset);
+        if (m.count > 400) [m removeObjectForKey:m.allKeys.firstObject];
+        [[NSUserDefaults standardUserDefaults] setObject:m forKey:kLyricsOffsets];
+    }
+    _cur = -2;
+}
 - (void)setLyrics:(MPLyrics *)l {
+    // a long quiet intro gets its own "•••"
+    if (l.times.count && [l.times.firstObject doubleValue] > 4 && ![l.lines.firstObject isEqualToString:@"♪"]) {
+        MPLyrics *m = [MPLyrics new];
+        m.lines = [@[@"♪"] arrayByAddingObjectsFromArray:l.lines];
+        m.times = [@[@0] arrayByAddingObjectsFromArray:l.times];
+        l = m;
+    }
     _lyrics = l;
     for (UILabel *x in _labels) [x removeFromSuperview];
-    [_labels removeAllObjects];
+    [_labels removeAllObjects]; [_fill removeAllObjects]; [_frags removeAllObjects];
     BOOL timed = l.times.count > 0;
-    for (NSString *s in l.lines) {
+    for (NSString *s0 in l.lines) {
+        BOOL dots = [s0 isEqualToString:@"♪"];
+        NSString *s = dots ? @"•  •  •" : s0;
         UILabel *x = XLabel(s, timed ? 28 : 24, UIFontWeightBold, UIColor.whiteColor);
         x.numberOfLines = 0; x.adjustsFontSizeToFitWidth = NO;
         x.alpha = timed ? 0.3 : 0.85;
+        x.tag = dots ? 7 : 0;
         [self addSubview:x]; [_labels addObject:x];
+        UILabel *f = XLabel(s, timed ? 28 : 24, UIFontWeightBold, UIColor.whiteColor);
+        f.numberOfLines = 0; f.adjustsFontSizeToFitWidth = NO; f.hidden = YES;
+        CAShapeLayer *mk = [CAShapeLayer layer]; f.layer.mask = mk;
+        [x addSubview:f]; [_fill addObject:f];
+        [_frags addObject:@[]];
     }
     _cur = -2; _laidW = 0;
     self.contentOffset = CGPointMake(0, -self.contentInset.top);
     [self setNeedsLayout];
+    [self startLink];
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
@@ -187,17 +232,39 @@ static void XFetchLyrics(NSString *title, NSString *artist, NSString *album, dou
     if (fabs(W - _laidW) < 0.5) return;
     _laidW = W;
     CGFloat y = 0;
-    for (UILabel *x in _labels) {
+    for (NSUInteger i = 0; i < _labels.count; i++) {
+        UILabel *x = _labels[i];
         CGAffineTransform keep = x.transform; x.transform = CGAffineTransformIdentity;
-        CGSize s = [x sizeThatFits:CGSizeMake(W - 16, CGFLOAT_MAX)];
+        CGSize sz = [x sizeThatFits:CGSizeMake(W - 16, CGFLOAT_MAX)];
         x.layer.anchorPoint = CGPointMake(0, 0.5);
-        x.frame = CGRectMake(0, y, W - 16, ceil(s.height));
+        x.frame = CGRectMake(0, y, W - 16, ceil(sz.height));
         x.transform = keep;
-        y += ceil(s.height) + (_lyrics.times.count ? 22 : 12);
+        UILabel *f = _fill[i]; f.frame = x.bounds;
+        _frags[i] = [self fragmentsFor:x];
+        y += ceil(sz.height) + (_lyrics.times.count ? 22 : 12);
     }
     self.contentSize = CGSizeMake(W, y);
     self.contentInset = UIEdgeInsetsMake(self.bounds.size.height * 0.5 - 20, 0, self.bounds.size.height * 0.5, 0);
     _cur = -2;
+}
+// where each wrapped row of a line sits, and which letters it holds (for the karaoke fill)
+- (NSArray *)fragmentsFor:(UILabel *)x {
+    if (!x.text.length) return @[];
+    NSTextStorage *ts = [[NSTextStorage alloc] initWithString:x.text attributes:@{NSFontAttributeName: x.font}];
+    NSLayoutManager *lm = [NSLayoutManager new]; [ts addLayoutManager:lm];
+    NSTextContainer *tc = [[NSTextContainer alloc] initWithSize:CGSizeMake(x.bounds.size.width, CGFLOAT_MAX)];
+    tc.lineFragmentPadding = 0; [lm addTextContainer:tc];
+    NSMutableArray *out = [NSMutableArray array];
+    [lm enumerateLineFragmentsForGlyphRange:NSMakeRange(0, lm.numberOfGlyphs) usingBlock:^(CGRect rect, CGRect used, NSTextContainer *c, NSRange g, BOOL *stop) {
+        NSRange cr = [lm characterRangeForGlyphRange:g actualGlyphRange:NULL];
+        [out addObject:@[@(cr.location), @(NSMaxRange(cr)), [NSValue valueWithCGRect:used]]];
+    }];
+    // the label centers its text vertically: line the rows up with it
+    CGFloat textH = 0; for (NSArray *r in out) textH = MAX(textH, CGRectGetMaxY([r[2] CGRectValue]));
+    CGFloat dy = (x.bounds.size.height - textH) / 2;
+    NSMutableArray *shifted = [NSMutableArray array];
+    for (NSArray *r in out) { CGRect u = [r[2] CGRectValue]; u.origin.y += dy; [shifted addObject:@[r[0], r[1], [NSValue valueWithCGRect:u]]]; }
+    return shifted;
 }
 - (void)scrollViewWillBeginDragging:(UIScrollView *)s { _userUntil = CACurrentMediaTime() + 3.5; }
 - (void)scrollViewDidEndDragging:(UIScrollView *)s willDecelerate:(BOOL)d { _userUntil = CACurrentMediaTime() + 3; }
@@ -205,14 +272,106 @@ static void XFetchLyrics(NSString *title, NSString *artist, NSString *album, dou
     if (!_lyrics.times.count) return;
     CGPoint p = [g locationInView:self];
     for (NSUInteger i = 0; i < _labels.count; i++) if (CGRectContainsPoint(CGRectInset(_labels[i].frame, 0, -10), p)) {
-        double t = [_lyrics.times[i] doubleValue];
+        double t = MAX(0, [_lyrics.times[i] doubleValue] - _offset);
         XSeek(t); gXElapsed = t; gXStamp = CFAbsoluteTimeGetCurrent();
         [[UISelectionFeedbackGenerator new] selectionChanged];
-        _userUntil = 0; [self follow:t animated:YES];
+        _userUntil = 0; _cur = -2;
+        if (![self smooth]) [self follow:t animated:YES];
         return;
     }
 }
+
+#pragma mark smooth: every frame
+- (void)didMoveToWindow { [super didMoveToWindow]; [self startLink]; }
+- (void)startLink {
+    BOOL want = self.window && [self smooth];
+    if (want && !_link) {
+        _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(frame:)];
+        if (@available(iOS 15.0, *)) _link.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
+        [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+        _lastFrame = 0;
+    } else if (!want && _link) { [_link invalidate]; _link = nil; }
+}
+static double MPEase(double x) { x = MAX(0, MIN(1, x)); return x * x * (3 - 2 * x); }
+- (void)frame:(CADisplayLink *)l {
+    if (!self.window || ![self smooth]) { [self startLink]; return; }
+    if (self.hidden || self.alpha < 0.01) return;
+    CFTimeInterval now = CACurrentMediaTime();
+    double dt = _lastFrame > 0 ? MIN(0.1, now - _lastFrame) : 1.0 / 60; _lastFrame = now;
+    double t = XElapsedNow() + _offset;
+    NSArray *times = _lyrics.times;
+    NSInteger n = times.count, cur = -1;
+    for (NSInteger i = 0; i < n; i++) { if ([times[i] doubleValue] <= t + 0.05) cur = i; else break; }
+    double start = cur >= 0 ? [times[cur] doubleValue] : 0, nextT = cur + 1 < n ? [times[cur + 1] doubleValue] : (gXDuration > 0 ? gXDuration : start + 5);
+    // how far through the current line: at singing pace (a long pause after the line doesn't stretch the fill)
+    UILabel *cl = cur >= 0 ? _labels[cur] : nil;
+    double chars = MAX(1, (double)cl.text.length);
+    double span = MAX(0.5, MIN(nextT - start, 0.6 + chars * 0.075));
+    double prog = cur >= 0 ? MAX(0, MIN(1, (t - start) / span)) : 0;
+    BOOL depth = gLyricsDepthPref, karaoke = gKaraokePref;
+    CGFloat scale = UIScreen.mainScreen.scale;
+    for (NSInteger i = 0; i < (NSInteger)_labels.count; i++) {
+        UILabel *x = _labels[i]; UILabel *f = _fill[i];
+        double d = fabs((double)(i - cur));
+        // the next line lights up a little just before its turn
+        if (i == cur + 1 && nextT - t < 0.5) d = MAX(0.3, d - (0.5 - (nextT - t)) * 1.4);
+        BOOL on = i == cur;
+        CGFloat a = on ? 1 : (depth ? MAX(0.14, 0.42 - 0.07 * (d - 1)) : (i < cur ? 0.28 : 0.36));
+        CGFloat sc = on ? 1.0 : (depth ? MAX(0.86, 0.97 - 0.025 * (d - 1)) : 0.97);
+        if (fabs(x.alpha - a) > 0.004) x.alpha += (a - x.alpha) * MIN(1, dt * 10);
+        CGFloat cs = x.transform.a; if (fabs(cs - sc) > 0.0015) { CGFloat ns = cs + (sc - cs) * MIN(1, dt * 10); x.transform = CGAffineTransformMakeScale(ns, ns); }
+        // soft focus for lines far away
+        BOOL soft = depth && d >= 2;
+        if (x.layer.shouldRasterize != soft) { x.layer.shouldRasterize = soft; }
+        if (soft) { CGFloat rs = scale * MAX(0.32, 0.75 - 0.12 * (d - 2)); if (fabs(x.layer.rasterizationScale - rs) > 0.02) x.layer.rasterizationScale = rs; }
+        // karaoke: the line fills in as it's sung
+        BOOL dots = x.tag == 7;
+        if (on && karaoke && !dots) {
+            if (x.textColor != nil) x.textColor = [UIColor colorWithWhite:1 alpha:0.38];
+            f.hidden = NO;
+            NSArray *fr = _frags[i];
+            double upto = prog * chars;
+            UIBezierPath *path = [UIBezierPath bezierPath];
+            for (NSArray *r in fr) {
+                double c0 = [r[0] doubleValue], c1 = [r[1] doubleValue]; CGRect u = [r[2] CGRectValue];
+                if (upto <= c0) break;
+                double part = MIN(1, (upto - c0) / MAX(1, c1 - c0));
+                [path appendPath:[UIBezierPath bezierPathWithRect:CGRectMake(u.origin.x - 2, u.origin.y - 4, u.size.width * part + 4, u.size.height + 8)]];
+            }
+            [CATransaction begin]; [CATransaction setDisableActions:YES]; ((CAShapeLayer *)f.layer.mask).path = path.CGPath; [CATransaction commit];
+        } else {
+            if (!f.hidden) f.hidden = YES;
+            UIColor *want = UIColor.whiteColor;
+            if (![x.textColor isEqual:want]) x.textColor = want;
+        }
+        // instrumental break: the dots breathe
+        if (dots) {
+            BOOL breathe = on;
+            if (breathe && ![x.layer animationForKey:@"breathe"]) {
+                CABasicAnimation *b = [CABasicAnimation animationWithKeyPath:@"opacity"]; b.fromValue = @1; b.toValue = @0.35; b.duration = 0.8; b.autoreverses = YES; b.repeatCount = HUGE_VALF;
+                b.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+                [x.layer addAnimation:b forKey:@"breathe"];
+            } else if (!breathe && [x.layer animationForKey:@"breathe"]) [x.layer removeAnimationForKey:@"breathe"];
+        }
+    }
+    _cur = cur;
+    // glide: the scroll eases toward the line being sung, and starts moving to the next one just before it
+    if (now < _userUntil || self.isTracking || self.isDecelerating || !_labels.count) return;
+    UILabel *aL = _labels[MAX(0, cur)];
+    CGFloat target = CGRectGetMidY(aL.frame);
+    if (cur + 1 < (NSInteger)_labels.count && nextT - t < 0.45) {
+        UILabel *bL = _labels[cur + 1];
+        target += (CGRectGetMidY(bL.frame) - target) * MPEase(1 - (nextT - t) / 0.45);
+    }
+    CGFloat want = target - self.bounds.size.height * 0.5;
+    want = MAX(-self.contentInset.top, MIN(want, self.contentSize.height - self.bounds.size.height * 0.5));
+    CGFloat y = self.contentOffset.y;
+    if (fabs(want - y) > 0.3) self.contentOffset = CGPointMake(0, y + (want - y) * MIN(1, dt * 7));
+}
+
 - (void)follow:(double)t animated:(BOOL)a {
+    [self startLink];
+    if ([self smooth]) return;   // smooth mode follows by itself, every frame
     if (!_labels.count) return;
     NSInteger cur;
     if (_lyrics.times.count) {
@@ -226,6 +385,7 @@ static void XFetchLyrics(NSString *title, NSString *artist, NSString *album, dou
                 BOOL on = (NSInteger)i == cur;
                 x.alpha = on ? 1 : ((NSInteger)i < cur ? 0.28 : 0.36);
                 x.transform = on ? CGAffineTransformMakeScale(1.04, 1.04) : CGAffineTransformIdentity;
+                x.textColor = UIColor.whiteColor; x.layer.shouldRasterize = NO; self->_fill[i].hidden = YES;
             }
         } completion:nil];
         if (CACurrentMediaTime() < _userUntil || self.isTracking) return;
@@ -348,7 +508,8 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     MPVolumeView *_vol;
     int _volLevel; BOOL _volFull, _volMute, _volHooked;
     UIView *_mini, *_miniFill;
-    UIButton *_queueBtn, *_fav;
+    UIButton *_queueBtn, *_fav, *_nudgeMinus, *_nudgePlus;
+    UILabel *_nudgeLabel;
     UIScrollView *_queue;
     BOOL _queueMode;
     NSString *_favSong, *_queueSong;
@@ -437,6 +598,13 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     _lyricsBtn = [self control:@"quote.bubble" size:44 pt:19 action:@selector(toggleLyrics)]; [self addSubview:_lyricsBtn];
     [_route removeFromSuperview]; [self addSubview:_route];   // AirPlay sits up top with the other buttons
     _queueBtn = [self control:@"list.bullet" size:44 pt:19 action:@selector(toggleQueue)]; [self addSubview:_queueBtn];
+    // lyrics early / late? nudge them (Smooth Lyrics)
+    _nudgeMinus = [self control:@"minus" size:34 pt:13 action:@selector(nudgeMinusTap)];
+    _nudgePlus = [self control:@"plus" size:34 pt:13 action:@selector(nudgePlusTap)];
+    _nudgeLabel = XLabel(@"0.0s", 13, UIFontWeightSemibold, [UIColor colorWithWhite:1 alpha:0.6]);
+    _nudgeLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold]; _nudgeLabel.textAlignment = NSTextAlignmentCenter;
+    for (UIView *v in @[_nudgeMinus, _nudgePlus, _nudgeLabel]) { v.alpha = 0; [_root addSubview:v]; }
+    for (UIButton *b in @[_nudgeMinus, _nudgePlus]) { [b viewWithTag:77].alpha = 0; b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12]; b.layer.cornerRadius = 17; }
     _fav = [self control:@"star" size:44 pt:21 action:@selector(favTap)]; [_root addSubview:_fav];
     _queue = [UIScrollView new]; _queue.showsVerticalScrollIndicator = NO; _queue.alwaysBounceVertical = YES; _queue.alpha = 0; _queue.hidden = YES;
     CAGradientLayer *qf = [CAGradientLayer layer];
@@ -476,6 +644,23 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     }
 }
 - (BOOL)bigCover { return gLSArtLyricsPref && _showLyrics; }
+- (void)updateNudge {
+    double o = _lyrics.offset;
+    _nudgeLabel.text = fabs(o) < 0.05 ? @"0.0s" : [NSString stringWithFormat:@"%+.1fs", o];
+    _nudgeLabel.textColor = fabs(o) < 0.05 ? [UIColor colorWithWhite:1 alpha:0.6] : MusicPink();
+    BOOL show = _showLyrics && !_queueMode && [_lyrics smooth];
+    [UIView animateWithDuration:0.25 animations:^{ for (UIView *v in @[self->_nudgeMinus, self->_nudgePlus, self->_nudgeLabel]) v.alpha = show ? 1 : 0; }];
+    for (UIView *v in @[_nudgeMinus, _nudgePlus]) v.userInteractionEnabled = show;
+}
+- (void)nudgeBy:(double)d {
+    [[UISelectionFeedbackGenerator new] selectionChanged];
+    [_lyrics nudge:d];
+    [self updateNudge];
+    CAKeyframeAnimation *k = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"]; k.values = @[@1, @1.25, @1]; k.duration = 0.25;
+    [_nudgeLabel.layer addAnimation:k forKey:@"pop"];
+}
+- (void)nudgeMinusTap { [self nudgeBy:-0.5]; }   // lyrics come later
+- (void)nudgePlusTap { [self nudgeBy:0.5]; }     // lyrics come sooner
 // Music's own Favorite (the same one as in its song menu), read from the menu of the bar at the bottom
 - (UIAction *)loveAction {
     UIView *mini = gLastTabBar ? objc_getAssociatedObject(gLastTabBar, kMini) : nil;
@@ -662,6 +847,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     [self setSym:_lyricsBtn name:(!queue && _showLyrics) ? @"quote.bubble.fill" : @"quote.bubble" pt:19];
     _queueBtn.tintColor = (queue && _showLyrics) ? MusicPink() : UIColor.whiteColor;
     [UIView animateWithDuration:0.3 animations:^{ in.alpha = 1; out.alpha = 0; } completion:^(__unused BOOL f) { if (out.alpha < 0.01) out.hidden = YES; }];
+    [self updateNudge];
 }
 - (void)toggleQueue {
     [[UISelectionFeedbackGenerator new] selectionChanged];
@@ -677,6 +863,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
         self->_queue.alpha = self->_showLyrics ? 1 : 0;
         self->_lyrics.alpha = 0;
     } completion:^(__unused BOOL f) { if (!self->_showLyrics) self->_queue.hidden = YES; self->_lyrics.hidden = YES; }];
+    [self updateNudge];
 }
 - (void)toggleLyrics {
     [[UISelectionFeedbackGenerator new] selectionChanged];
@@ -692,6 +879,7 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
         self->_album.alpha = self->_showLyrics ? 0 : 1;
     } completion:^(__unused BOOL f) { if (!self->_showLyrics) self->_lyrics.hidden = YES; }];
     if (_showLyrics) [_lyrics follow:XElapsedNow() animated:NO];
+    [self updateNudge];
 }
 - (void)loadLyrics {
     NSString *key = [NSString stringWithFormat:@"%@|%@", gXTitle ?: @"", gXArtist ?: @""];
@@ -703,7 +891,9 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
     XFetchLyrics(gXTitle, gXArtist, gXAlbum, gXDuration, ^(MPLyrics *l) {
         MPLandscape *s = ws; if (!s || ![key isEqualToString:s->_lyricsSong]) return;
         s->_lyrics.message = l ? nil : @"No lyrics found for this song.";
+        s->_lyrics.songKey = key;
         s->_lyrics.lyrics = l;
+        [s updateNudge];
         [s->_lyrics layoutIfNeeded];
         [s->_lyrics follow:XElapsedNow() animated:NO];
     });
@@ -803,6 +993,8 @@ static void XRequestOrientationFwd(UIWindow *w, UIInterfaceOrientationMask mask)
         _lyrics.frame = CGRectMake(lx, 0, W - lx - R, H);
         _queue.frame = CGRectMake(lx, 0, W - lx - R, H);
     }
+    { CGRect lf = _lyrics.frame; CGFloat ny = H - MAX(14, sa.bottom) - 24;
+      _nudgePlus.center = CGPointMake(CGRectGetMaxX(lf) - 20, ny); _nudgeLabel.frame = CGRectMake(CGRectGetMaxX(lf) - 98, ny - 9, 44, 18); _nudgeMinus.center = CGPointMake(CGRectGetMaxX(lf) - 116, ny); }
     { CAGradientLayer *qm = (CAGradientLayer *)_queue.layer.mask; [CATransaction begin]; [CATransaction setDisableActions:YES]; qm.frame = (CGRect){_queue.contentOffset, _queue.bounds.size}; [CATransaction commit]; }
     if (big) { [self placeBlobs:W h:H]; return; }
     _scrub.frame = CGRectMake(x, top, cw, 22);
