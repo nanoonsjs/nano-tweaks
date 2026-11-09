@@ -8,6 +8,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <substrate.h>
 
 @interface NSObject (NanoPS)
 - (id)propertyForKey:(NSString *)k;

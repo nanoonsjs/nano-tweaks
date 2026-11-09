@@ -10,6 +10,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <substrate.h>
 #include "../shared/NanoSettings.h"
 
 #define DOM CFSTR("com.nano.fasthaptic")
