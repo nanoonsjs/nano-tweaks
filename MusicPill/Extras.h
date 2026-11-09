@@ -675,8 +675,6 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
         seen = CGRectMake(CGRectGetMidX(rest) - rest.size.width * sx / 2 + dx, CGRectGetMidY(rest) - rest.size.height * sy / 2 + dy, rest.size.width * sx, rest.size.height * sy);
     }
     for (NSString *k in @[@"mp.bounce", @"mp.release", @"mp.touchdown", @"mp.jelly", @"mp.absorb"]) [pill.layer removeAnimationForKey:k];
-    objc_setAssociatedObject(pill, kDragT, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    ApplyPillST(pill);
     v->_from = rest;
     v->_fromR = v->_from.size.height / 2;
     UIEdgeInsets sa = w.safeAreaInsets;
@@ -722,7 +720,14 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     down.delegate = v; [shape addGestureRecognizer:down];
 
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-    pill.alpha = 0;   // the pill *becomes* the island
+    // 1.3.2: the pill is never hidden (hiding it made Music lay the bar out again, so it jumped half a second
+    // after closing). The island always covers it; the swipe stretch is let go once the island is over it.
+    __weak UIView *wp = pill;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIView *pp = wp; if (!pp) return;
+        objc_setAssociatedObject(pp, kDragT, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        ApplyPillST(pp);
+    });
     // one spring, straight out of the pill (the same curve every time)
     // one spring out of the pill: quick, a touch of overshoot, settles like the Dynamic Island
     [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.35 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{
@@ -806,7 +811,7 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
         self.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
     } completion:^(__unused BOOL f) {
         // landed exactly on the pill (which looks the same as its picture): swap in one frame, no ghosting
-        [UIView performWithoutAnimation:^{ pill.alpha = 1; }];
+        if (pill.alpha < 0.99) [UIView performWithoutAnimation:^{ pill.alpha = 1; }];
         [self removeFromSuperview];
     }];
     [UIView animateWithDuration:0.18 delay:0.14 options:UIViewAnimationOptionCurveEaseInOut animations:^{ snap.alpha = 1; } completion:nil];
@@ -936,8 +941,8 @@ static UIView *XVisualPill(UIView *touched) {
         XBounce(v, XRubber(t.x, 38), 0, go);
     } else {
         BOOL go = ended && (t.y < -34 || vel.y < -420);
-        XBounce(v, 0, XRubber(MIN(0, t.y), 26), NO);
         if (go) [MPIsland expandFrom:v];
+        else XBounce(v, 0, XRubber(MIN(0, t.y), 26), NO);
     }
 }
 @end
