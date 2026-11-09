@@ -33,7 +33,7 @@
 			<key>nanoSub</key>
 			<string>Messages, iOS 26 style</string>
 			<key>nanoVersion</key>
-			<string>1.3</string>
+			<string>1.3.1</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -178,6 +178,42 @@
 			<string>viewer</string>
 			<key>label</key>
 			<string>iOS 26 Photo Viewer</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Bigger Audio Bubbles: wide iOS 26 audio messages with a big play button and a long waveform. Play on Speaker: audio messages play out loud on the bottom speaker instead of the earpiece (hold the phone to your ear and it still switches to the earpiece).</string>
+			<key>label</key>
+			<string>Audio Messages</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.nano.messages26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.nano.messages26</string>
+			<key>key</key>
+			<string>audiobig</string>
+			<key>label</key>
+			<string>Bigger Audio Bubbles</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.nano.messages26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.nano.messages26</string>
+			<key>key</key>
+			<string>speaker</string>
+			<key>label</key>
+			<string>Play on Speaker</string>
 		</dict>
 		<dict>
 			<key>cell</key>

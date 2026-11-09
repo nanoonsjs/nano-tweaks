@@ -67,9 +67,13 @@ static NSString *MVKind(UIBarButtonItem *it) {
     if ([l containsString:@"done"] || [l containsString:@"close"]) return @"done";
     return @"tapback";
 }
-static void MVForward(UIBarButtonItem *it) {
+static void MVForward(UIBarButtonItem *it, UIView *from) {
     if (!it) return;
-    if (it.action) { [[UIApplication sharedApplication] sendAction:it.action to:it.target from:it forEvent:nil]; return; }
+    if (it.action) {
+        id target = it.target;
+        if (!target) for (UIResponder *r = from; r; r = r.nextResponder) if ([r respondsToSelector:it.action]) { target = r; break; }
+        if (target) { [[UIApplication sharedApplication] sendAction:it.action to:target from:it forEvent:nil]; return; }
+    }
     UIView *v = it.customView; if (!v) { @try { v = [it valueForKey:@"view"]; } @catch (__unused id e) {} }
     NSMutableArray *st = [NSMutableArray arrayWithObject:v ?: [UIView new]];
     while (st.count) {
@@ -83,6 +87,18 @@ static void MVForward(UIBarButtonItem *it) {
     }
 }
 
+static UIImage *MVItemImage(UIBarButtonItem *it) {
+    if (it.image) return it.image;
+    UIView *v = it.customView; if (!v) { @try { v = [it valueForKey:@"view"]; } @catch (__unused id e) {} }
+    NSMutableArray *st = [NSMutableArray arrayWithObject:v ?: [UIView new]]; int g = 0;
+    while (st.count && g++ < 40) {
+        UIView *x = st.firstObject; [st removeObjectAtIndex:0];
+        if ([x isKindOfClass:[UIButton class]] && [(UIButton *)x currentImage]) return [(UIButton *)x currentImage];
+        if ([x isKindOfClass:[UIImageView class]] && ((UIImageView *)x).image) return ((UIImageView *)x).image;
+        [st addObjectsFromArray:x.subviews];
+    }
+    return nil;
+}
 static double MVDur(AVPlayer *p) {
     CMTime d = p.currentItem.duration;
     if (CMTIME_IS_NUMERIC(d) && CMTimeGetSeconds(d) > 0) return CMTimeGetSeconds(d);
@@ -95,8 +111,11 @@ static AVPlayer *MVPlayerIn(UIView *root) {
     AVPlayer *best = nil;
     while (st.count && guard++ < 6000) {
         CALayer *l = st.lastObject; [st removeLastObject];
-        if ([l isKindOfClass:[AVPlayerLayer class]] && ((AVPlayerLayer *)l).player) {
+        if ([l isKindOfClass:[AVPlayerLayer class]] && ((AVPlayerLayer *)l).player && !l.hidden && l.opacity > 0.01) {
             AVPlayer *p = ((AVPlayerLayer *)l).player;
+            CGRect f = [l convertRect:l.bounds toLayer:root.layer];
+            CGPoint mid = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
+            if (!CGRectContainsPoint(f, mid) || f.size.width < root.bounds.size.width * 0.5) { if (l.sublayers.count) [st addObjectsFromArray:l.sublayers]; continue; }
             if (!best || (p.rate > 0 && best.rate == 0)) best = p;
         }
         if (l.sublayers.count) [st addObjectsFromArray:l.sublayers];
@@ -135,6 +154,7 @@ static UIVisualEffectView *MVGlass(CGFloat radius) {
     double _scrubStart; CGFloat _scrubX0;
     float _speed;
     CFTimeInterval _lastScan;
+    UIView *_panel, *_catcher; UIVisualEffectView *_panelG;
 }
 static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -164,10 +184,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     _play = MVButton(@"play.fill", 36, self, @selector(doPlay)); [self addSubview:_play];
     _back = MVButton(@"gobackward.10", 26, self, @selector(doBack)); [self addSubview:_back];
     _fwd = MVButton(@"goforward.10", 26, self, @selector(doFwd)); [self addSubview:_fwd];
-    _more = [UIButton buttonWithType:UIButtonTypeCustom];
-    [_more setImage:[UIImage systemImageNamed:@"ellipsis" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
-    _more.tintColor = UIColor.whiteColor; _more.showsMenuAsPrimaryAction = YES; [self addSubview:_more];
-    [self buildMenu];
+    _more = MVButton(@"ellipsis", 19, self, @selector(toggleMore)); [self addSubview:_more];
     _el = [UILabel new]; _rem = [UILabel new];
     for (UILabel *l in @[_el, _rem]) { l.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightMedium]; l.textColor = [UIColor colorWithWhite:1 alpha:0.6]; [self addSubview:l]; }
     _rem.textAlignment = NSTextAlignmentRight;
@@ -188,39 +205,105 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
 }
 - (void)press:(UIButton *)b { [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ b.transform = CGAffineTransformMakeScale(0.86, 0.86); } completion:nil]; }
 - (void)unpress:(UIButton *)b { [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.45 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil]; }
-- (void)buildMenu {
-    __weak MVOverlay *ws = self;
-    NSMutableArray *speeds = [NSMutableArray array];
-    for (NSNumber *n in @[@0.5, @1, @1.25, @1.5, @2]) {
-        float r = n.floatValue;
-        UIAction *a = [UIAction actionWithTitle:[NSString stringWithFormat:@"%@×", n] image:nil identifier:nil handler:^(__unused UIAction *x) {
-            MVOverlay *s = ws; if (!s) return;
-            s->_speed = r;
-            AVPlayer *p = s->_player;
-            if (@available(iOS 16.0, *)) p.defaultRate = r;
-            if (p.rate > 0) p.rate = r;
-            [s buildMenu];
-        }];
-        a.state = fabsf(_speed - r) < 0.01 ? UIMenuElementStateOn : UIMenuElementStateOff;
-        [speeds addObject:a];
+- (void)toggleMore { if (_panel) [self closeMore]; else [self openMore]; }
+- (void)openMore {
+    [[UISelectionFeedbackGenerator new] selectionChanged];
+    CGRect from = _moreG.frame;
+    CGFloat PW = 244, PH = 132;
+    CGRect to = CGRectMake(CGRectGetMaxX(from) - PW, CGRectGetMaxY(from) - PH, PW, PH);
+    _catcher = [[UIView alloc] initWithFrame:self.bounds];
+    [_catcher addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(closeMore)]];
+    [self addSubview:_catcher];
+    _panelG = MVGlass(from.size.height / 2); _panelG.frame = from;
+    [self addSubview:_panelG];
+    _panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, PW, PH)];   // plain view: taps on it stay on it
+    _panel.clipsToBounds = YES;
+    [self addSubview:_panel];
+    UILabel *h = [UILabel new]; h.text = @"Playback Speed"; h.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold]; h.textColor = [UIColor colorWithWhite:1 alpha:0.55];
+    h.frame = CGRectMake(18, 14, PW - 36, 16); [_panel addSubview:h];
+    NSArray *speeds = @[@0.5, @1, @1.25, @1.5, @2];
+    CGFloat cw = (PW - 28 - 4 * 5) / 5;
+    for (NSUInteger i = 0; i < speeds.count; i++) {
+        float r = [speeds[i] floatValue];
+        UIButton *c = [UIButton buttonWithType:UIButtonTypeCustom];
+        c.frame = CGRectMake(14 + i * (cw + 5), 38, cw, 34); c.layer.cornerRadius = 17; c.layer.cornerCurve = kCACornerCurveContinuous;
+        c.tag = (NSInteger)(r * 100);
+        [c setTitle:[NSString stringWithFormat:@"%g×", r] forState:UIControlStateNormal];
+        c.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+        [c addTarget:self action:@selector(pickSpeed:) forControlEvents:UIControlEventTouchUpInside];
+        [c addTarget:self action:@selector(press:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
+        [c addTarget:self action:@selector(unpress:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchDragExit];
+        [_panel addSubview:c];
     }
-    UIMenu *sp = [UIMenu menuWithTitle:@"Playback Speed" image:[UIImage systemImageNamed:@"gauge.with.dots.needle.67percent"] identifier:nil options:0 children:speeds];
-    UIAction *loop = [UIAction actionWithTitle:@"Loop" image:[UIImage systemImageNamed:@"repeat"] identifier:nil handler:^(__unused UIAction *x) { MVOverlay *s = ws; if (!s) return; s->_loop = !s->_loop; [s buildMenu]; }];
-    loop.state = _loop ? UIMenuElementStateOn : UIMenuElementStateOff;
-    UIAction *share = [UIAction actionWithTitle:@"Share" image:[UIImage systemImageNamed:@"square.and.arrow.up"] identifier:nil handler:^(__unused UIAction *x) { [ws doShare]; }];
-    _more.menu = [UIMenu menuWithTitle:@"" children:@[sp, loop, share]];
+    UIButton *lp = [UIButton buttonWithType:UIButtonTypeCustom]; lp.tag = 9;
+    lp.frame = CGRectMake(14, 82, PW - 28, 38); lp.layer.cornerRadius = 19; lp.layer.cornerCurve = kCACornerCurveContinuous;
+    lp.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    [lp setImage:[UIImage systemImageNamed:@"repeat" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    lp.imageEdgeInsets = UIEdgeInsetsMake(0, -6, 0, 6);
+    [lp addTarget:self action:@selector(toggleLoop) forControlEvents:UIControlEventTouchUpInside];
+    [lp addTarget:self action:@selector(press:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
+    [lp addTarget:self action:@selector(unpress:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchDragExit];
+    [_panel addSubview:lp];
+    [self paintMore];
+    // the circle stretches into the panel, the contents come in as it opens
+    _panel.frame = from; _panel.alpha = 0;
+    for (UIView *v in _panel.subviews) v.center = CGPointMake(v.center.x - (PW - from.size.width), v.center.y - (PH - from.size.height));
+    [UIView animateWithDuration:0.15 animations:^{ self->_more.alpha = 0; }];
+    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        self->_panelG.frame = to; self->_panelG.layer.cornerRadius = 26;
+        self->_panel.frame = to;
+        for (UIView *v in self->_panel.subviews) v.center = CGPointMake(v.center.x + (PW - from.size.width), v.center.y + (PH - from.size.height));
+    } completion:nil];
+    [UIView animateWithDuration:0.25 delay:0.1 options:0 animations:^{ self->_panel.alpha = 1; } completion:nil];
+}
+- (void)closeMore {
+    UIView *p = _panel, *g = _panelG, *c = _catcher;
+    _panel = nil; _panelG = nil; _catcher = nil;
+    if (!p) return;
+    CGRect to = _moreG.frame;
+    [c removeFromSuperview];
+    [UIView animateWithDuration:0.12 animations:^{ p.alpha = 0; }];
+    [UIView animateWithDuration:0.42 delay:0.02 usingSpringWithDamping:1 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        g.frame = to; g.layer.cornerRadius = to.size.height / 2; p.frame = to;
+    } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.12 animations:^{ g.alpha = 0; self->_more.alpha = 1; } completion:^(__unused BOOL d) { [g removeFromSuperview]; [p removeFromSuperview]; }];
+    }];
+}
+- (void)paintMore {
+    for (UIView *v in _panel.subviews) {
+        if (![v isKindOfClass:[UIButton class]]) continue;
+        UIButton *b = (UIButton *)v;
+        BOOL on = b.tag == 9 ? _loop : abs((int)b.tag - (int)lroundf(_speed * 100)) < 1;
+        b.backgroundColor = on ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.12];
+        UIColor *fg = on ? UIColor.blackColor : UIColor.whiteColor;
+        [b setTitleColor:fg forState:UIControlStateNormal]; b.tintColor = fg;
+        if (b.tag == 9) [b setTitle:_loop ? @"Loop On" : @"Loop" forState:UIControlStateNormal];
+    }
+}
+- (void)pickSpeed:(UIButton *)b {
+    [[UISelectionFeedbackGenerator new] selectionChanged];
+    _speed = b.tag / 100.0f;
+    AVPlayer *p = _player;
+    if (@available(iOS 16.0, *)) p.defaultRate = _speed;
+    if (p.rate > 0) p.rate = _speed;
+    [UIView transitionWithView:_panel duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ [self paintMore]; } completion:nil];
+}
+- (void)toggleLoop {
+    [[UISelectionFeedbackGenerator new] selectionChanged];
+    _loop = !_loop;
+    [UIView transitionWithView:_panel duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{ [self paintMore]; } completion:nil];
 }
 - (void)haptic { [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred]; }
 - (void)doClose {
     [self haptic];
-    if (_iDone) { MVForward(_iDone); return; }
+    if (_iDone) { MVForward(_iDone, self.tb ?: (UIView *)self.nb); return; }
     UIViewController *q = self.ql;
     UIViewController *pres = q.navigationController ?: q;
     [pres dismissViewControllerAnimated:YES completion:nil];
 }
-- (void)doTap { [self haptic]; MVForward(_iTap); }
-- (void)doReply { [self haptic]; MVForward(_iReply); }
-- (void)doShare { [self haptic]; MVForward(_iShare); }
+- (void)doTap { [self haptic]; MVForward(_iTap, self.tb ?: (UIView *)self.nb); }
+- (void)doReply { [self haptic]; MVForward(_iReply, self.tb ?: (UIView *)self.nb); }
+- (void)doShare { [self haptic]; MVForward(_iShare, self.tb ?: (UIView *)self.nb); }
 - (void)doSave {
     UIImage *img = _photo.image;
     if (!img) return;
@@ -240,7 +323,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
             if (MVDur(p) > 0 && CMTimeGetSeconds(p.currentTime) >= MVDur(p) - 0.15) [p seekToTime:kCMTimeZero];
             [p play]; if (_speed != 1) p.rate = _speed;
         }
-    } else MVForward(_iPlay);
+    } else MVForward(_iPlay, self.tb ?: (UIView *)self.nb);
     [self refresh];
 }
 - (void)skip:(double)d {
@@ -321,7 +404,22 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     }
     _photo = photo;
     _player = MVPlayerIn(root);
-    _video = _iPlay != nil || _player != nil;
+    // a video only when Apple shows its play button for this item (photos have none), or a player is in the middle
+    UIView *pv = nil; @try { pv = [_iPlay valueForKey:@"view"]; } @catch (__unused id e) {}
+    BOOL playShown = _iPlay && _iPlay.enabled && (!pv || (pv.window && !pv.hidden && pv.alpha > 0.01 && pv.bounds.size.width > 2));
+    _video = playShown || _player != nil;
+    if (!_video) _player = nil;
+    // Apple's own icons for tapback and reply
+    for (NSArray *pair in @[@[_tap, _iTap ?: (id)NSNull.null], @[_reply, _iReply ?: (id)NSNull.null]]) {
+        UIButton *b = pair[0]; UIBarButtonItem *it = pair[1] == NSNull.null ? nil : pair[1];
+        UIImage *im = MVItemImage(it);
+        if (im && ![b.accessibilityValue isEqualToString:im.description]) {
+            b.accessibilityValue = im.description;
+            UIImage *t = [im imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            if (t.isSymbolImage) t = [t imageByApplyingSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]];
+            [b setImage:t forState:UIControlStateNormal];
+        }
+    }
 }
 - (void)place:(UIView *)v glass:(UIVisualEffectView *)g frame:(CGRect)r {
     if (!CGRectEqualToRect(g.frame, r)) { g.frame = r; g.layer.cornerRadius = MIN(r.size.width, r.size.height) / 2; }
@@ -384,6 +482,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     BOOL chrome = (tb.window && !tb.hidden && tb.alpha > 0.05) || (nb.window && !nb.hidden && nb.alpha > 0.05);
     CGFloat a = chrome ? 1 : 0;
     if (fabs(self.alpha - a) > 0.01 && ![self.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ self.alpha = a; } completion:nil];
+    if (_panel && (!_video || a == 0)) [self closeMore];
     NSString *t = _video ? @"Video" : @"Photo";
     if (![_title.text isEqualToString:t]) { _title.text = t; [self setNeedsLayout]; }
     AVPlayer *p = _player;

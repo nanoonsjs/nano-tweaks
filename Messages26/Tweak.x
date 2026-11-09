@@ -1,4 +1,5 @@
-// Messages26 1.3 - made by nano
+// Messages26 1.3.1 - made by nano
+// 1.3.1: viewer: Reply works on videos, Apple's own tapback / reply icons, photos no longer show video controls, ... opens a glass panel (speed, loop); bigger audio bubbles, audio messages on the speaker
 // 1.3: iOS 26 photo / video viewer (glass X, big play with -10 / +10, glass time bar, tapback / reply / save / share pills), new settings page
 // 1.2: "iOS 26 Contact Photo" switch (glass back / FaceTime work without the bigger photo), Messages26 icon in its settings
 // 1.1: public release of 1.0.1-1.0.3 (name capsule fixes, smoother on older iPhones)
@@ -150,6 +151,7 @@ static void LockPreview(UIView *avatar, NSString *key);
 static BOOL gBigPfp = YES;
 static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
 static BOOL gViewerOn = YES;   // 1.3: iOS 26 photo / video viewer (MsgViewer.h)
+static BOOL gAudioBig = YES, gSpeakerOn = YES;   // 1.3.1: bigger audio bubbles, audio messages on the speaker (MsgAudio.h)
 static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
     id v = file[key];
     if (!v) { CFPropertyListRef cf = CFPreferencesCopyAppValue((__bridge CFStringRef)key, DOM); if (cf) v = (__bridge_transfer id)cf; }
@@ -175,6 +177,8 @@ static void LoadPrefs(void) {
     gBubblesOn = gOn && PrefBool(file, @"bubbles", YES);
     gSwipeOn = gOn && PrefBool(file, @"swipereply", YES);
     gViewerOn = gOn && PrefBool(file, @"viewer", YES);
+    gAudioBig = gOn && PrefBool(file, @"audiobig", YES);
+    gSpeakerOn = gOn && PrefBool(file, @"speaker", YES);
     gPrefDebug = PrefBool(file, @"debug", NO);
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
@@ -5337,6 +5341,7 @@ static void MsgAuthOK(CFNotificationCenterRef c, void *o, CFNotificationName n, 
 static void MsgAuthFail(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(0); }); }
 static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(-1); }); }
 #include "MsgViewer.h"
+#include "MsgAudio.h"
 #include "../shared/NanoSettings.h"
 
 %ctor {
@@ -5404,6 +5409,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         }
         MSHookMessageEx([UIApplication class], @selector(sendEvent:), (IMP)SendEvent, (IMP *)&origSendEvent);
         HookViewer();
+        @try { StartSpeaker(); StartAudioBubbles(); } @catch (__unused id ex) {}
         { __block int tries = 0;
           [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *vt) { HookViewer(); if (MVQLClass() || ++tries > 300) [vt invalidate]; }]; }
         [NSTimer scheduledTimerWithTimeInterval:SlowDevice() ? 0.5 : 0.3 repeats:YES block:^(__unused NSTimer *t) { @try { Tick(); } @catch (__unused id ex) {} }];
