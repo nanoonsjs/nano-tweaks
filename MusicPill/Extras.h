@@ -879,8 +879,16 @@ static void XTouchLight(UIView *pillView, CGPoint p, BOOL on) {
     [CATransaction commit];
     if (gl.opacity < 1) { [CATransaction begin]; [CATransaction setAnimationDuration:0.18]; gl.opacity = 1; [CATransaction commit]; }
 }
+// Music's real bar takes the touches but is invisible (masked) while our pill stands in for it:
+// the drag, light and bounce have to play on the pill you can see.
+static UIView *XVisualPill(UIView *touched) {
+    MPMiniPill *pill = (MPMiniPill *)gPillObj;
+    if ([pill isKindOfClass:[MPMiniPill class]] && pill.window && !pill.hidden && pill.alpha > 0.05 &&
+        (touched == pill || objc_getAssociatedObject(touched, kMiniMask))) return pill;
+    return touched;
+}
 - (void)pan:(UIPanGestureRecognizer *)g {
-    UIView *v = g.view;
+    UIView *v = XVisualPill(g.view);
     CGPoint t = [g translationInView:v.superview], vel = [g velocityInView:v.superview];
     if (g.state == UIGestureRecognizerStateBegan) {
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
