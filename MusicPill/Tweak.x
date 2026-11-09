@@ -1,4 +1,5 @@
-// MusicPill 1.4.2 - made by nano
+// MusicPill 1.4.3 - made by nano
+// 1.4.3: Dynamic Pill close/pull-down is one continuous morph: contents shrink and cross-fade into the pill, outline melts away
 // 1.4.2: pill no longer changes size after leaving Music and coming back; new open/close morphs; pill settles in when you come back
 // 1.4.1: Smooth Lyrics in landscape: every frame, glide, karaoke fill, depth + soft focus, breathing ••• in breaks, ± timing nudge per song
 // 1.4: release (hold to peek, song splash, share card, landscape lyrics layouts, favorite, Up Next)
@@ -1468,7 +1469,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];

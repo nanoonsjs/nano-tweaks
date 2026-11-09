@@ -640,6 +640,9 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
 
 #pragma mark - swipe up on the pill: it grows into Insights (like holding the Dynamic Island)
 
+// ease used for the sides/corners: they follow a beat behind the top edge, like the Dynamic Island
+static CGFloat XMorphCurve(CGFloat p) { p = MAX(0, MIN(1, p)); return p * p * (3 - 2 * p); }
+static CGFloat XStep(CGFloat a, CGFloat b, CGFloat x) { x = MAX(0, MIN(1, (x - a) / (b - a))); return x * x * (3 - 2 * x); }
 @interface MPIsland : UIView <UIGestureRecognizerDelegate>
 + (void)expandFrom:(UIView *)pill;
 - (void)collapse;
@@ -776,33 +779,52 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
         UIView *fresh = _pill.window ? [_pill snapshotViewAfterScreenUpdates:NO] : nil;
         if (fresh) { [_snap removeFromSuperview]; _snap = fresh; [_shape addSubview:fresh]; }
         _snap.alpha = 0; [_shape bringSubviewToFront:_snap];
+        _snap.autoresizingMask = UIViewAutoresizingNone;
+        [_shape.layer removeAllAnimations];
+        // one flat picture while it moves: smooth even with all of Insights inside
+        _content.layer.shouldRasterize = YES; _content.layer.rasterizationScale = UIScreen.mainScreen.scale;
     }
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
-        CGFloat e = p * p * (3 - 2 * p);   // width and corners follow later than the top edge
-        CGFloat top = XLerp(CGRectGetMinY(T), CGRectGetMinY(P), p), bottom = XLerp(CGRectGetMaxY(T), CGRectGetMaxY(P), e);
+        // past the pill it resists like a rubber band instead of stopping dead
+        CGFloat pr = dy / span; if (pr > 1) pr = 1 + (1 - 1 / ((pr - 1) * 2.2 + 1)) * 0.08;
+        p = MIN(1, pr);
+        CGFloat e = XMorphCurve(p);
+        CGFloat top = XLerp(CGRectGetMinY(T), CGRectGetMinY(P), MIN(1.08, pr)), bottom = XLerp(CGRectGetMaxY(T), CGRectGetMaxY(P), e);
         CGFloat w = XLerp(T.size.width, P.size.width, e), cx = XLerp(CGRectGetMidX(T), CGRectGetMidX(P), e);
-        [UIView performWithoutAnimation:^{
-            self->_shape.frame = CGRectMake(cx - w / 2, top, w, MAX(P.size.height, bottom - top));
-            self->_shape.layer.cornerRadius = XLerp(44, P.size.height / 2, e);
-            self->_content.alpha = MAX(0, 1 - p * 1.8);
-            self->_content.transform = CGAffineTransformMakeScale(1 - 0.08 * p, 1 - 0.08 * p);
-            self->_content.center = CGPointMake(self->_shape.bounds.size.width / 2, self->_shape.bounds.size.height / 2);
-            self->_snap.frame = CGRectMake((self->_shape.bounds.size.width - P.size.width) / 2, self->_shape.bounds.size.height - P.size.height, P.size.width, P.size.height);
-            self->_snap.alpha = MAX(0, MIN(1, (p - 0.55) / 0.4));
-            self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3 * (1 - p)];
-        }];
+        CGRect f = CGRectMake(cx - w / 2, top, w, MAX(P.size.height, bottom - top));
+        [CATransaction begin]; [CATransaction setDisableActions:YES];
+        [UIView performWithoutAnimation:^{ [self morphTo:f progress:p]; }];
+        [CATransaction commit];
         return;
     }
     CGFloat vy = [g velocityInView:self].y;
     if (g.state == UIGestureRecognizerStateEnded && (p > 0.28 || vy > 600)) { [self collapseWithVelocity:vy]; return; }
     // not far enough: back up
-    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
-        self->_shape.frame = self->_to; self->_shape.layer.cornerRadius = 44;
-        self->_content.alpha = 1; self->_content.transform = CGAffineTransformIdentity;
-        self->_content.center = CGPointMake(self->_to.size.width / 2, self->_to.size.height / 2);
-        self->_snap.alpha = 0;
-        self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3];
-    } completion:nil];
+    { CABasicAnimation *bc = [CABasicAnimation animationWithKeyPath:@"borderColor"]; bc.fromValue = (id)_shape.layer.borderColor; bc.toValue = (id)[UIColor colorWithWhite:1 alpha:0.16].CGColor; bc.duration = 0.3; [_shape.layer addAnimation:bc forKey:@"mp.border"]; }
+    UIViewPropertyAnimator *up = [[UIViewPropertyAnimator alloc] initWithDuration:0.5 timingParameters:[[UISpringTimingParameters alloc] initWithDampingRatio:0.84 initialVelocity:CGVectorMake(0, MIN(3, fabs(vy) / 800))]];
+    [up addAnimations:^{ [self morphTo:self->_to progress:0]; }];
+    [up addCompletion:^(__unused UIViewAnimatingPosition pos) { self->_content.layer.shouldRasterize = NO; }];
+    [up startAnimation];
+}
+// Everything about the island at one point between open (0) and the pill (1). Used by the drag (every
+// frame) and by the springs (animatable values only), so the drag and the close are the exact same morph.
+- (void)morphTo:(CGRect)f progress:(CGFloat)p {
+    CGRect P = [self pillRect], T = _to;
+    _shape.frame = f;
+    CGFloat e = XMorphCurve(p);
+    _shape.layer.cornerRadius = MIN(f.size.height / 2, XLerp(44, P.size.height / 2, e));
+    // the outline only belongs to the open island: it melts away as it closes (no half-border floating above the pill)
+    _shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16 * (1 - XStep(0, 0.45, p))].CGColor;
+    // Insights shrinks with the island (filling it, like a zoomed-out picture) and fades as the pill fades in;
+    // the two always overlap, so there's never an empty dark box
+    CGFloat sc = MIN(1, MAX(f.size.width / MAX(1, T.size.width), f.size.height / MAX(1, T.size.height)));
+    _content.transform = CGAffineTransformMakeScale(sc, sc);
+    _content.center = CGPointMake(f.size.width / 2, f.size.height / 2);
+    _content.alpha = 1 - XStep(0.15, 0.7, p);
+    // the pill's own picture: its real size, sitting at the bottom where the pill is, fading in
+    _snap.frame = CGRectMake((f.size.width - P.size.width) / 2, f.size.height - P.size.height, P.size.width, P.size.height);
+    _snap.alpha = XStep(0.3, 0.85, p);
+    self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3 * (1 - p)];
 }
 - (void)bgTap:(UITapGestureRecognizer *)g { if (!CGRectContainsPoint(_shape.frame, [g locationInView:self])) [self collapse]; }
 - (void)shareTap:(UIButton *)b { [[UISelectionFeedbackGenerator new] selectionChanged]; ShareNowPlayingFwd(b); }
@@ -851,44 +873,65 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
     UIView *pill = _pill;
     CGRect to = [self pillRect];
-    CGFloat r = to.size.height / 2;
-    UIView *shape = _shape, *content = _content, *snap = _snap;
+    UIView *shape = _shape, *content = _content;
+    // start from exactly what's on screen
     CALayer *pl = shape.layer.presentationLayer;
     CGRect cur = pl ? pl.frame : shape.frame;
     CGFloat curR = pl ? pl.cornerRadius : shape.layer.cornerRadius;
-    [shape.layer removeAllAnimations];
-    shape.transform = CGAffineTransformIdentity; shape.frame = cur; shape.layer.cornerRadius = curR;
+    CALayer *cpl = content.layer.presentationLayer;
+    CGFloat curA = cpl ? cpl.opacity : content.alpha;
+    [shape.layer removeAllAnimations]; [content.layer removeAllAnimations]; [_snap.layer removeAllAnimations];
+    shape.transform = CGAffineTransformIdentity; shape.frame = cur; shape.layer.cornerRadius = curR; content.alpha = curA;
+    // a fresh picture of the pill (song/play state may have changed while it was open)
     UIView *fresh = pill.window ? [pill snapshotViewAfterScreenUpdates:NO] : nil;
-    if (fresh) { [shape addSubview:fresh]; if (snap != fresh) [snap removeFromSuperview]; snap = fresh; _snap = snap; snap.alpha = 0; }
-    // the pill's picture: its own size, pinned to the bottom middle of the shrinking island
-    snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
-    snap.frame = CGRectMake((cur.size.width - to.size.width) / 2, cur.size.height - to.size.height, to.size.width, to.size.height);
-    [shape bringSubviewToFront:snap];
+    if (fresh) {
+        fresh.alpha = _snap.alpha;
+        fresh.frame = _snap.superview == shape ? _snap.frame : CGRectMake((cur.size.width - to.size.width) / 2, cur.size.height - to.size.height, to.size.width, to.size.height);
+        [_snap removeFromSuperview]; _snap = fresh; [shape addSubview:fresh];
+    }
+    _snap.autoresizingMask = UIViewAutoresizingNone;
+    [shape bringSubviewToFront:_snap];
+    content.layer.shouldRasterize = YES; content.layer.rasterizationScale = UIScreen.mainScreen.scale;
+    { CABasicAnimation *bc = [CABasicAnimation animationWithKeyPath:@"borderColor"];
+      bc.fromValue = (id)(((CALayer *)shape.layer.presentationLayer).borderColor ?: shape.layer.borderColor); bc.toValue = (id)[UIColor colorWithWhite:1 alpha:0].CGColor; bc.duration = 0.18;
+      shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0].CGColor; [shape.layer addAnimation:bc forKey:@"mp.border"]; }
+    // how far along the close already is (a pull-down hands over mid-way)
+    CGFloat span = MAX(1, CGRectGetMinY(to) - CGRectGetMinY(_to));
+    CGFloat p0 = MAX(0, MIN(1, (CGRectGetMinY(cur) - CGRectGetMinY(_to)) / span));
     CGFloat dist = MAX(1, CGRectGetMinY(to) - CGRectGetMinY(cur));
-    CGFloat v0 = vy > 0 ? MIN(4, vy / dist) : 0;
-    // 1. the top comes down (fast, no bounce)
-    CGRect mid = CGRectMake(cur.origin.x, CGRectGetMinY(to), cur.size.width, to.size.height);
-    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.95 initialSpringVelocity:v0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-        shape.frame = mid;
-        shape.layer.cornerRadius = r;
-        content.center = CGPointMake(mid.size.width / 2, mid.size.height / 2);
-    } completion:nil];
-    // 2. the sides pull in a moment later, with a tiny squish as it lands on the pill
-    [UIView animateWithDuration:0.48 delay:0.06 usingSpringWithDamping:0.74 initialSpringVelocity:0 options:UIViewAnimationOptionAllowAnimatedContent animations:^{
-        shape.frame = to;
-        content.center = CGPointMake(to.size.width / 2, to.size.height / 2);
-    } completion:^(__unused BOOL f) {
+    CGFloat v0 = vy > 0 ? MIN(5, vy / dist) : 0;
+    // The top leads and the sides follow a beat behind (keyframes on one spring curve), then it settles on the pill.
+    CGFloat midP = p0 + (1 - p0) * 0.55;
+    CGFloat eMid = XMorphCurve(midP);
+    CGRect P = to, T = _to;
+    CGFloat midTop = XLerp(CGRectGetMinY(T), CGRectGetMinY(P), MIN(1, midP + 0.18)), midBottom = XLerp(CGRectGetMaxY(T), CGRectGetMaxY(P), eMid);
+    CGFloat midW = XLerp(T.size.width, P.size.width, eMid), midX = XLerp(CGRectGetMidX(T), CGRectGetMidX(P), eMid);
+    CGRect mid = CGRectMake(midX - midW / 2, midTop, midW, MAX(P.size.height, midBottom - midTop));
+    UISpringTimingParameters *sp = [[UISpringTimingParameters alloc] initWithDampingRatio:0.86 initialVelocity:CGVectorMake(v0, v0)];
+    UIViewPropertyAnimator *close = [[UIViewPropertyAnimator alloc] initWithDuration:0.52 timingParameters:sp];
+    [close addAnimations:^{
+        [UIView animateKeyframesWithDuration:0 delay:0 options:UIViewKeyframeAnimationOptionCalculationModeCubic animations:^{
+            [UIView addKeyframeWithRelativeStartTime:0 relativeDuration:0.45 animations:^{ [self morphTo:mid progress:midP]; }];
+            [UIView addKeyframeWithRelativeStartTime:0.45 relativeDuration:0.55 animations:^{ [self morphTo:to progress:1]; }];
+        } completion:nil];
+    }];
+    [close addCompletion:^(__unused UIViewAnimatingPosition pos) {
         if (pill.alpha < 0.99) [UIView performWithoutAnimation:^{ pill.alpha = 1; }];
         [self removeFromSuperview];
+        // a tiny settle on the real pill as the island becomes it
+        if (pill.window) {
+            CALayer *L = pill.layer;
+            CATransform3D base = L.sublayerTransform;
+            CASpringAnimation *k = [CASpringAnimation animationWithKeyPath:@"sublayerTransform"];
+            k.fromValue = [NSValue valueWithCATransform3D:CATransform3DConcat(CATransform3DMakeScale(1.03, 0.94, 1), base)];
+            k.toValue = [NSValue valueWithCATransform3D:base];
+            k.damping = 14; k.stiffness = 300; k.mass = 1; k.duration = k.settlingDuration;
+            [L addAnimation:k forKey:@"mp.release"];
+        }
     }];
-    // contents tuck in and fade, the room brightens, the pill's picture fades in for the landing
-    [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
-        content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.92, 0.92);
-    } completion:nil];
-    [UIView animateWithDuration:0.35 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ self.backgroundColor = [UIColor colorWithWhite:0 alpha:0]; } completion:nil];
-    [UIView animateWithDuration:0.16 delay:0.12 options:UIViewAnimationOptionCurveEaseOut animations:^{ snap.alpha = 1; } completion:nil];
+    [close startAnimation];
     // safety: always gone, pill always there
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (pill.alpha < 0.01) pill.alpha = 1; if (self.superview) [self removeFromSuperview]; });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (pill.alpha < 0.01) pill.alpha = 1; if (self.superview) [self removeFromSuperview]; });
 }
 @end
 
