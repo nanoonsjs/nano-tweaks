@@ -219,7 +219,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Swipe Title: swipe the song title in the player to skip. Double-Tap Cover: favorite the song. Animated Covers: plays an album's moving cover once you've opened and played it (turning it off deletes the saved covers). Album Color Glow: tints the pill with the album's color. Landscape: turn the phone sideways in Music for a full-screen player with lyrics (needs Portrait Orientation Lock off). Big Cover With Lyrics: in landscape, lyrics sit next to the big cover instead of the controls; tap the cover to play / pause, swipe it to change songs.</string>
+			<string>Swipe Title: swipe the song title in the player to skip. Double-Tap Cover: favorite the song. Animated Covers: plays an album's moving cover once you've opened and played it (turning it off deletes the saved covers). Album Color Glow: tints the pill with the album's color. Landscape: turn the phone sideways in Music for a full-screen player with lyrics (needs Portrait Orientation Lock off). Big Cover With Lyrics: in landscape, lyrics sit next to the big cover instead of the controls; tap the cover to play / pause, swipe right for the next song and left to go back (Reverse Cover Swipe flips it). Hide Home Bar in Landscape: the home bar fades away while the landscape player is up.</string>
 			<key>label</key>
 			<string>Player</string>
 		</dict>
@@ -306,6 +306,34 @@
 			<string>lsartlyrics</string>
 			<key>label</key>
 			<string>Big Cover With Lyrics</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>lshidehome</string>
+			<key>label</key>
+			<string>Hide Home Bar in Landscape</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>lsreverseswipe</string>
+			<key>label</key>
+			<string>Reverse Cover Swipe</string>
 		</dict>
 		<dict>
 			<key>cell</key>
