@@ -1,4 +1,5 @@
-// MusicPill 1.2.87 - made by nano
+// MusicPill 1.2.88 - made by nano
+// 1.2.88: island always starts and lands exactly on the pill (one spring, no stretched picture); settings page redone with a header and a Dynamic Pill demo
 // 1.2.87: tap outside the island closes it (crashed before), smaller swipe stretch
 // 1.2.86: swipe jelly and touch light now play on the pill you see (they played on Music's invisible bar under it)
 // 1.2.85: island closes smoothly back to the pill, scrolling Insights no longer shrinks the pill, Sleep Timer morphs out of the island
@@ -1435,7 +1436,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.87 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.88 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -8050,9 +8051,11 @@ static void ShowAboutSheet(UIView *from, NSDictionary *about) {
 
 #include "Extras.h"
 #include "Landscape.h"
+#include "Settings.h"
 
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+    if ([bid isEqualToString:@"com.apple.Preferences"]) { StartSettings(); return; }   // MusicPill's settings page only
     if (![bid isEqualToString:@"com.apple.Music"]) return;
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);

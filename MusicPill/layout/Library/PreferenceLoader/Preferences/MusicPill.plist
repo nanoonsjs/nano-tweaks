@@ -16,6 +16,160 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>height</key>
+			<integer>110</integer>
+			<key>id</key>
+			<string>MP_HEADER</string>
+			<key>label</key>
+			<string></string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Swipe to Skip: swipe the pill left for the next song, right for the previous one. Tap to Open Player: a tap opens the player and Music's own swipe up on the bar is off. Collapse Bars: scrolling down shrinks the pill and tab bar like iOS 26. Waveform: live bars on the cover while music plays.</string>
+			<key>label</key>
+			<string>Now Playing Pill</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>round</string>
+			<key>label</key>
+			<string>Round Now Playing Bar</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>swipe</string>
+			<key>label</key>
+			<string>Swipe to Skip</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>tapopen</string>
+			<key>label</key>
+			<string>Tap to Open Player</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>marquee</string>
+			<key>label</key>
+			<string>Scrolling Song Title</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>collapse</string>
+			<key>label</key>
+			<string>Collapse Bars When Scrolling</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>libmini</string>
+			<key>label</key>
+			<string>Smaller Pill on Library</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>wave</string>
+			<key>label</key>
+			<string>Waveform</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Swipe up on the now playing pill and it grows into Insights, like holding the Dynamic Island: your listening this week, your streak, top artist and songs, and all time. Tap the moon for the Sleep Timer. Tap anywhere outside to close it.</string>
+			<key>label</key>
+			<string>Dynamic Pill</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>id</key>
+			<string>MP_DYNAMIC</string>
+			<key>key</key>
+			<string>pillhold</string>
+			<key>label</key>
+			<string>Dynamic Pill</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>height</key>
+			<integer>164</integer>
+			<key>id</key>
+			<string>MP_DEMO</string>
+			<key>label</key>
+			<string></string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
 			<key>footerText</key>
 			<string>Automatic follows Settings &gt; Accessibility &gt; Display &amp; Text Size &gt; Increase Contrast: pink star and artist on a black queue bar when it's on, white star and see-through queue bar when it's off.</string>
 			<key>label</key>
@@ -49,7 +203,87 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Off by default. Shows the next song above the pill before the current one ends. Tap it to skip, pull it away to dismiss.</string>
+			<string>Swipe Title: swipe the song title in the player to skip. Double-Tap Cover: favorite the song. Animated Covers: plays an album's moving cover once you've opened and played it (turning it off deletes the saved covers). Album Color Glow: tints the pill with the album's color. Landscape: turn the phone sideways in Music for a full-screen player with lyrics (needs Portrait Orientation Lock off).</string>
+			<key>label</key>
+			<string>Player</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>titleswipe</string>
+			<key>label</key>
+			<string>Swipe Title to Skip</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>doubletapfav</string>
+			<key>label</key>
+			<string>Double-Tap Cover to Favorite</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>motioncovers</string>
+			<key>label</key>
+			<string>Animated Album Covers</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>albumglow</string>
+			<key>label</key>
+			<string>Album Color Glow</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>landscape</string>
+			<key>label</key>
+			<string>Landscape Player</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Shows the next song above the pill before the current one ends. Tap it to skip, pull it away to dismiss.</string>
+			<key>label</key>
+			<string>Up Next Preview</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -69,7 +303,7 @@
 			<key>cell</key>
 			<string>PSStaticTextCell</string>
 			<key>label</key>
-			<string>Up Next Duration</string>
+			<string>Show Before the End (seconds)</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -97,165 +331,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Both off by default. Album Color Glow tints the bottom pill and its circles with the playing album's color. Double-tap the cover in the player to favorite the song.</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>albumglow</string>
-			<key>label</key>
-			<string>Album Color Glow</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>doubletapfav</string>
-			<key>label</key>
-			<string>Double-Tap Cover to Favorite</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>On the full player, swipe the song title left for the next song or right for the previous one.</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>titleswipe</string>
-			<key>label</key>
-			<string>Swipe Title to Skip</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>Off by default. Plays an album's animated cover in the player. Once you open an album with an animated cover and play it, the cover is saved, so it keeps playing every time after. Turning this off deletes the saved covers.</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>motioncovers</string>
-			<key>label</key>
-			<string>Animated Album Covers</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>Changes should apply right away. If not, close Music from the app switcher and reopen it.</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>rename</string>
-			<key>label</key>
-			<string>Rename Listen Now to Home</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>round</string>
-			<key>label</key>
-			<string>Round Now Playing Bar</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>collapse</string>
-			<key>label</key>
-			<string>Collapse Bars When Scrolling</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>Swipe left on the pill for the next song, right for the previous one.</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>swipe</string>
-			<key>label</key>
-			<string>Swipe to Skip</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>Scrolling title for long song names in the pill. Album and playlist pages get a shuffle circle, white Play button and download circle. Top buttons get glass.</string>
+			<string>Album and playlist pages get a shuffle circle, white Play button and download circle. Top buttons get glass. The queue gets the iOS 26 style.</string>
 			<key>label</key>
 			<string>iOS 26 Look</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>marquee</string>
-			<key>label</key>
-			<string>Scrolling Song Title</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -300,10 +378,48 @@
 			<string>iOS 26 Queue Look</string>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>rename</string>
+			<key>label</key>
+			<string>Rename Listen Now to Home</string>
+		</dict>
+		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Shows a purple box with what MusicPill found and which settings it can read. Turn this on to test that the switches work.</string>
+			<string>For the Liquid (Gl)ass tweak. On: where LiquidAss draws its glass buttons (like back buttons), MusicPill's glass steps aside. Off: MusicPill's glass shows there and LiquidAss's is hidden. Reopen Music after changing.</string>
+			<key>label</key>
+			<string>LiquidAss</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.user.musicpill/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.user.musicpill</string>
+			<key>key</key>
+			<string>lgcompat</string>
+			<key>label</key>
+			<string>LiquidAss Compatibility</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>Shows a purple box with what MusicPill found and which settings it can read. Changes should apply right away; if not, close Music from the app switcher and reopen it.</string>
+			<key>label</key>
+			<string>Troubleshooting</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -324,106 +440,6 @@
 			<string>PSGroupCell</string>
 			<key>footerText</key>
 			<string>Made by nano</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>Swipe Up for Menu: swipe up on the now playing pill for a glass menu with Up Next (reorder, remove and add songs), Sleep Timer and Insights. Hold the pill for Music's song menu. Waveform: live bars on the cover while music plays. Tap to Open Player: Music's swipe up on the bar is off, a tap opens the player. Landscape Player: turn your phone sideways in Music for a full-screen glass player (cover left, controls right, colors from the cover, Insights button). Needs Portrait Orientation Lock off. Smaller Pill on Library: a more compact now playing pill on the Library tab.</string>
-			<key>label</key>
-			<string>Extras</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>pillhold</string>
-			<key>label</key>
-			<string>Swipe Up for Menu</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>wave</string>
-			<key>label</key>
-			<string>Waveform</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>tapopen</string>
-			<key>label</key>
-			<string>Tap to Open Player</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>landscape</string>
-			<key>label</key>
-			<string>Landscape Player</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>libmini</string>
-			<key>label</key>
-			<string>Smaller Pill on Library</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>For the Liquid (Gl)ass tweak. On: where LiquidAss draws its glass buttons (like back buttons), MusicPill's own glass steps aside so only LiquidAss's shows. Off: MusicPill's glass shows there and LiquidAss's under it is hidden. Reopen the app after changing.</string>
-			<key>label</key>
-			<string>LiquidAss</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.musicpill/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.musicpill</string>
-			<key>key</key>
-			<string>lgcompat</string>
-			<key>label</key>
-			<string>LiquidAss Compatibility</string>
 		</dict>
 	</array>
 	<key>title</key>

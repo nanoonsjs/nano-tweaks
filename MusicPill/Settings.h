@@ -1,0 +1,349 @@
+// ===================== MusicPill settings page (runs in the Settings app) =====================
+// A header card at the top, and under the Dynamic Pill switch (when it's on) a little phone that
+// shows what to do: swipe up on the pill, it grows into Insights, the moon turns it into the
+// Sleep Timer, tap outside and it shrinks back. Like Control26's Control Center card.
+// The cells are made at runtime as subclasses of PSTableCell, so Music never needs Preferences.framework.
+
+#define MP_VERSION @"1.2.88"
+
+@interface NSObject (MPPS)
+- (id)propertyForKey:(NSString *)k;
+- (NSString *)identifier;
+- (id)readPreferenceValue:(id)spec;
+- (void)insertSpecifier:(id)s afterSpecifier:(id)a animated:(BOOL)an;
+- (void)removeSpecifier:(id)s animated:(BOOL)an;
+- (id)specifierForID:(NSString *)i;
+@end
+
+static void MPSP(id spec, id v, NSString *k) { ((void (*)(id, SEL, id, id))objc_msgSend)(spec, @selector(setProperty:forKey:), v, k); }
+
+#pragma mark - the little phone
+
+@interface MPDemoPhone : UIView
+@end
+@implementation MPDemoPhone {
+    UIView *_screen, *_pill, *_island, *_insights, *_sleep, *_dot;
+    NSMutableArray<UIView *> *_bars, *_chips;
+    NSUInteger _gen;
+    CGRect _pillR, _bigR, _sleepR;
+}
+static UIView *MPBox(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
+    UIView *v = [[UIView alloc] initWithFrame:r];
+    v.backgroundColor = c; v.layer.cornerRadius = rad; v.layer.cornerCurve = kCACornerCurveContinuous;
+    [in addSubview:v];
+    return v;
+}
+- (instancetype)initWithFrame:(CGRect)f {
+    if (!(self = [super initWithFrame:f])) return nil;
+    self.userInteractionEnabled = NO;
+    self.layer.cornerRadius = 15; self.layer.cornerCurve = kCACornerCurveContinuous; self.layer.borderWidth = 3;
+    _screen = [UIView new];
+    _screen.layer.cornerRadius = 11; _screen.layer.cornerCurve = kCACornerCurveContinuous; _screen.clipsToBounds = YES;
+    _screen.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1];
+    [self addSubview:_screen];
+    _bars = [NSMutableArray array]; _chips = [NSMutableArray array];
+    [self updateColors];
+    return self;
+}
+- (void)updateColors {
+    BOOL dark = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+    self.layer.borderColor = (dark ? [UIColor colorWithWhite:0.42 alpha:1] : [UIColor colorWithWhite:0.80 alpha:1]).CGColor;
+}
+- (void)traitCollectionDidChange:(UITraitCollection *)p { [super traitCollectionDidChange:p]; [self updateColors]; }
+- (void)build {
+    for (UIView *v in [_screen.subviews copy]) [v removeFromSuperview];
+    [_bars removeAllObjects]; [_chips removeAllObjects];
+    CGSize S = _screen.bounds.size;
+    UIColor *g = [UIColor colorWithWhite:1 alpha:0.14], *w = [UIColor colorWithWhite:1 alpha:0.9];
+    UIColor *pink = [UIColor colorWithRed:0.98 green:0.24 blue:0.37 alpha:1], *violet = [UIColor colorWithRed:0.55 green:0.42 blue:1 alpha:1];
+    // Music behind: a title and a grid of covers
+    MPBox(_screen, CGRectMake(6, 13, 26, 4), 2, w);
+    for (int i = 0; i < 6; i++) MPBox(_screen, CGRectMake(6 + (i % 2) * ((S.width - 15) / 2 + 3), 22 + (i / 2) * ((S.width - 15) / 2 + 9), (S.width - 15) / 2, (S.width - 15) / 2), 4, i == 0 ? [pink colorWithAlphaComponent:0.7] : g);
+    UIView *notch = MPBox(_screen, CGRectMake(S.width / 2 - 12, 0, 24, 6), 3, UIColor.blackColor); (void)notch;
+    // tab bar + the pill above it
+    UIView *tab = MPBox(_screen, CGRectMake(0, S.height - 15, S.width, 15), 0, [UIColor colorWithWhite:0.14 alpha:0.96]);
+    for (int i = 0; i < 4; i++) MPBox(tab, CGRectMake(S.width * (0.14 + i * 0.24) - 2.5, 4, 5, 5), 2.5, i == 0 ? pink : [UIColor colorWithWhite:1 alpha:0.4]);
+    _pillR = CGRectMake(4, S.height - 29, S.width - 8, 12);
+    _pill = MPBox(_screen, _pillR, 6, [UIColor colorWithWhite:0.24 alpha:1]);
+    _pill.layer.borderWidth = 0.5; _pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.25].CGColor;
+    MPBox(_pill, CGRectMake(2.5, 2.5, 7, 7), 1.5, pink);
+    MPBox(_pill, CGRectMake(13, 4.5, 20, 3), 1.5, w);
+    MPBox(_pill, CGRectMake(_pillR.size.width - 9, 3.5, 5, 5), 1, [UIColor colorWithWhite:1 alpha:0.75]);
+    // the island (hidden until it grows out of the pill)
+    _bigR = CGRectMake(3, 9, S.width - 6, CGRectGetMaxY(_pillR) - 9 + 1);
+    _sleepR = CGRectMake(3, CGRectGetMaxY(_bigR) - 46, S.width - 6, 46);
+    _island = MPBox(_screen, _pillR, 6, [UIColor colorWithWhite:0.03 alpha:1]);
+    _island.clipsToBounds = YES; _island.alpha = 0;
+    _island.layer.borderWidth = 0.6; _island.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2].CGColor;
+    CGFloat IW = _bigR.size.width;
+    // Insights: title, the moon and close, a pink card with day bars, two chips, a list
+    _insights = [[UIView alloc] initWithFrame:CGRectMake(0, 0, IW, _bigR.size.height)];
+    MPBox(_insights, CGRectMake(5, 6, 22, 4), 2, w);
+    MPBox(_insights, CGRectMake(IW - 19, 5, 6, 6), 3, [UIColor colorWithWhite:1 alpha:0.3]).tag = 5;   // moon
+    MPBox(_insights, CGRectMake(IW - 11, 5, 6, 6), 3, [UIColor colorWithWhite:1 alpha:0.3]);
+    UIView *hero = MPBox(_insights, CGRectMake(4, 15, IW - 8, 30), 5, [pink colorWithAlphaComponent:0.55]);
+    CAGradientLayer *gr = [CAGradientLayer layer]; gr.frame = hero.bounds; gr.cornerRadius = 5;
+    gr.colors = @[(id)[pink colorWithAlphaComponent:0.9].CGColor, (id)[violet colorWithAlphaComponent:0.8].CGColor];
+    gr.startPoint = CGPointMake(0, 0); gr.endPoint = CGPointMake(1, 1);
+    [hero.layer insertSublayer:gr atIndex:0];
+    MPBox(hero, CGRectMake(4, 4, 18, 3), 1.5, w);
+    CGFloat bw = (IW - 16) / 7;
+    for (int i = 0; i < 7; i++) {
+        CGFloat h = 6 + (i * 37 % 11) + (i == 4 ? 4 : 0);
+        UIView *b = [[UIView alloc] init];
+        b.layer.anchorPoint = CGPointMake(0.5, 1);
+        b.frame = CGRectMake(4 + i * bw + bw * 0.2, 27 - h, bw * 0.6, h);
+        b.backgroundColor = i == 4 ? UIColor.whiteColor : [UIColor colorWithWhite:1 alpha:0.5]; b.layer.cornerRadius = bw * 0.3;
+        [hero addSubview:b]; [_bars addObject:b];
+    }
+    CGFloat hw = (IW - 11) / 2;
+    MPBox(_insights, CGRectMake(4, 49, hw, 14), 4, g);
+    MPBox(_insights, CGRectMake(7 + hw, 49, hw, 14), 4, g);
+    for (int i = 0; i < 3; i++) {
+        MPBox(_insights, CGRectMake(4, 68 + i * 10, 7, 7), 1.5, i == 0 ? [pink colorWithAlphaComponent:0.8] : [UIColor colorWithWhite:1 alpha:0.25]);
+        MPBox(_insights, CGRectMake(14, 70 + i * 10, IW - 30, 3), 1.5, [UIColor colorWithWhite:1 alpha:0.4]);
+    }
+    [_island addSubview:_insights];
+    // Sleep Timer: moon + title, two rows of chips
+    _sleep = [[UIView alloc] initWithFrame:CGRectMake(0, 0, IW, _sleepR.size.height)];
+    MPBox(_sleep, CGRectMake(5, 5, 6, 6), 3, violet);
+    MPBox(_sleep, CGRectMake(14, 6.5, 22, 3.5), 1.75, w);
+    CGFloat cw = (IW - 14) / 3;
+    for (int i = 0; i < 6; i++) {
+        UIView *c = MPBox(_sleep, CGRectMake(4 + (i % 3) * (cw + 3), 16 + (i / 3) * 14, cw, 11), 5.5, [UIColor colorWithWhite:1 alpha:0.14]);
+        [_chips addObject:c];
+    }
+    [_island addSubview:_sleep];
+    // the finger
+    _dot = MPBox(_screen, CGRectMake(0, 0, 10, 10), 5, [UIColor colorWithWhite:1 alpha:0.9]);
+    _dot.layer.shadowColor = UIColor.blackColor.CGColor; _dot.layer.shadowOpacity = 0.5; _dot.layer.shadowRadius = 2; _dot.layer.shadowOffset = CGSizeZero;
+    _dot.alpha = 0;
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGRect sr = CGRectInset(self.bounds, 5, 5);
+    if (!CGRectEqualToRect(_screen.frame, sr)) { _screen.frame = sr; [self build]; [self restart]; }
+}
+- (void)didMoveToWindow { [super didMoveToWindow]; [self restart]; }
+- (void)restart { _gen++; if (self.window && _pill) [self loop:_gen]; }
+- (void)after:(CGFloat)t gen:(NSUInteger)g do:(void (^)(void))b {
+    __weak MPDemoPhone *ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(t * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ MPDemoPhone *s = ws; if (s && s->_gen == g && s.window) b(); });
+}
+- (void)tapAt:(CGPoint)p {
+    _dot.center = p; _dot.alpha = 0; _dot.transform = CGAffineTransformMakeScale(1.6, 1.6);
+    [UIView animateWithDuration:0.18 animations:^{ self->_dot.alpha = 1; self->_dot.transform = CGAffineTransformMakeScale(0.8, 0.8); } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.25 delay:0.05 options:0 animations:^{ self->_dot.alpha = 0; self->_dot.transform = CGAffineTransformIdentity; } completion:nil];
+    }];
+}
+- (void)loop:(NSUInteger)g {
+    // reset
+    for (UIView *v in @[_pill, _island, _insights, _sleep, _dot]) [v.layer removeAllAnimations];
+    _pill.alpha = 1; _pill.transform = CGAffineTransformIdentity;
+    _island.alpha = 0; _island.frame = _pillR; _island.layer.cornerRadius = 6;
+    _insights.alpha = 0; _sleep.alpha = 0;
+    for (UIView *b in _bars) b.transform = CGAffineTransformMakeScale(1, 0.05);
+    for (UIView *c in _chips) { c.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14]; c.alpha = 0; c.transform = CGAffineTransformMakeScale(0.6, 0.6); }
+    _dot.alpha = 0;
+    CGPoint pc = CGPointMake(CGRectGetMidX(_pillR), CGRectGetMidY(_pillR));
+    // 1. finger on the pill, swipe up: the pill stretches with it
+    [self after:0.5 gen:g do:^{
+        self->_dot.center = pc; self->_dot.transform = CGAffineTransformMakeScale(1.5, 1.5);
+        [UIView animateWithDuration:0.2 animations:^{ self->_dot.alpha = 1; self->_dot.transform = CGAffineTransformIdentity; }];
+    }];
+    [self after:0.8 gen:g do:^{
+        [UIView animateWithDuration:0.32 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+            self->_dot.center = CGPointMake(pc.x, pc.y - 18);
+            self->_pill.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, -1.5), 0.98, 1.25);
+        } completion:nil];
+        [UIView animateWithDuration:0.15 delay:0.3 options:0 animations:^{ self->_dot.alpha = 0; } completion:nil];
+    }];
+    // 2. it grows into Insights
+    [self after:1.15 gen:g do:^{
+        self->_pill.transform = CGAffineTransformIdentity; self->_pill.alpha = 0;
+        self->_island.alpha = 1;
+        self->_insights.frame = CGRectMake(0, 0, self->_bigR.size.width, self->_bigR.size.height);
+        [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{
+            self->_island.frame = self->_bigR; self->_island.layer.cornerRadius = 10;
+        } completion:nil];
+        [UIView animateWithDuration:0.3 delay:0.15 options:0 animations:^{ self->_insights.alpha = 1; } completion:nil];
+        for (NSUInteger i = 0; i < self->_bars.count; i++) {
+            UIView *b = self->_bars[i];
+            [UIView animateWithDuration:0.6 delay:0.3 + i * 0.05 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil];
+        }
+    }];
+    // 3. tap the moon: it changes shape into the Sleep Timer
+    [self after:3.0 gen:g do:^{
+        UIView *moon = [self->_insights viewWithTag:5];
+        [self tapAt:[moon.superview convertPoint:moon.center toView:self->_screen]];
+    }];
+    [self after:3.25 gen:g do:^{
+        [UIView animateWithDuration:0.15 animations:^{ self->_insights.alpha = 0; }];
+        self->_sleep.frame = CGRectMake(0, self->_island.bounds.size.height - self->_sleepR.size.height, self->_sleepR.size.width, self->_sleepR.size.height);
+        [UIView animateWithDuration:0.6 delay:0.05 usingSpringWithDamping:0.78 initialSpringVelocity:0 options:0 animations:^{
+            self->_island.frame = self->_sleepR; self->_island.layer.cornerRadius = 9;
+            self->_sleep.frame = CGRectMake(0, 0, self->_sleepR.size.width, self->_sleepR.size.height);
+        } completion:nil];
+        [UIView animateWithDuration:0.25 delay:0.2 options:0 animations:^{ self->_sleep.alpha = 1; } completion:nil];
+        for (NSUInteger i = 0; i < self->_chips.count; i++) {
+            UIView *c = self->_chips[i];
+            [UIView animateWithDuration:0.45 delay:0.25 + i * 0.04 usingSpringWithDamping:0.65 initialSpringVelocity:0 options:0 animations:^{ c.alpha = 1; c.transform = CGAffineTransformIdentity; } completion:nil];
+        }
+    }];
+    [self after:4.3 gen:g do:^{
+        UIView *c = self->_chips[1];
+        [self tapAt:[c.superview convertPoint:c.center toView:self->_screen]];
+        [UIView animateWithDuration:0.25 animations:^{ c.backgroundColor = [UIColor colorWithRed:0.55 green:0.45 blue:1 alpha:0.95]; }];
+    }];
+    // 4. tap outside: it shrinks back into the pill
+    [self after:5.2 gen:g do:^{ [self tapAt:CGPointMake(self->_screen.bounds.size.width * 0.5, 32)]; }];
+    [self after:5.4 gen:g do:^{
+        [UIView animateWithDuration:0.14 animations:^{ self->_sleep.alpha = 0; }];
+        [UIView animateWithDuration:0.45 delay:0.04 usingSpringWithDamping:1 initialSpringVelocity:0 options:0 animations:^{
+            self->_island.frame = self->_pillR; self->_island.layer.cornerRadius = 6;
+        } completion:^(__unused BOOL f) {
+            self->_pill.alpha = 1;
+            [UIView animateWithDuration:0.14 animations:^{ self->_island.alpha = 0; }];
+        }];
+    }];
+    [self after:7.0 gen:g do:^{ [self loop:g]; }];
+}
+@end
+
+#pragma mark - cells
+
+static const void *kMPCellBuilt = &kMPCellBuilt;
+static void MPDemoLayout(UITableViewCell *self, SEL _cmd) {
+    struct objc_super sup = { self, class_getSuperclass(object_getClass(self)) };
+    ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
+    UIView *cv = self.contentView;
+    if (!objc_getAssociatedObject(self, kMPCellBuilt)) {
+        objc_setAssociatedObject(self, kMPCellBuilt, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        self.selectionStyle = UITableViewCellSelectionStyleNone;
+        UILabel *t = [UILabel new]; t.tag = 0x4D5001; t.numberOfLines = 0;
+        t.text = @"Try the Dynamic Pill"; t.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold]; t.textColor = UIColor.labelColor;
+        UILabel *b = [UILabel new]; b.tag = 0x4D5002; b.numberOfLines = 0;
+        b.text = @"Open Music and swipe up on the now playing pill. It grows into Insights. Tap the moon for the Sleep Timer, tap anywhere outside to close.";
+        b.font = [UIFont systemFontOfSize:15]; b.textColor = UIColor.secondaryLabelColor;
+        MPDemoPhone *ph = [[MPDemoPhone alloc] initWithFrame:CGRectMake(0, 0, 66, 132)]; ph.tag = 0x4D5003;
+        [cv addSubview:t]; [cv addSubview:b]; [cv addSubview:ph];
+    }
+    self.textLabel.hidden = YES; self.detailTextLabel.hidden = YES; self.imageView.hidden = YES;
+    self.accessoryType = UITableViewCellAccessoryNone;
+    CGFloat W = cv.bounds.size.width, H = cv.bounds.size.height, m = 18;
+    UIView *ph = [cv viewWithTag:0x4D5003];
+    ph.frame = CGRectMake(W - 66 - 22, (H - 132) / 2, 66, 132);
+    CGFloat tw = CGRectGetMinX(ph.frame) - m - 16;
+    UILabel *t = (UILabel *)[cv viewWithTag:0x4D5001], *b = (UILabel *)[cv viewWithTag:0x4D5002];
+    CGFloat th = ceil([t sizeThatFits:CGSizeMake(tw, CGFLOAT_MAX)].height), bh = ceil([b sizeThatFits:CGSizeMake(tw, CGFLOAT_MAX)].height);
+    CGFloat y = MAX(12, (H - th - 6 - bh) / 2);
+    t.frame = CGRectMake(m, y, tw, th);
+    b.frame = CGRectMake(m, y + th + 6, tw, bh);
+}
+static UIImage *MPIcon(void) {
+    for (NSString *p in @[@"/var/jb/usr/share/MusicPill/icon.png", @"/usr/share/MusicPill/icon.png", @"/var/jb/Library/PreferenceLoader/Preferences/MusicPill@3x.png"]) {
+        UIImage *i = [UIImage imageWithContentsOfFile:p];
+        if (i) return i;
+    }
+    return nil;
+}
+static void MPHeaderLayout(UITableViewCell *self, SEL _cmd) {
+    struct objc_super sup = { self, class_getSuperclass(object_getClass(self)) };
+    ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
+    UIView *cv = self.contentView;
+    if (!objc_getAssociatedObject(self, kMPCellBuilt)) {
+        objc_setAssociatedObject(self, kMPCellBuilt, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        self.selectionStyle = UITableViewCellSelectionStyleNone;
+        UIImageView *ic = [[UIImageView alloc] initWithImage:MPIcon()]; ic.tag = 0x4D5011;
+        ic.layer.cornerRadius = 16; ic.layer.cornerCurve = kCACornerCurveContinuous; ic.clipsToBounds = YES;
+        UILabel *t = [UILabel new]; t.tag = 0x4D5012; t.text = @"MusicPill";
+        t.font = [UIFont systemFontOfSize:26 weight:UIFontWeightHeavy]; t.textColor = UIColor.labelColor;
+        UILabel *s = [UILabel new]; s.tag = 0x4D5013; s.numberOfLines = 2;
+        s.text = [NSString stringWithFormat:@"Apple Music, iOS 26 style\nVersion %@ · made by nano", MP_VERSION];
+        s.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium]; s.textColor = UIColor.secondaryLabelColor;
+        [cv addSubview:ic]; [cv addSubview:t]; [cv addSubview:s];
+        // the icon floats a little, like it's on glass
+        CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"transform.translation.y"];
+        a.fromValue = @(-1.5); a.toValue = @(1.5); a.duration = 1.8; a.autoreverses = YES; a.repeatCount = HUGE_VALF;
+        a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [ic.layer addAnimation:a forKey:@"float"];
+    }
+    self.textLabel.hidden = YES; self.detailTextLabel.hidden = YES; self.imageView.hidden = YES;
+    self.accessoryType = UITableViewCellAccessoryNone;
+    CGFloat H = cv.bounds.size.height, W = cv.bounds.size.width;
+    UIView *ic = [cv viewWithTag:0x4D5011];
+    ic.frame = CGRectMake(18, (H - 68) / 2, 68, 68);
+    [cv viewWithTag:0x4D5012].frame = CGRectMake(100, H / 2 - 30, W - 116, 32);
+    [cv viewWithTag:0x4D5013].frame = CGRectMake(100, H / 2 + 2, W - 116, 38);
+}
+static Class MPCellClass(const char *name, IMP layout) {
+    Class sup = NSClassFromString(@"PSTableCell");
+    if (!sup) return nil;
+    Class c = objc_getClass(name);
+    if (!c) {
+        c = objc_allocateClassPair(sup, name, 0);
+        class_addMethod(c, @selector(layoutSubviews), layout, "v@:");
+        objc_registerClassPair(c);
+    }
+    return c;
+}
+
+#pragma mark - the page
+
+static BOOL MPIsOurPage(NSArray *arr) {
+    for (id s in arr) if ([s respondsToSelector:@selector(identifier)] && [[s identifier] isEqualToString:@"MP_HEADER"]) return YES;
+    return NO;
+}
+static id MPFind(NSArray *arr, NSString *ident) {
+    for (id s in arr) if ([s respondsToSelector:@selector(identifier)] && [[s identifier] isEqualToString:ident]) return s;
+    return nil;
+}
+static const void *kMPDemoSpec = &kMPDemoSpec;
+static BOOL MPDynamicOn(id ctl, id sw) {
+    id v = sw ? [ctl readPreferenceValue:sw] : nil;
+    if (!v) v = [sw propertyForKey:@"default"];
+    return [v boolValue];
+}
+static NSArray *(*origMPSpecs)(id, SEL);
+static NSArray *MPSpecs(id self, SEL _cmd) {
+    NSArray *a = origMPSpecs(self, _cmd);
+    @try {
+        if (![a isKindOfClass:[NSArray class]] || !MPIsOurPage(a)) return a;
+        id head = MPFind(a, @"MP_HEADER"), demo = MPFind(a, @"MP_DEMO"), sw = MPFind(a, @"MP_DYNAMIC");
+        Class hc = MPCellClass("MPHeaderCell", (IMP)MPHeaderLayout), dc = MPCellClass("MPDemoCell", (IMP)MPDemoLayout);
+        if (head && hc && [head propertyForKey:@"cellClass"] != hc) MPSP(head, hc, @"cellClass");
+        if (demo && dc && [demo propertyForKey:@"cellClass"] != dc) MPSP(demo, dc, @"cellClass");
+        if (demo) objc_setAssociatedObject(self, kMPDemoSpec, demo, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // the demo only shows while Dynamic Pill is on
+        if (demo && !MPDynamicOn(self, sw)) {
+            NSMutableArray *m = [a mutableCopy]; [m removeObject:demo];
+            Ivar iv = class_getInstanceVariable(NSClassFromString(@"PSListController"), "_specifiers");
+            if (iv) object_setIvarWithStrongDefault(self, iv, m);
+            return m;
+        }
+    } @catch (__unused id e) {}
+    return a;
+}
+static void (*origMPSetPref)(id, SEL, id, id);
+static void MPSetPref(id self, SEL _cmd, id value, id spec) {
+    origMPSetPref(self, _cmd, value, spec);
+    @try {
+        if (![[spec identifier] isEqualToString:@"MP_DYNAMIC"]) return;
+        id demo = objc_getAssociatedObject(self, kMPDemoSpec);
+        if (!demo) return;
+        Ivar iv = class_getInstanceVariable(NSClassFromString(@"PSListController"), "_specifiers");
+        NSArray *cur = iv ? object_getIvar(self, iv) : nil;
+        BOOL shown = [cur containsObject:demo];
+        if ([value boolValue] && !shown) [self insertSpecifier:demo afterSpecifier:spec animated:YES];
+        else if (![value boolValue] && shown) [self removeSpecifier:demo animated:YES];
+    } @catch (__unused id e) {}
+}
+static void StartSettings(void) {
+    Class PS = NSClassFromString(@"PSListController");
+    if (!PS) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StartSettings(); });
+        return;
+    }
+    MSHookMessageEx(PS, @selector(specifiers), (IMP)MPSpecs, (IMP *)&origMPSpecs);
+    MSHookMessageEx(PS, @selector(setPreferenceValue:specifier:), (IMP)MPSetPref, (IMP *)&origMPSetPref);
+}
