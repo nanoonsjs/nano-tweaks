@@ -4,7 +4,7 @@
 // Sleep Timer, tap outside and it shrinks back. Like Control26's Control Center card.
 // The cells are made at runtime as subclasses of PSTableCell, so Music never needs Preferences.framework.
 
-#define MP_VERSION @"1.2.88"
+#define MP_VERSION @"1.3"
 
 @interface NSObject (MPPS)
 - (id)propertyForKey:(NSString *)k;
