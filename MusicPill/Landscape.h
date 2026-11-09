@@ -160,7 +160,7 @@ static NSString *const kLyricsOffsets = @"mp.lyricsOffset";
     NSMutableArray<UILabel *> *_labels; NSInteger _cur; CFTimeInterval _userUntil; UILabel *_msg; CGFloat _laidW;
     CADisplayLink *_link; CFTimeInterval _lastFrame;
     NSMutableArray *_frags;   // per line: @[ @[@(charStart), @(charEnd), [NSValue rect]] ... ]
-    NSMutableArray *_fill;    // per line: the bright copy that fills in
+    NSMutableArray<UILabel *> *_fill;    // per line: the bright copy that fills in
 }
 - (BOOL)smooth { return gSmoothLyricsPref && _lyrics.times.count > 0; }
 - (instancetype)initWithFrame:(CGRect)f {
