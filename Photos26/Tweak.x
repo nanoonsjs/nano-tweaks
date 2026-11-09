@@ -1,4 +1,5 @@
-// Photos26 2.5.1 - made by nano
+// Photos26 2.6 - made by nano
+// 2.6: Messages too: the photo/video viewer you open from a chat is Photos' own, so it gets the same glass buttons and video player.
 // 2.5.1: back to the 2.3.0 look (the Albums tab changes in 2.4.0 - 2.5.0 are
 //        removed); numbered higher so it installs over them.
 // 2.3.0: light mode (frosted light glass, dark icons), the photo viewer's top
@@ -99,6 +100,7 @@ static UIColor *GIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackCo
 #define DEBUG_TAG  0x50473632
 
 static BOOL gEnabled = YES, gTopBar = YES, gPlayer = YES, gDebug = NO, gLoop = YES;
+static BOOL gInMessages, gMessagesPref = YES;   // 2.6: also in Messages (its photo/video viewer is Photos' own)
 
 static const void *kMasked = &kMasked;
 static const void *kBusy = &kBusy;
@@ -134,6 +136,8 @@ static void LoadPrefs(void) {
     gPlayer  = PrefBool(f, @"player", YES);
     gDebug   = PrefBool(f, @"debug", NO);
     gLoop    = PrefBool(f, @"loop", YES);
+    gMessagesPref = PrefBool(f, @"messages", YES);
+    if (gInMessages && !gMessagesPref) gEnabled = NO;
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
     dispatch_async(dispatch_get_main_queue(), ^{ LoadPrefs(); });
@@ -748,10 +752,29 @@ static PGPass *EnsureContainer(UIToolbar *tb) {
     return c;
 }
 
+
+// In Messages only Photos' own viewer gets the look: a bar counts when a Photos (PU...) view
+// controller is above it, or one of its children is (Messages wraps Photos' one-up viewer).
+static BOOL PUName(UIViewController *vc) {
+    NSString *n = NSStringFromClass(vc.class);
+    return [n hasPrefix:@"PU"] || [n containsString:@"OneUp"] || [n hasPrefix:@"PX"];
+}
+static BOOL InPhotosViewer(UIView *bar) {
+    if (!gInMessages) return YES;
+    int guard = 0;
+    for (UIResponder *r = bar; r && guard++ < 80; r = r.nextResponder) {
+        if (![r isKindOfClass:[UIViewController class]]) continue;
+        UIViewController *vc = (UIViewController *)r;
+        if (PUName(vc)) return YES;
+        for (UIViewController *ch in vc.childViewControllers) { if (PUName(ch)) return YES; for (UIViewController *g in ch.childViewControllers) if (PUName(g)) return YES; }
+    }
+    return NO;
+}
 static void LayoutBottom(UIToolbar *tb) {
     PGPass *c = (PGPass *)[tb viewWithTag:BOTTOM_TAG];
     if (c.superview != tb) c = nil;
     if (!gEnabled) { c.hidden = YES; for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view")); return; }
+    if (gInMessages && !InPhotosViewer(tb)) { if (c) { c.hidden = YES; for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view")); } return; }
 
     // Which of Apple's buttons are here?
     NSMutableDictionary *found = [NSMutableDictionary dictionary];
@@ -942,7 +965,8 @@ static void LayoutBottom(UIToolbar *tb) {
         if (objc_getAssociatedObject(v, kStyled)) { v.userInteractionEnabled = YES; objc_setAssociatedObject(v, kStyled, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
     }
     // Only the photo/video viewer toolbar: it has both share and trash.
-    if (!found[@"share"] || !found[@"trash"]) { c.hidden = YES; for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view")); gBottomDebug = [NSString stringWithFormat:@"not viewer: %@", [kinds componentsJoinedByString:@","]]; return; }
+    BOOL msgViewer = gInMessages && found[@"share"] && (found[@"play"] || FindFilmstrip(tb.window, 0));
+    if ((!found[@"share"] || !found[@"trash"]) && !msgViewer) { c.hidden = YES; for (UIBarButtonItem *it in tb.items) Unmask(KV(it, @"view")); gBottomDebug = [NSString stringWithFormat:@"not viewer: %@", [kinds componentsJoinedByString:@","]]; return; }
     gItems = found;
     gToolbar = tb;
     gBottomDebug = [kinds componentsJoinedByString:@","];
@@ -993,6 +1017,7 @@ static void LayoutBottom(UIToolbar *tb) {
     bInfo.hidden = !AppleItem(@"info");
     bHeart.hidden = !AppleItem(@"heart");
     SetFrame(bShare, gl.frame); SetFrame(bTrash, gr.frame);
+    gr.hidden = bTrash.hidden = !AppleItem(@"trash");
     bShare.jelly = gl; bTrash.jelly = gr;
     bHeart.capsule = bInfo.capsule = bEdit.capsule = gm;
     CGFloat third = mw / 3;
@@ -1193,6 +1218,7 @@ static UIView *GlyphIn(UIView *v, int d) {
 static void LayoutTop(UINavigationBar *nb) {
     UIView *c = [nb viewWithTag:TOP_TAG];
     if (c.superview != nb) c = nil;
+    if (gInMessages && !InPhotosViewer(nb)) { if (c) c.hidden = YES; return; }
     UINavigationItem *top = nb.topItem;
     UIBarButtonItem *edit = nil, *more = nil;
     for (UIBarButtonItem *it in top.rightBarButtonItems) {
@@ -1922,6 +1948,23 @@ static void InitScrubber(void) { static BOOL done; if (done) return; done = YES;
 
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+    if ([bid isEqualToString:@"com.apple.MobileSMS"]) {
+        // Messages: only the photo / video viewer (glass buttons, the glass video player, round thumbnails)
+        gInMessages = YES;
+        LoadPrefs();
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
+        if (!gMessagesPref) return;
+        %init;
+        if (objc_getClass("PUScrubberView")) InitScrubber();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __block int tries = 0;
+            [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *tm) {
+                if (objc_getClass("PUScrubberView")) { InitScrubber(); [tm invalidate]; }
+                else if (++tries > 600) [tm invalidate];
+            }];
+        });
+        return;
+    }
     if (![bid isEqualToString:@"com.apple.mobileslideshow"]) return;
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
