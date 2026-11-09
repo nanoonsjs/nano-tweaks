@@ -1,4 +1,5 @@
-// Messages26 1.3.8 - made by nano
+// Messages26 1.3.9 - made by nano
+// 1.3.9: sharing a video no longer crashes; music and other files open in Apple's own viewer (only photos and videos get the iOS 26 one)
 // 1.3.8: contact page styling back (1.3.7 lost a line it needed)
 // 1.3.7: contact animation removed; contact page: black background, photo and Info tab not cut off, round press highlight on call / video / mail; viewer hides save once saved
 // 1.3.6: Dynamic Island removed; contact expand works when the page is pushed or presented (own window, no flash)
@@ -5415,7 +5416,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.3.8 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.3.9 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

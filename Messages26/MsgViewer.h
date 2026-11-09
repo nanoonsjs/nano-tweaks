@@ -23,10 +23,27 @@ static UIViewController *MVQLOf(UIView *v) {
 }
 
 static const void *kMVMask = &kMVMask;
+static NSHashTable *gMVMasked, *gMVNoTouch, *gMVHidden, *gMVOffPans;
 static void MVMask(UIView *v) {
     if (!v || objc_getAssociatedObject(v, kMVMask)) return;
     v.layer.mask = [CALayer layer];   // draws nothing, still takes touches
     objc_setAssociatedObject(v, kMVMask, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!gMVMasked) gMVMasked = [NSHashTable weakObjectsHashTable];
+    [gMVMasked addObject:v];
+}
+static void MVNoTouch(UIView *v) {
+    if (!v || !v.userInteractionEnabled) return;
+    v.userInteractionEnabled = NO;
+    if (!gMVNoTouch) gMVNoTouch = [NSHashTable weakObjectsHashTable];
+    [gMVNoTouch addObject:v];
+}
+// a file that isn't a photo or video (music, PDF...): Apple's viewer exactly as it was
+static void MVRestoreApple(void) {
+    for (UIView *v in [gMVMasked allObjects]) { if (objc_getAssociatedObject(v, kMVMask)) { v.layer.mask = nil; objc_setAssociatedObject(v, kMVMask, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); } }
+    for (UIView *v in [gMVNoTouch allObjects]) v.userInteractionEnabled = YES;
+    for (UIView *v in [gMVHidden allObjects]) v.hidden = NO;
+    for (UIGestureRecognizer *g in [gMVOffPans allObjects]) g.enabled = YES;
+    [gMVMasked removeAllObjects]; [gMVNoTouch removeAllObjects]; [gMVHidden removeAllObjects]; [gMVOffPans removeAllObjects];
 }
 
 // what a bar button is: from its symbol, label and system type
@@ -209,6 +226,7 @@ static UIVisualEffectView *MVGlass(CGFloat radius) {
     float _speed;
     CFTimeInterval _lastScan;
     UIView *_panel, *_catcher; UIVisualEffectView *_panelG;
+    int _kind;
 }
 static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -252,7 +270,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     return self;
 }
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
-    if (self.alpha < 0.05) return nil;
+    if (self.alpha < 0.05 || _kind == 0) return nil;
     UIView *h = [super hitTest:p withEvent:e];
     if (h == self || [h isKindOfClass:[UIVisualEffectView class]] || h == _title || h == _chev) return nil;   // empty spots go to Apple's viewer
     return (h.hidden || h.alpha < 0.05 || !h.userInteractionEnabled) ? nil : h;
@@ -445,8 +463,30 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     _el.text = MVClock(v * D); _rem.text = [@"-" stringByAppendingString:MVClock(D - v * D)];
 }
 // Apple's pieces: find the buttons, hide Apple's look (they keep working), hide its film strip and middle play button
+// 0 = not a photo or video (leave it to Apple), 1 = photo, 2 = video, -1 = can't tell
+- (int)fileKind {
+    id item = nil; @try { item = [self.ql valueForKey:@"currentPreviewItem"]; } @catch (__unused id e) {}
+    NSURL *u = nil; @try { if ([item respondsToSelector:@selector(previewItemURL)]) u = [item previewItemURL]; } @catch (__unused id e) {}
+    NSString *ext = u.pathExtension.lowercaseString;
+    if (!ext.length) {
+        NSString *t = self.nb.topItem.title.lowercaseString;
+        if ([t rangeOfString:@"."].location != NSNotFound) ext = t.pathExtension;
+    }
+    if (!ext.length) return -1;
+    if ([@[@"jpg", @"jpeg", @"png", @"heic", @"heif", @"gif", @"webp", @"tif", @"tiff", @"bmp", @"dng", @"raw"] containsObject:ext]) return 1;
+    if ([@[@"mov", @"mp4", @"m4v", @"3gp", @"avi", @"mkv", @"webm", @"hevc"] containsObject:ext]) return 2;
+    return 0;
+}
 - (void)scan {
     UINavigationBar *nb = self.nb; UIToolbar *tb = self.tb;
+    _kind = [self fileKind];
+    if (_kind == 0) {
+        // music, documents...: Apple's viewer untouched, ours out of the way
+        MVRestoreApple();
+        _video = NO; _player = nil;
+        gMVDebug = @"viewer: not a photo / video (left to Apple)";
+        return;
+    }
     _iShare = _iPlay = _iReply = _iTap = _iDone = nil;
     NSMutableArray *dbg = [NSMutableArray array];
     for (UIBarButtonItem *it in tb.items) {
@@ -470,12 +510,12 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     }
     if (!_iDone) _iDone = top.rightBarButtonItem;
     for (UIView *s in nb.subviews) MVMask(s);
-    for (UIView *s in tb.subviews) { MVMask(s); if ([NSStringFromClass(s.class) containsString:@"Background"]) s.hidden = YES; }
+    for (UIView *s in tb.subviews) { MVMask(s); if ([NSStringFromClass(s.class) containsString:@"Background"] && !s.hidden) { s.hidden = YES; if (!gMVHidden) gMVHidden = [NSHashTable weakObjectsHashTable]; [gMVHidden addObject:s]; } }
     tb.backgroundColor = UIColor.clearColor; nb.backgroundColor = UIColor.clearColor;
     // Apple's buttons that aren't ours (play, spaces) take no touches; reply / tapback / share are moved under ours
     for (UIBarButtonItem *it in tb.items) {
         UIView *v = nil; @try { v = [it valueForKey:@"view"]; } @catch (__unused id e) {}
-        if ([v isKindOfClass:[UIView class]] && it != _iShare) v.userInteractionEnabled = NO;
+        if ([v isKindOfClass:[UIView class]]) MVNoTouch(v);
     }
     UIView *root = self.superview;
     CGFloat W = root.bounds.size.width;
@@ -486,14 +526,14 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
         if (v == self || v == nb || v == tb) continue;
         NSString *n = NSStringFromClass(v.class);
         CGRect r = [v convertRect:v.bounds toView:root];
-        if (([n containsString:@"Scrubber"] || [n containsString:@"Filmstrip"] || [n containsString:@"TimeSlider"]) && r.size.width > W * 0.5) { MVMask(v); v.userInteractionEnabled = NO; continue; }
+        if (([n containsString:@"Scrubber"] || [n containsString:@"Filmstrip"] || [n containsString:@"TimeSlider"]) && r.size.width > W * 0.5) { MVMask(v); MVNoTouch(v); continue; }
         BOOL playish = [n containsString:@"PlayButton"] || [n containsString:@"PlayPause"];
         if (!playish && ([v isKindOfClass:[UIButton class]] || [v isKindOfClass:[UIImageView class]])) {
             UIImage *im = [v isKindOfClass:[UIButton class]] ? [(UIButton *)v currentImage] : ((UIImageView *)v).image;
             NSString *d = im.description.lowercaseString;
             if ([d containsString:@"play"] && r.size.width >= 40 && r.size.width <= 160 && fabs(CGRectGetMidX(r) - W / 2) < 40) playish = YES;
         }
-        if (playish && r.size.width >= 30 && r.size.width <= 180) { MVMask(v); v.userInteractionEnabled = NO; continue; }
+        if (playish && r.size.width >= 30 && r.size.width <= 180) { MVMask(v); MVNoTouch(v); continue; }
         if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image && r.size.width * r.size.height > best && r.size.width > W * 0.5) { best = r.size.width * r.size.height; photo = (UIImageView *)v; }
         [st addObjectsFromArray:v.subviews];
     }
@@ -506,7 +546,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     BOOL playShown = _iPlay && _iPlay.enabled && (!pv || (pv.window && !pv.hidden && pv.alpha > 0.01 && pv.bounds.size.width > 2));
     // Quick Look's bottom bar has a play button only for videos (photos, and Live Photos, don't)
     (void)playShown;
-    _video = _iPlay != nil;
+    _video = _kind == 2 ? YES : (_kind == 1 ? NO : _iPlay != nil);
     gMVDebug = [NSString stringWithFormat:@"viewer: video=%d player=%d layers=%d items=%@", _video, _player != nil, gMVAnyPlayerLayer, gMVItems];
     if (!_video) _player = nil;
     // Apple's own icons for tapback and reply
@@ -554,6 +594,8 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
             BOOL media = [vn containsString:@"video"] || [vn containsString:@"media"] || [vn containsString:@"player"] || [vn containsString:@"movie"] || [vn containsString:@"avplayer"];
             if ([l containsString:@"scrub"] || [l containsString:@"seek"] || [l containsString:@"skim"] || [l containsString:@"timepan"] || (media && ![l containsString:@"dismiss"] && ![l containsString:@"transition"])) {
                 g.enabled = NO;
+                if (!gMVOffPans) gMVOffPans = [NSHashTable weakObjectsHashTable];
+                [gMVOffPans addObject:g];
                 gMVPans = [gMVPans stringByAppendingFormat:@" off:%@", NSStringFromClass(v.class)];
             }
         }
@@ -563,7 +605,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
 // Apple's own reply / tapback / share buttons (invisible) sit right under ours, so a tap is a real tap on them
 static const void *kMVOurs = &kMVOurs;
 - (void)alignApple {
-    for (NSArray *pair in @[@[_iShare ?: (id)NSNull.null, _share]]) {
+    for (NSArray *pair in @[]) {
         UIBarButtonItem *it = pair[0] == NSNull.null ? nil : pair[0]; UIButton *ours = pair[1];
         UIView *v = nil; @try { v = [it valueForKey:@"view"]; } @catch (__unused id e) {}
         if (![v isKindOfClass:[UIView class]] || !v.superview || ours.hidden || !self.tb.window) { ours.userInteractionEnabled = YES; continue; }
@@ -673,7 +715,7 @@ static const void *kMVOurs = &kMVOurs;
     if (now - _lastScan > 0.4) { _lastScan = now; [self scan]; [self setNeedsLayout]; }
     // follow Apple's bars: tap the photo and everything hides with them
     BOOL chrome = (tb.window && !tb.hidden && tb.alpha > 0.05) || (nb.window && !nb.hidden && nb.alpha > 0.05);
-    CGFloat a = chrome ? 1 : 0;
+    CGFloat a = (chrome && _kind != 0) ? 1 : 0;
     if (fabs(self.alpha - a) > 0.01 && ![self.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ self.alpha = a; } completion:nil];
     if (_panel && (!_video || a == 0)) [self closeMore];
     NSString *t = _video ? @"Video" : @"Photo";
