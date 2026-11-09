@@ -105,14 +105,20 @@ static double MVDur(AVPlayer *p) {
     d = p.currentItem.asset.duration;
     return (CMTIME_IS_NUMERIC(d) && CMTimeGetSeconds(d) > 0) ? CMTimeGetSeconds(d) : 0;
 }
+static BOOL gMVAnyPlayerLayer;   // Quick Look plays videos right here (so no player in the middle = not a video)
 static AVPlayer *MVPlayerIn(UIView *root) {
     if (!root) return nil;
+    gMVAnyPlayerLayer = NO;
     NSMutableArray *st = [NSMutableArray arrayWithObject:root.layer]; int guard = 0;
     AVPlayer *best = nil;
     while (st.count && guard++ < 6000) {
         CALayer *l = st.lastObject; [st removeLastObject];
+        if ([l isKindOfClass:[AVPlayerLayer class]]) gMVAnyPlayerLayer = YES;
         if ([l isKindOfClass:[AVPlayerLayer class]] && ((AVPlayerLayer *)l).player && !l.hidden && l.opacity > 0.01) {
             AVPlayer *p = ((AVPlayerLayer *)l).player;
+            BOOL seen = YES;
+            for (CALayer *u = l.superlayer; u && u != root.layer; u = u.superlayer) if (u.hidden || u.opacity < 0.01) { seen = NO; break; }
+            if (!seen || !p.currentItem) continue;
             CGRect f = [l convertRect:l.bounds toLayer:root.layer];
             CGPoint mid = CGPointMake(CGRectGetMidX(root.bounds), CGRectGetMidY(root.bounds));
             if (!CGRectContainsPoint(f, mid) || f.size.width < root.bounds.size.width * 0.5) { if (l.sublayers.count) [st addObjectsFromArray:l.sublayers]; continue; }
@@ -177,7 +183,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     _chev = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.down.circle.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold]]];
     _chev.tintColor = [UIColor colorWithWhite:1 alpha:0.35]; [self addSubview:_chev];
     _title.userInteractionEnabled = NO; _chev.userInteractionEnabled = NO;   // Apple's own title (under us) still opens its menu
-    _tap = MVButton(@"plus.bubble", 20, self, @selector(doTap)); [self addSubview:_tap];
+    _tap = MVButton(@"face.smiling", 21, self, @selector(doTap)); [self addSubview:_tap];
     _reply = MVButton(@"arrowshape.turn.up.left", 19, self, @selector(doReply)); [self addSubview:_reply];
     _save = MVButton(@"square.and.arrow.down", 19, self, @selector(doSave)); [self addSubview:_save];
     _share = MVButton(@"square.and.arrow.up", 19, self, @selector(doShare)); [self addSubview:_share];
@@ -201,7 +207,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
     if (self.alpha < 0.05) return nil;
     UIView *h = [super hitTest:p withEvent:e];
     if (h == self || [h isKindOfClass:[UIVisualEffectView class]] || h == _title || h == _chev) return nil;   // empty spots go to Apple's viewer
-    return (h.hidden || h.alpha < 0.05) ? nil : h;
+    return (h.hidden || h.alpha < 0.05 || !h.userInteractionEnabled) ? nil : h;
 }
 - (void)press:(UIButton *)b { [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ b.transform = CGAffineTransformMakeScale(0.86, 0.86); } completion:nil]; }
 - (void)unpress:(UIButton *)b { [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.45 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil]; }
@@ -379,9 +385,14 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
         else if ([k isEqualToString:@"share"] && !_iShare) _iShare = it;
     }
     if (!_iDone) _iDone = top.rightBarButtonItem;
-    for (UIView *s in nb.subviews) if (![NSStringFromClass(s.class) containsString:@"Background"]) MVMask(s);
-    // the toolbar's own buttons stay pressable only through ours (no invisible buttons under empty spots)
-    for (UIView *s in tb.subviews) if (![NSStringFromClass(s.class) containsString:@"Background"]) { MVMask(s); if (s.userInteractionEnabled) s.userInteractionEnabled = NO; }
+    for (UIView *s in nb.subviews) MVMask(s);
+    for (UIView *s in tb.subviews) { MVMask(s); if ([NSStringFromClass(s.class) containsString:@"Background"]) s.hidden = YES; }
+    tb.backgroundColor = UIColor.clearColor; nb.backgroundColor = UIColor.clearColor;
+    // Apple's buttons that aren't ours (play, spaces) take no touches; reply / tapback / share are moved under ours
+    for (UIBarButtonItem *it in tb.items) {
+        UIView *v = nil; @try { v = [it valueForKey:@"view"]; } @catch (__unused id e) {}
+        if ([v isKindOfClass:[UIView class]] && it != _iReply && it != _iTap && it != _iShare) v.userInteractionEnabled = NO;
+    }
     UIView *root = self.superview;
     CGFloat W = root.bounds.size.width;
     NSMutableArray *st = [NSMutableArray arrayWithObject:root ?: [UIView new]]; int guard = 0;
@@ -403,14 +414,15 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
         [st addObjectsFromArray:v.subviews];
     }
     _photo = photo;
+    [self killScrubPans:root];
     _player = MVPlayerIn(root);
     // a video only when Apple shows its play button for this item (photos have none), or a player is in the middle
     UIView *pv = nil; @try { pv = [_iPlay valueForKey:@"view"]; } @catch (__unused id e) {}
     BOOL playShown = _iPlay && _iPlay.enabled && (!pv || (pv.window && !pv.hidden && pv.alpha > 0.01 && pv.bounds.size.width > 2));
-    _video = playShown || _player != nil;
+    _video = _player != nil || (playShown && !gMVAnyPlayerLayer);
     if (!_video) _player = nil;
     // Apple's own icons for tapback and reply
-    for (NSArray *pair in @[@[_tap, _iTap ?: (id)NSNull.null], @[_reply, _iReply ?: (id)NSNull.null]]) {
+    for (NSArray *pair in @[@[_reply, _iReply ?: (id)NSNull.null]]) {
         UIButton *b = pair[0]; UIBarButtonItem *it = pair[1] == NSNull.null ? nil : pair[1];
         UIImage *im = MVItemImage(it);
         if (im && ![b.accessibilityValue isEqualToString:im.description]) {
@@ -419,6 +431,77 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
             if (t.isSymbolImage) t = [t imageByApplyingSymbolConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightSemibold]];
             [b setImage:t forState:UIControlStateNormal];
         }
+    }
+}
+// Quick Look's drag-on-the-video to rewind / fast-forward: off (swiping between items stays)
+- (void)killScrubPans:(UIView *)root {
+    NSMutableArray *st = [NSMutableArray arrayWithObject:root ?: [UIView new]]; int guard = 0;
+    while (st.count && guard++ < 3000) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if (v == self) continue;
+        for (UIGestureRecognizer *g in v.gestureRecognizers) {
+            if (!g.enabled || ![g isKindOfClass:[UIPanGestureRecognizer class]]) continue;
+            if ([v isKindOfClass:[UIScrollView class]] && g == ((UIScrollView *)v).panGestureRecognizer) continue;
+            NSString *d = @"";
+            @try { d = [[g valueForKey:@"_targets"] description] ?: @""; } @catch (__unused id e) {}
+            d = [d stringByAppendingString:NSStringFromClass(g.class)];
+            NSString *l = d.lowercaseString;
+            if ([l containsString:@"scrub"] || [l containsString:@"seek"] || [l containsString:@"skim"]) g.enabled = NO;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+}
+// Apple's own reply / tapback / share buttons (invisible) sit right under ours, so a tap is a real tap on them
+static const void *kMVOurs = &kMVOurs;
+- (void)alignApple {
+    for (NSArray *pair in @[@[_iReply ?: (id)NSNull.null, _reply], @[_iTap ?: (id)NSNull.null, _tap], @[_iShare ?: (id)NSNull.null, _share]]) {
+        UIBarButtonItem *it = pair[0] == NSNull.null ? nil : pair[0]; UIButton *ours = pair[1];
+        UIView *v = nil; @try { v = [it valueForKey:@"view"]; } @catch (__unused id e) {}
+        if (![v isKindOfClass:[UIView class]] || !v.superview || ours.hidden || !self.tb.window) { ours.userInteractionEnabled = YES; continue; }
+        CGPoint c = [self convertPoint:ours.center toView:v.superview];
+        CGAffineTransform t = CGAffineTransformMakeTranslation(c.x - v.center.x, c.y - v.center.y);
+        if (!CGAffineTransformEqualToTransform(v.transform, t)) v.transform = t;
+        v.userInteractionEnabled = YES;
+        for (UIView *p = v.superview; p && p != self.tb; p = p.superview) { p.userInteractionEnabled = YES; if (p.clipsToBounds) p.clipsToBounds = NO; }
+        ours.userInteractionEnabled = NO;   // the touch goes through to Apple's button under it
+        if (!objc_getAssociatedObject(v, kMVOurs)) {
+            NSMutableArray *ctl = [NSMutableArray arrayWithObject:v]; UIControl *found = nil;
+            while (ctl.count && !found) { UIView *x = ctl.firstObject; [ctl removeObjectAtIndex:0]; if ([x isKindOfClass:[UIControl class]]) found = (UIControl *)x; [ctl addObjectsFromArray:x.subviews]; }
+            if (found) {
+                [found addTarget:self action:@selector(appleDown:) forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
+                [found addTarget:self action:@selector(appleUp:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchDragExit];
+                objc_setAssociatedObject(found, kMVOurs, ours, OBJC_ASSOCIATION_ASSIGN);
+            }
+            objc_setAssociatedObject(v, kMVOurs, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+}
+- (void)appleDown:(UIControl *)c { UIButton *b = objc_getAssociatedObject(c, kMVOurs); if (b) [self press:b]; }
+- (void)appleUp:(UIControl *)c {
+    UIButton *b = objc_getAssociatedObject(c, kMVOurs); if (!b) return;
+    [self unpress:b];
+    if (b == _tap && c.touchInside) [self reactBurst];
+    else if (c.touchInside) [self haptic];
+}
+// the reaction button: a wiggle and a few reactions float up out of it
+- (void)reactBurst {
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    CAKeyframeAnimation *sc = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+    sc.values = @[@1, @1.35, @0.88, @1.08, @1]; sc.keyTimes = @[@0, @0.25, @0.5, @0.75, @1]; sc.duration = 0.55;
+    CAKeyframeAnimation *rot = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"];
+    rot.values = @[@0, @(-0.3), @0.25, @(-0.12), @0]; rot.keyTimes = sc.keyTimes; rot.duration = 0.55;
+    [_tap.imageView.layer addAnimation:sc forKey:@"pop"]; [_tap.imageView.layer addAnimation:rot forKey:@"wig"];
+    NSArray *em = @[@"❤️", @"👍", @"😂", @"‼️", @"👎", @"❓"];
+    CGPoint c = _tap.center;
+    for (NSUInteger i = 0; i < em.count; i++) {
+        UILabel *l = [UILabel new]; l.text = em[i]; l.font = [UIFont systemFontOfSize:20]; [l sizeToFit];
+        l.center = c; l.alpha = 0; l.transform = CGAffineTransformMakeScale(0.3, 0.3); l.userInteractionEnabled = NO;
+        [self addSubview:l];
+        CGFloat a = -M_PI_2 + ((CGFloat)i - 2.5) * 0.32, r = 60 + (i % 2) * 18;
+        [UIView animateWithDuration:0.55 delay:i * 0.03 usingSpringWithDamping:0.6 initialSpringVelocity:0.5 options:0 animations:^{
+            l.alpha = 1; l.transform = CGAffineTransformIdentity; l.center = CGPointMake(c.x + cos(a) * r * 0.7, c.y + sin(a) * r);
+        } completion:nil];
+        [UIView animateWithDuration:0.35 delay:0.6 + i * 0.03 options:0 animations:^{ l.alpha = 0; l.center = CGPointMake(l.center.x, l.center.y - 18); l.transform = CGAffineTransformMakeScale(0.6, 0.6); } completion:^(__unused BOOL f) { [l removeFromSuperview]; }];
     }
 }
 - (void)place:(UIView *)v glass:(UIVisualEffectView *)g frame:(CGRect)r {
@@ -453,6 +536,7 @@ static UIButton *MVButton(NSString *sym, CGFloat pt, id target, SEL a) {
         [self place:nil glass:_rightG frame:CGRectMake(W - 22 - BH, by - BH / 2, BH, BH)];
         _share.frame = _rightG.frame;
     }
+    @try { [self alignApple]; } @catch (__unused id e) {}
     // video: the time bar and ... above, the big buttons in the middle
     for (UIView *v in @[_scrubG, _moreG, _more, _el, _rem, _track, _scrubHit, _playG, _play, _backG, _back, _fwdG, _fwd]) v.hidden = !_video;
     BOOL seek = _player != nil;
