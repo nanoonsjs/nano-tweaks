@@ -1,4 +1,5 @@
-// MusicPill 1.2.83 - made by nano
+// MusicPill 1.2.84 - made by nano
+// 1.2.84: pill no longer grows after landscape; landscape uses plain icons, timed lyrics on the right with controls kept, top buttons hide with Insights; swipe up grows the pill into Insights like the Dynamic Island
 // 1.2.83: landscape v2 - Music really turns (home bar along the bottom, no status bar), lyrics button, glass control capsule, normal AirPlay icon, still background with Increase Contrast
 // 1.2.82: landscape player (turn the phone: cover left, glass controls right, colors from the cover, Insights in two columns), smaller pill on Library
 // 1.2.81: jelly bounce after a swipe always shows (flicks on a skip, wobbles home); no second star after lyrics / queue
@@ -1141,6 +1142,8 @@ static UIVisualEffect *TabGlassEffect(void) {
     }
     return cached ?: [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
 }   // where the pill sits when collapsed (root coords)
+static BOOL gLSActive;               // the landscape player is up and Music may turn (Landscape.h)
+static CFTimeInterval gLSSettle;     // after turning back: leave the pill alone until Music has settled
 static CGAffineTransform PillTransform(UIView *m) {
     CGFloat W = m.bounds.size.width, H = m.bounds.size.height;
     // Collapsed: Music's (invisible) bar sits right under our small pill so taps reach it.
@@ -1167,6 +1170,8 @@ static CGAffineTransform PillTransform(UIView *m) {
 // player leaves Music's own (non-identity) transform behind, which is why
 // 0.5.1 never shrank it again.
 static void ApplyPillTransform(UIView *m, BOOL force) {
+    // 1.2.84: never size the pill while Music turns: a turned bar with our scale on it got bigger every turn
+    if (gLSActive || CACurrentMediaTime() < gLSSettle) return;
     CGAffineTransform t = PillTransform(m);
     NSValue *last = objc_getAssociatedObject(m, kApplied);
     // Back-off: if we've had to force it more than 4 times in 2 seconds,
@@ -1427,7 +1432,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.83 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.2.84 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2340,7 +2345,7 @@ static void SyncPill(void) {
     BOOL cool = CACurrentMediaTime() < gPlayerCooldownUntil;
     if (mini.userInteractionEnabled == cool) mini.userInteractionEnabled = !cool;
     HideMini(mini, YES);
-    if (!gCollapsed && !pill.layer.animationKeys.count) {
+    if (!gCollapsed && !pill.layer.animationKeys.count && !gLSActive && CACurrentMediaTime() >= gLSSettle) {
         CGRect r = [mini convertRect:mini.bounds toView:host];
         if (!CGRectEqualToRect(pill.frame, r)) { pill.compact = NO; pill.frame = r; [pill setNeedsLayout]; }
     }

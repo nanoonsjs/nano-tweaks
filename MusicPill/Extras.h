@@ -621,6 +621,144 @@ static UIView *XRow(CGFloat W, int rank, UIImage *art, NSString *title, NSString
 }
 @end
 
+
+#pragma mark - swipe up on the pill: it grows into Insights (like holding the Dynamic Island)
+
+@interface MPIsland : UIView <UIGestureRecognizerDelegate>
++ (void)expandFrom:(UIView *)pill;
+- (void)collapse;
+@end
+@implementation MPIsland {
+    UIView *_shape, *_content, *_snap;
+    __weak UIView *_pill;
+    CGRect _from, _to;
+    CGFloat _fromR;
+}
+static __weak MPIsland *gIsland;
+static CGRect XPillRect(UIView *pill, UIView *in) {
+    // the pill as it looks right now (its shrink and position included)
+    CALayer *pl = pill.layer.presentationLayer ?: pill.layer;
+    CGRect r = [pill.superview.layer convertRect:pl.frame toLayer:in.layer];
+    return r.size.width > 20 ? r : [pill convertRect:pill.bounds toView:in];
+}
++ (void)expandFrom:(UIView *)pill {
+    UIWindow *w = pill.window;
+    if (!w || gIsland.window) return;
+    gSheetSource = pill;
+    MPIsland *v = [[MPIsland alloc] initWithFrame:w.bounds];
+    v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    v.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
+    gIsland = v;
+    v->_pill = pill;
+    v->_from = XPillRect(pill, w);
+    v->_fromR = v->_from.size.height / 2;
+    UIEdgeInsets sa = w.safeAreaInsets;
+    CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
+    CGFloat bottom = MIN(H - MAX(10, sa.bottom - 8), CGRectGetMaxY(v->_from) + 4);
+    v->_to = CGRectMake(8, sa.top + 6, W - 16, bottom - sa.top - 6);
+
+    // the shape: starts exactly as the pill, the pill's picture inside it, then it grows
+    UIView *shape = [[UIView alloc] initWithFrame:v->_from];
+    shape.clipsToBounds = YES; shape.layer.cornerCurve = kCACornerCurveContinuous; shape.layer.cornerRadius = v->_fromR;
+    shape.layer.borderWidth = 0.8; shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+    UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+    blur.frame = shape.bounds; blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [shape addSubview:blur];
+    UIView *ink = [[UIView alloc] initWithFrame:shape.bounds];   // deep and dark like the island
+    ink.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; ink.autoresizingMask = blur.autoresizingMask;
+    [shape addSubview:ink];
+    UIView *snap = [pill snapshotViewAfterScreenUpdates:NO];
+    if (snap) { snap.frame = shape.bounds; snap.autoresizingMask = blur.autoresizingMask; [shape addSubview:snap]; }
+    v->_snap = snap;
+    UIView *content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, v->_to.size.width, v->_to.size.height)];
+    content.center = CGPointMake(v->_from.size.width / 2, v->_from.size.height / 2);
+    content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.9, 0.9);
+    [shape addSubview:content];
+    [MPInsightsCtl buildIn:content size:content.bounds.size closeTarget:v action:@selector(collapse)];
+    // Sleep Timer sits in the header next to close
+    UIButton *moon = [UIButton buttonWithType:UIButtonTypeSystem];
+    NSString *sleep = SleepStatus();
+    [moon setImage:[UIImage systemImageNamed:sleep ? @"moon.zzz.fill" : @"moon.zzz" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+    moon.tintColor = sleep ? [UIColor colorWithRed:0.66 green:0.58 blue:1 alpha:1] : UIColor.whiteColor;
+    moon.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    moon.frame = CGRectMake(content.bounds.size.width - 104, 22, 38, 38); moon.layer.cornerRadius = 19;
+    [moon addTarget:v action:@selector(sleepTap) forControlEvents:UIControlEventTouchUpInside];
+    [content addSubview:moon];
+    v->_shape = shape; v->_content = content;
+    [v addSubview:shape];
+    [w addSubview:v];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:v action:@selector(bgTap:)];
+    [v addGestureRecognizer:tap];
+    UIPanGestureRecognizer *down = [[UIPanGestureRecognizer alloc] initWithTarget:v action:@selector(pullDown:)];
+    down.delegate = v; [shape addGestureRecognizer:down];
+
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    pill.alpha = 0;   // the pill *becomes* the island
+    // 1) a quick wide squash, like the island taking a breath  2) the spring out to full size
+    CGRect breath = CGRectInset(v->_from, -10, 2);
+    [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ shape.frame = breath; } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            shape.frame = v->_to;
+            shape.layer.cornerRadius = 44;
+            content.center = CGPointMake(v->_to.size.width / 2, v->_to.size.height / 2);
+        } completion:nil];
+    }];
+    [UIView animateWithDuration:0.2 delay:0.06 options:0 animations:^{ snap.alpha = 0; } completion:nil];
+    [UIView animateWithDuration:0.45 delay:0.22 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ content.alpha = 1; content.transform = CGAffineTransformIdentity; } completion:nil];
+    [UIView animateWithDuration:0.4 animations:^{ v.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3]; }];
+}
+- (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
+    CGPoint p = [g locationInView:_shape], vel = [g velocityInView:_shape];
+    return p.y < 96 && vel.y > fabs(vel.x);   // pull down on the header
+}
+- (void)pullDown:(UIPanGestureRecognizer *)g {
+    CGFloat dy = MAX(0, [g translationInView:self].y);
+    if (g.state == UIGestureRecognizerStateChanged) {
+        CGFloat k = 1 - MIN(0.12, dy / 1600);
+        _shape.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, dy * 0.35), k, k);
+    } else if (g.state >= UIGestureRecognizerStateEnded) {
+        if (dy > 80 || [g velocityInView:self].y > 700) [self collapse];
+        else [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:0 animations:^{ self->_shape.transform = CGAffineTransformIdentity; } completion:nil];
+    }
+}
+- (void)bgTap:(UITapGestureRecognizer *)g { if (!CGRectContainsPoint(_shape.frame, [g locationInView:self])) [self collapse]; }
+- (void)sleepTap {
+    UIWindow *w = self.window;
+    [self collapse];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (w) [[MPSleepCtl shared] showIn:w]; });
+}
+- (void)collapse {
+    if (self.tag == 0x4D50) return;
+    self.tag = 0x4D50;
+    self.userInteractionEnabled = NO;
+    UIView *pill = _pill;
+    CGRect to = (pill.window == self.window) ? XPillRect(pill, self) : _from;
+    CGFloat r = to.size.height / 2;
+    UIView *shape = _shape, *content = _content, *snap = _snap;
+    CGRect cur = shape.layer.presentationLayer ? shape.layer.presentationLayer.frame : shape.frame;
+    shape.transform = CGAffineTransformIdentity; shape.frame = cur;
+    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.92, 0.92); } completion:nil];
+    [UIView animateWithDuration:0.5 delay:0.02 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        shape.frame = to;
+        shape.layer.cornerRadius = r;
+        content.center = CGPointMake(to.size.width / 2, to.size.height / 2);
+        self.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
+    } completion:^(__unused BOOL f) {
+        pill.alpha = 1;
+        [UIView animateWithDuration:0.12 animations:^{ shape.alpha = 0; } completion:^(__unused BOOL d) { [self removeFromSuperview]; }];
+        if (pill) {   // the pill settles with a small squish, like the island landing
+            CASpringAnimation *a = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+            a.additive = YES; a.fromValue = @0.05; a.toValue = @0; a.stiffness = 320; a.damping = 11; a.duration = a.settlingDuration;
+            [pill.layer addAnimation:a forKey:@"mp.absorb"];
+        }
+    }];
+    [UIView animateWithDuration:0.22 delay:0.2 options:0 animations:^{ snap.alpha = 1; } completion:nil];
+    // safety: the pill always comes back
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (pill.alpha < 0.01) pill.alpha = 1; });
+}
+@end
+
 #pragma mark - the pill follows your finger: sideways = skip (jelly), up = menu
 
 static CGFloat XRubber(CGFloat x, CGFloat lim) { CGFloat a = fabs(x); return (x < 0 ? -1 : 1) * lim * (1 - 1 / (a / lim * 0.6 + 1)); }
@@ -735,7 +873,7 @@ static void XTouchLight(UIView *pillView, CGPoint p, BOOL on) {
     } else {
         BOOL go = ended && (t.y < -34 || vel.y < -420);
         XBounce(v, 0, XRubber(MIN(0, t.y), 46), NO);
-        if (go) [[MPHoldCtl shared] showMenuFrom:v];
+        if (go) [MPIsland expandFrom:v];
     }
 }
 @end
