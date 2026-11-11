@@ -1367,6 +1367,8 @@ static UIView *XVisualPill(UIView *touched) {
         if (g.state == UIGestureRecognizerStateBegan) { [v.layer removeAnimationForKey:@"mp.release"]; SetDrag(v, 0, 0); [gGoo beginOn:v touchX:[g locationInView:v.superview].x]; }
         if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
             [gGoo followX:[g locationInView:v.window].x d:d];
+            // 1.5.9: pulled past the limit, the drop snaps loose and opens right away
+            if (raw > 96) { _opened = YES; [self openFrom:v]; }
             return;
         }
         // let go: it opens (unless you barely moved, or pulled back down into the pill)
