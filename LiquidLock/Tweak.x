@@ -1,4 +1,6 @@
-// LiquidLock 0.2 - made by nano
+// LiquidLock 0.3 - made by nano
+// 0.3: no island: the Face ID face itself, in liquid glass, where the lock is. It curls into a glass ring
+//      that spins and wobbles like liquid and pops when you unlock.
 // 0.2: a Dynamic Island style Face ID for notched iPhones. When Face ID starts looking, a black island drips
 //      out of the notch and grows into a rounded square with a Face ID glyph that scans; unlocking turns it
 //      into a check, then it pulls back up into the notch with a squish. No match: it shakes like jelly.
@@ -58,195 +60,217 @@ static CASpringAnimation *Spring(NSString *kp, id from, id to, CGFloat stiff, CG
     return a;
 }
 
-#pragma mark - the island
+#pragma mark - the glass Face ID
 
-// One black shape hanging from the notch. Its top sits behind the notch (black on black), so it looks like
-// the notch itself drips down and grows.
+// The Face ID face, made of liquid glass (frosted, see-through, with a bright rim), floating where Apple's lock
+// is. While it looks for you the face glances around and the brackets breathe. When it knows you, the brackets
+// curl into a glass ring that spins and wobbles like liquid, squeezes into a drop and pops. No match: jelly shake.
 @interface LLIsland : UIView
-- (void)open;
+- (void)openAt:(CGPoint)c;
 - (void)success:(void (^)(void))done;
 - (void)fail;
 - (void)closeAnimated:(BOOL)a done:(void (^)(void))done;
 @property (nonatomic, readonly) BOOL isOut;
 @end
 @implementation LLIsland {
-    CAShapeLayer *_blob;              // the black island
-    CALayer *_glyph;                  // Face ID glyph holder
-    CAShapeLayer *_corners, *_face, *_check, *_dots;
-    CGRect _notch, _big;
+    UIView *_box;                          // the glyph, positioned at the lock
+    UIVisualEffectView *_glass;            // glass, masked to the strokes
+    UIView *_maskV;
+    CAShapeLayer *_mCorners, *_mFace;      // masks (the glass shows through these strokes)
+    CAShapeLayer *_rim, *_rimFace, *_shine;// light on the glass
     BOOL _out, _closing;
     CFTimeInterval _openedAt;
+    CGFloat _g;
 }
 - (BOOL)isOut { return _out; }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
     self.userInteractionEnabled = NO;
-    CGFloat W = f.size.width;
-    // the notch: about 38% of the screen wide, ~32 pt tall (iPhone X - 14)
-    CGFloat nw = round(W * 0.375), nh = 31;
-    _notch = CGRectMake((W - nw) / 2, -nh, nw, nh * 2);              // tucked up behind the notch
-    CGFloat bw = 124, bh = 132;
-    _big = CGRectMake((W - bw) / 2, -40, bw, bh + 40);               // hangs from the notch, 132 pt visible
-    _blob = [CAShapeLayer layer]; _blob.fillColor = UIColor.blackColor.CGColor; _blob.frame = self.bounds;
-    _blob.path = [self pathFor:_notch r:20].CGPath;
-    _blob.opacity = 0;   // only there while it's out (so it never shows beside the real notch)
-    [self.layer addSublayer:_blob];
-    _glyph = [CALayer layer];
-    CGFloat g = 62;
-    _glyph.bounds = CGRectMake(0, 0, g, g);
-    _glyph.position = CGPointMake(W / 2, CGRectGetMaxY(_big) - (bh - 4) / 2 - 2);
-    _glyph.opacity = 0;
-    [self.layer addSublayer:_glyph];
-    UIColor *white = UIColor.whiteColor;
-    // the four corner brackets of the Face ID glyph
-    _corners = [CAShapeLayer layer]; _corners.frame = _glyph.bounds; _corners.fillColor = UIColor.clearColor.CGColor;
-    _corners.strokeColor = white.CGColor; _corners.lineWidth = 4; _corners.lineCap = kCALineCapRound;
-    _corners.path = [self cornersPath:g].CGPath;
-    // the face: eyes, nose, smile
-    _face = [CAShapeLayer layer]; _face.frame = _glyph.bounds; _face.fillColor = UIColor.clearColor.CGColor;
-    _face.strokeColor = white.CGColor; _face.lineWidth = 3.6; _face.lineCap = kCALineCapRound; _face.lineJoin = kCALineJoinRound;
-    _face.path = [self facePath:g].CGPath;
-    // the dots that orbit while it scans
-    _dots = [CAShapeLayer layer]; _dots.frame = _glyph.bounds; _dots.fillColor = UIColor.clearColor.CGColor;
-    _dots.strokeColor = [white colorWithAlphaComponent:0.9].CGColor; _dots.lineWidth = 3; _dots.lineCap = kCALineCapRound;
-    _dots.lineDashPattern = @[@0.1, @9];
-    _dots.path = [UIBezierPath bezierPathWithOvalInRect:CGRectInset(_glyph.bounds, -10, -10)].CGPath;
-    _dots.opacity = 0;
-    // the check
-    _check = [CAShapeLayer layer]; _check.frame = _glyph.bounds; _check.fillColor = UIColor.clearColor.CGColor;
-    _check.strokeColor = white.CGColor; _check.lineWidth = 5; _check.lineCap = kCALineCapRound; _check.lineJoin = kCALineJoinRound;
-    UIBezierPath *ck = [UIBezierPath bezierPath];
-    [ck moveToPoint:CGPointMake(g * 0.28, g * 0.52)]; [ck addLineToPoint:CGPointMake(g * 0.44, g * 0.68)]; [ck addLineToPoint:CGPointMake(g * 0.74, g * 0.34)];
-    _check.path = ck.CGPath; _check.strokeEnd = 0;
-    for (CALayer *l in @[_dots, _corners, _face, _check]) [_glyph addSublayer:l];
+    CGFloat g = 46; _g = g;
+    _box = [[UIView alloc] initWithFrame:CGRectMake(0, 0, g, g)];
+    _box.alpha = 0;
+    _box.layer.shadowColor = UIColor.blackColor.CGColor; _box.layer.shadowOpacity = 0.22; _box.layer.shadowRadius = 5; _box.layer.shadowOffset = CGSizeMake(0, 2);
+    [self addSubview:_box];
+    _glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight]];
+    _glass.frame = CGRectInset(_box.bounds, -12, -12);
+    UIView *tint = [[UIView alloc] initWithFrame:_glass.bounds]; tint.backgroundColor = [UIColor colorWithWhite:1 alpha:0.42];
+    [_glass.contentView addSubview:tint];
+    _maskV = [[UIView alloc] initWithFrame:_glass.bounds];
+    _mCorners = [self strokeLayer:5.2 color:UIColor.blackColor];
+    _mFace = [self strokeLayer:4.4 color:UIColor.blackColor];
+    [_maskV.layer addSublayer:_mCorners]; [_maskV.layer addSublayer:_mFace];
+    _glass.maskView = _maskV;
+    [_box addSubview:_glass];
+    // the light: a bright edge on the glass, a softer one on the face, and a glint that travels
+    _rim = [self strokeLayer:5.2 color:[UIColor colorWithWhite:1 alpha:0.5]];
+    _rimFace = [self strokeLayer:4.4 color:[UIColor colorWithWhite:1 alpha:0.42]];
+    _shine = [self strokeLayer:1.6 color:[UIColor colorWithWhite:1 alpha:0.95]];
+    _shine.strokeStart = 0; _shine.strokeEnd = 0.12;
+    for (CAShapeLayer *l in @[_rim, _rimFace, _shine]) { l.frame = _glass.frame; [_box.layer addSublayer:l]; }
+    [self setCornersPath:[self cornersPath] animated:NO];
+    UIBezierPath *face = [self facePath];
+    _mFace.path = face.CGPath; _rimFace.path = face.CGPath;
     return self;
 }
-// a rounded rectangle; the top corners are hidden behind the notch anyway
-- (UIBezierPath *)pathFor:(CGRect)r r:(CGFloat)rad { return [UIBezierPath bezierPathWithRoundedRect:r cornerRadius:MIN(rad, MIN(r.size.width, r.size.height) / 2 - 0.5)]; }
-- (UIBezierPath *)cornersPath:(CGFloat)g {
-    CGFloat L = g * 0.26, R = g * 0.16;
+- (CAShapeLayer *)strokeLayer:(CGFloat)w color:(UIColor *)c {
+    CAShapeLayer *l = [CAShapeLayer layer];
+    l.frame = CGRectMake(0, 0, _g + 24, _g + 24);
+    l.fillColor = UIColor.clearColor.CGColor; l.strokeColor = c.CGColor; l.lineWidth = w;
+    l.lineCap = kCALineCapRound; l.lineJoin = kCALineJoinRound;
+    return l;
+}
+// all paths are in the glass's coordinates (12 pt margin around the glyph)
+- (UIBezierPath *)cornersPath {
+    CGFloat g = _g, o = 12, L = g * 0.27, R = g * 0.17;
     UIBezierPath *p = [UIBezierPath bezierPath];
-    // top-left, top-right, bottom-right, bottom-left
-    [p moveToPoint:CGPointMake(0, L)]; [p addLineToPoint:CGPointMake(0, R)]; [p addQuadCurveToPoint:CGPointMake(R, 0) controlPoint:CGPointZero]; [p addLineToPoint:CGPointMake(L, 0)];
-    [p moveToPoint:CGPointMake(g - L, 0)]; [p addLineToPoint:CGPointMake(g - R, 0)]; [p addQuadCurveToPoint:CGPointMake(g, R) controlPoint:CGPointMake(g, 0)]; [p addLineToPoint:CGPointMake(g, L)];
-    [p moveToPoint:CGPointMake(g, g - L)]; [p addLineToPoint:CGPointMake(g, g - R)]; [p addQuadCurveToPoint:CGPointMake(g - R, g) controlPoint:CGPointMake(g, g)]; [p addLineToPoint:CGPointMake(g - L, g)];
-    [p moveToPoint:CGPointMake(L, g)]; [p addLineToPoint:CGPointMake(R, g)]; [p addQuadCurveToPoint:CGPointMake(0, g - R) controlPoint:CGPointMake(0, g)]; [p addLineToPoint:CGPointMake(0, g - L)];
+    CGPoint P[4][4] = {
+        {{o, o + L}, {o, o + R}, {o, o}, {o + L, o}},
+        {{o + g - L, o}, {o + g - R, o}, {o + g, o}, {o + g, o + L}},
+        {{o + g, o + g - L}, {o + g, o + g - R}, {o + g, o + g}, {o + g - L, o + g}},
+        {{o + L, o + g}, {o + R, o + g}, {o, o + g}, {o, o + g - L}}};
+    for (int i = 0; i < 4; i++) {
+        [p moveToPoint:P[i][0]]; [p addLineToPoint:P[i][1]];
+        CGPoint end = i == 0 ? CGPointMake(o + R, o) : i == 1 ? CGPointMake(o + g, o + R) : i == 2 ? CGPointMake(o + g - R, o + g) : CGPointMake(o, o + g - R);
+        [p addQuadCurveToPoint:end controlPoint:P[i][2]];
+        [p addLineToPoint:P[i][3]];
+    }
     return p;
 }
-- (UIBezierPath *)facePath:(CGFloat)g {
+// the same four pieces, bent into a ring (so the brackets can curl into it)
+- (UIBezierPath *)ringPath:(CGFloat)r {
+    CGFloat c = _g / 2 + 12;
     UIBezierPath *p = [UIBezierPath bezierPath];
-    [p moveToPoint:CGPointMake(g * 0.34, g * 0.34)]; [p addLineToPoint:CGPointMake(g * 0.34, g * 0.42)];
-    [p moveToPoint:CGPointMake(g * 0.66, g * 0.34)]; [p addLineToPoint:CGPointMake(g * 0.66, g * 0.42)];
-    [p moveToPoint:CGPointMake(g * 0.5, g * 0.34)]; [p addLineToPoint:CGPointMake(g * 0.5, g * 0.56)]; [p addLineToPoint:CGPointMake(g * 0.44, g * 0.56)];
-    [p moveToPoint:CGPointMake(g * 0.34, g * 0.68)]; [p addQuadCurveToPoint:CGPointMake(g * 0.66, g * 0.68) controlPoint:CGPointMake(g * 0.5, g * 0.8)];
+    double starts[4] = {M_PI, M_PI * 1.5, 0, M_PI * 0.5};
+    for (int i = 0; i < 4; i++) {
+        double a0 = starts[i], a1 = a0 + M_PI / 2, e = 0.12;
+        CGPoint (^pt)(double) = ^CGPoint(double a) { return CGPointMake(c + r * cos(a), c + r * sin(a)); };
+        [p moveToPoint:pt(a0)]; [p addLineToPoint:pt(a0 + e)];
+        double am = (a0 + a1) / 2, k = r / cos((a1 - a0 - 2 * e) / 2);
+        [p addQuadCurveToPoint:pt(a1 - e) controlPoint:CGPointMake(c + k * cos(am), c + k * sin(am))];
+        [p addLineToPoint:pt(a1)];
+    }
     return p;
 }
-- (void)morphBlobTo:(CGRect)r radius:(CGFloat)rad stiff:(CGFloat)k damp:(CGFloat)d {
-    CAShapeLayer *pl = _blob.presentationLayer;
-    id from = (id)pl.path ?: (id)_blob.path;
-    UIBezierPath *to = [self pathFor:r r:rad];
-    [_blob removeAnimationForKey:@"path"];
-    CASpringAnimation *a = Spring(@"path", from, (id)to.CGPath, k, d);
-    [_blob addAnimation:a forKey:@"path"];
-    _blob.path = to.CGPath;
+- (UIBezierPath *)facePath {
+    CGFloat g = _g, o = 12;
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    [p moveToPoint:CGPointMake(o + g * 0.33, o + g * 0.34)]; [p addLineToPoint:CGPointMake(o + g * 0.33, o + g * 0.43)];
+    [p moveToPoint:CGPointMake(o + g * 0.67, o + g * 0.34)]; [p addLineToPoint:CGPointMake(o + g * 0.67, o + g * 0.43)];
+    [p moveToPoint:CGPointMake(o + g * 0.5, o + g * 0.34)]; [p addLineToPoint:CGPointMake(o + g * 0.5, o + g * 0.57)]; [p addLineToPoint:CGPointMake(o + g * 0.44, o + g * 0.57)];
+    [p moveToPoint:CGPointMake(o + g * 0.33, o + g * 0.69)]; [p addQuadCurveToPoint:CGPointMake(o + g * 0.67, o + g * 0.69) controlPoint:CGPointMake(o + g * 0.5, o + g * 0.81)];
+    return p;
 }
-// out of the notch: it drips down first (narrow), then spreads into the square with a wobble
-- (void)open {
+- (void)setCornersPath:(UIBezierPath *)to animated:(BOOL)a {
+    for (CAShapeLayer *l in @[_mCorners, _rim, _shine]) {
+        if (a) {
+            CAShapeLayer *pl = l.presentationLayer;
+            CASpringAnimation *s = Spring(@"path", (id)pl.path ?: (id)l.path, (id)to.CGPath, 260, 14);
+            [l addAnimation:s forKey:@"path"];
+        }
+        l.path = to.CGPath;
+    }
+}
+- (void)openAt:(CGPoint)c {
+    _box.center = c;
     if (_out && !_closing) return;
     _out = YES; _closing = NO; _openedAt = CACurrentMediaTime();
-    _blob.opacity = 1;
-    [_glyph removeAllAnimations]; [_check removeAllAnimations]; _check.strokeEnd = 0;
-    CGRect drip = CGRectMake(CGRectGetMidX(_big) - 30, _big.origin.y, 60, _big.size.height * 0.62);
-    [self morphBlobTo:drip radius:30 stiff:520 damp:26];
-    __weak LLIsland *ws = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.09 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        LLIsland *s = ws; if (!s || !s->_out || s->_closing) return;
-        [s morphBlobTo:s->_big radius:44 stiff:300 damp:17];
-    });
-    // the glyph fades and zooms in, the face scans
-    _glyph.opacity = 1; _corners.opacity = 1; _face.opacity = 1;
-    CASpringAnimation *gz = Spring(@"transform.scale", @0.4, @1, 280, 16); gz.beginTime = CACurrentMediaTime() + 0.08; gz.fillMode = kCAFillModeBackwards;
-    CABasicAnimation *gf = [CABasicAnimation animationWithKeyPath:@"opacity"]; gf.fromValue = @0; gf.toValue = @1; gf.duration = 0.2; gf.beginTime = CACurrentMediaTime() + 0.08; gf.fillMode = kCAFillModeBackwards;
-    [_glyph addAnimation:gz forKey:@"in"]; [_glyph addAnimation:gf forKey:@"fade"];
+    [_box.layer removeAllAnimations];
+    for (CALayer *l in @[_mFace, _rimFace]) { [l removeAllAnimations]; l.opacity = 1; }
+    [self setCornersPath:[self cornersPath] animated:NO];
+    for (CALayer *l in @[_mCorners, _rim, _shine]) [l removeAllAnimations];
+    // it surfaces like a bubble: from small and soft to its size with a wobble
+    _box.alpha = 1;
+    CASpringAnimation *in = Spring(@"transform.scale", @0.45, @1, 300, 14);
+    CABasicAnimation *f = [CABasicAnimation animationWithKeyPath:@"opacity"]; f.fromValue = @0; f.toValue = @1; f.duration = 0.18;
+    [_box.layer addAnimation:in forKey:@"in"]; [_box.layer addAnimation:f forKey:@"fade"];
     [self scanMotion];
-    Haptic(0);
 }
 - (void)scanMotion {
-    // the brackets breathe, the face blinks softly, the dots orbit
     CABasicAnimation *br = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
-    br.fromValue = @1; br.toValue = @1.08; br.duration = 0.55; br.autoreverses = YES; br.repeatCount = HUGE_VALF;
+    br.fromValue = @1; br.toValue = @1.07; br.duration = 0.6; br.autoreverses = YES; br.repeatCount = HUGE_VALF;
     br.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-    [_corners addAnimation:br forKey:@"breathe"];
+    for (CALayer *l in @[_mCorners, _rim, _shine]) { l.anchorPoint = CGPointMake(0.5, 0.5); l.frame = _glass.frame; [l addAnimation:br forKey:@"breathe"]; }
+    _mCorners.frame = _maskV.bounds;
+    // the face looks around
     CAKeyframeAnimation *look = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
-    look.values = @[@0, @2.5, @0, @-2.5, @0]; look.duration = 1.4; look.repeatCount = HUGE_VALF;
-    [_face addAnimation:look forKey:@"look"];
-    _dots.opacity = 1;
-    CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"]; spin.fromValue = @0; spin.toValue = @(M_PI * 2); spin.duration = 1.2; spin.repeatCount = HUGE_VALF;
-    CABasicAnimation *head = [CABasicAnimation animationWithKeyPath:@"strokeEnd"]; head.fromValue = @0.15; head.toValue = @0.85; head.duration = 0.9; head.autoreverses = YES; head.repeatCount = HUGE_VALF;
-    [_dots addAnimation:spin forKey:@"spin"]; [_dots addAnimation:head forKey:@"head"];
+    look.values = @[@0, @2.4, @2.4, @0, @-2.4, @-2.4, @0]; look.keyTimes = @[@0, @0.15, @0.35, @0.5, @0.65, @0.85, @1]; look.duration = 1.6; look.repeatCount = HUGE_VALF;
+    CAKeyframeAnimation *nod = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
+    nod.values = @[@0, @-1, @0, @1.2, @0]; nod.duration = 2.1; nod.repeatCount = HUGE_VALF;
+    for (CALayer *l in @[_mFace, _rimFace]) { [l addAnimation:look forKey:@"look"]; [l addAnimation:nod forKey:@"nod"]; }
+    // a glint runs around the glass
+    CABasicAnimation *g0 = [CABasicAnimation animationWithKeyPath:@"strokeStart"]; g0.fromValue = @0; g0.toValue = @0.88;
+    CABasicAnimation *g1 = [CABasicAnimation animationWithKeyPath:@"strokeEnd"]; g1.fromValue = @0.12; g1.toValue = @1;
+    CAAnimationGroup *gg = [CAAnimationGroup animation]; gg.animations = @[g0, g1]; gg.duration = 1.3; gg.repeatCount = HUGE_VALF;
+    [_shine addAnimation:gg forKey:@"glint"];
 }
 - (void)stopScan {
-    [_corners removeAnimationForKey:@"breathe"]; [_face removeAnimationForKey:@"look"];
-    [_dots removeAllAnimations]; _dots.opacity = 0;
+    for (CALayer *l in @[_mCorners, _rim, _shine, _mFace, _rimFace]) { [l removeAnimationForKey:@"breathe"]; [l removeAnimationForKey:@"look"]; [l removeAnimationForKey:@"nod"]; [l removeAnimationForKey:@"glint"]; }
 }
-// recognized: the face melts away, the brackets pull into a ring, the check draws itself, then back into the notch
+// recognized: the face melts away, the brackets curl into a glass ring that spins and wobbles like liquid,
+// squeezes into a drop and pops
 - (void)success:(void (^)(void))done {
-    if (!_out) [self open];
     __weak LLIsland *ws = self;
-    // let it be seen for a moment even if Face ID was instant
-    CGFloat wait = MAX(0, 0.28 - (CACurrentMediaTime() - _openedAt));
+    CGFloat wait = MAX(0, 0.25 - (CACurrentMediaTime() - _openedAt));
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         LLIsland *s = ws; if (!s || !s->_out || s->_closing) { if (done) done(); return; }
+        s->_closing = YES;
         [s stopScan];
-        CABasicAnimation *ff = [CABasicAnimation animationWithKeyPath:@"opacity"]; ff.fromValue = @1; ff.toValue = @0; ff.duration = 0.14;
-        [s->_face addAnimation:ff forKey:@"out"]; s->_face.opacity = 0;
-        CASpringAnimation *pull = Spring(@"transform.scale", @1.12, @0.0, 240, 22); pull.duration = 0.3;
-        CABasicAnimation *cf = [CABasicAnimation animationWithKeyPath:@"opacity"]; cf.fromValue = @1; cf.toValue = @0; cf.duration = 0.2;
-        [s->_corners addAnimation:pull forKey:@"pull"]; [s->_corners addAnimation:cf forKey:@"out"]; s->_corners.opacity = 0;
-        CABasicAnimation *draw = [CABasicAnimation animationWithKeyPath:@"strokeEnd"]; draw.fromValue = @0; draw.toValue = @1; draw.duration = 0.32; draw.beginTime = CACurrentMediaTime() + 0.08; draw.fillMode = kCAFillModeBackwards;
-        draw.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.3 :0 :0.2 :1];
-        [s->_check addAnimation:draw forKey:@"draw"]; s->_check.strokeEnd = 1;
-        CASpringAnimation *pop = Spring(@"transform.scale", @0.7, @1, 360, 13); pop.beginTime = CACurrentMediaTime() + 0.08; pop.fillMode = kCAFillModeBackwards;
-        [s->_check addAnimation:pop forKey:@"pop"];
-        // the island gives a happy little bounce
-        CASpringAnimation *sq = Spring(@"transform.scale", @1.06, @1, 300, 12);
-        [s->_blob addAnimation:sq forKey:@"happy"];
+        CABasicAnimation *ff = [CABasicAnimation animationWithKeyPath:@"opacity"]; ff.fromValue = @1; ff.toValue = @0; ff.duration = 0.16;
+        CABasicAnimation *fs = [CABasicAnimation animationWithKeyPath:@"transform.scale"]; fs.fromValue = @1; fs.toValue = @0.6; fs.duration = 0.2;
+        for (CALayer *l in @[s->_mFace, s->_rimFace]) { [l addAnimation:ff forKey:@"out"]; [l addAnimation:fs forKey:@"shrink"]; l.opacity = 0; }
+        // curl into a ring
+        [s setCornersPath:[s ringPath:s->_g * 0.4] animated:YES];
+        s->_shine.strokeStart = 0; s->_shine.strokeEnd = 0.2;
         Haptic(3);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.62 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [ws closeAnimated:YES done:done]; });
-    });
-}
-// no match: shakes like jelly
-- (void)fail {
-    if (!_out) [self open];
-    CAKeyframeAnimation *tx = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
-    tx.values = @[@0, @-16, @14, @-10, @6, @-3, @0];
-    CAKeyframeAnimation *sx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"]; sx.values = @[@1, @1.07, @0.95, @1.04, @0.98, @1.01, @1];
-    CAKeyframeAnimation *sy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"]; sy.values = @[@1, @0.95, @1.05, @0.97, @1.02, @0.99, @1];
-    CAAnimationGroup *g = [CAAnimationGroup animation]; g.animations = @[tx, sx, sy]; g.duration = 0.62;
-    g.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
-    [self.layer addAnimation:g forKey:@"jelly"];
-    Haptic(2);
-}
-// back up into the notch: it narrows into a drip and is pulled up, with a squish at the end
-- (void)closeAnimated:(BOOL)a done:(void (^)(void))done {
-    if (!_out) { if (done) done(); return; }
-    _closing = YES;
-    [self stopScan];
-    if (!a) { [_blob removeAllAnimations]; _blob.path = [self pathFor:_notch r:20].CGPath; _blob.opacity = 0; _glyph.opacity = 0; _out = NO; _closing = NO; if (done) done(); return; }
-    CABasicAnimation *gf = [CABasicAnimation animationWithKeyPath:@"opacity"]; gf.fromValue = @1; gf.toValue = @0; gf.duration = 0.16;
-    CABasicAnimation *gs = [CABasicAnimation animationWithKeyPath:@"transform.scale"]; gs.fromValue = @1; gs.toValue = @0.5; gs.duration = 0.2;
-    [_glyph addAnimation:gf forKey:@"fade"]; [_glyph addAnimation:gs forKey:@"shrink"]; _glyph.opacity = 0;
-    CGRect drip = CGRectMake(CGRectGetMidX(_big) - 34, _big.origin.y, 68, _big.size.height * 0.55);
-    [self morphBlobTo:drip radius:34 stiff:600 damp:32];
-    __weak LLIsland *ws = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        LLIsland *s = ws; if (!s || !s->_closing) return;
-        [s morphBlobTo:s->_notch radius:20 stiff:420 damp:24];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.34 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            LLIsland *s2 = ws; if (s2 && s2->_closing) { s2->_out = NO; s2->_closing = NO; s2->_blob.opacity = 0; }
-            if (done) done();
+        // the ring spins and wobbles like liquid
+        CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"]; spin.fromValue = @0; spin.toValue = @(M_PI * 1.6); spin.duration = 0.75;
+        spin.beginTime = CACurrentMediaTime() + 0.18; spin.fillMode = kCAFillModeBoth; spin.removedOnCompletion = NO;
+        spin.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.4 :0 :0.2 :1];
+        CAKeyframeAnimation *wx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"]; wx.values = @[@1, @1.16, @0.88, @1.1, @0.94, @1];
+        CAKeyframeAnimation *wy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"]; wy.values = @[@1, @0.86, @1.12, @0.92, @1.05, @1];
+        for (CAKeyframeAnimation *k in @[wx, wy]) { k.duration = 0.75; k.beginTime = CACurrentMediaTime() + 0.18; k.fillMode = kCAFillModeBackwards; }
+        [s->_box.layer addAnimation:spin forKey:@"spin"]; [s->_box.layer addAnimation:wx forKey:@"wx"]; [s->_box.layer addAnimation:wy forKey:@"wy"];
+        // then it squeezes into a drop and pops
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.85 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            LLIsland *s2 = ws; if (!s2) { if (done) done(); return; }
+            [s2 setCornersPath:[s2 ringPath:s2->_g * 0.12] animated:YES];
+            CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+            pop.values = @[@1, @0.8, @1.5]; pop.keyTimes = @[@0, @0.55, @1]; pop.duration = 0.32; pop.fillMode = kCAFillModeForwards; pop.removedOnCompletion = NO;
+            CABasicAnimation *fo = [CABasicAnimation animationWithKeyPath:@"opacity"]; fo.fromValue = @1; fo.toValue = @0; fo.beginTime = CACurrentMediaTime() + 0.16; fo.duration = 0.16;
+            fo.fillMode = kCAFillModeForwards; fo.removedOnCompletion = NO;
+            [s2->_box.layer addAnimation:pop forKey:@"pop"]; [s2->_box.layer addAnimation:fo forKey:@"fo"];
+            Haptic(0);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.34 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                LLIsland *s3 = ws; if (s3) { s3->_box.alpha = 0; [s3->_box.layer removeAllAnimations]; s3->_out = NO; s3->_closing = NO; }
+                if (done) done();
+            });
         });
     });
+}
+// no match: a jelly shake
+- (void)fail {
+    CAKeyframeAnimation *tx = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+    tx.values = @[@0, @-12, @10, @-7, @4, @-2, @0];
+    CAKeyframeAnimation *sx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"]; sx.values = @[@1, @1.12, @0.92, @1.06, @0.97, @1.01, @1];
+    CAKeyframeAnimation *sy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"]; sy.values = @[@1, @0.9, @1.08, @0.95, @1.03, @0.99, @1];
+    CAAnimationGroup *g = [CAAnimationGroup animation]; g.animations = @[tx, sx, sy]; g.duration = 0.6;
+    g.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    [_box.layer addAnimation:g forKey:@"jelly"];
+    Haptic(2);
+}
+// gone: it sinks back down into a bubble and fades
+- (void)closeAnimated:(BOOL)a done:(void (^)(void))done {
+    if (!_out || (_closing && a)) { if (done && !_closing) done(); return; }
+    [self stopScan];
+    if (!a) { [_box.layer removeAllAnimations]; _box.alpha = 0; _out = NO; _closing = NO; if (done) done(); return; }
+    _closing = YES;
+    __weak LLIsland *ws = self;
+    [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        self->_box.alpha = 0; self->_box.transform = CGAffineTransformMakeScale(0.5, 0.5);
+    } completion:^(__unused BOOL f) {
+        LLIsland *s = ws; if (s) { s->_box.transform = CGAffineTransformIdentity; s->_out = NO; s->_closing = NO; }
+        if (done) done();
+    }];
 }
 @end
 
@@ -311,16 +335,18 @@ static BOOL HasNotch(UIWindow *w) {
     switch (m) {
         case LLScanning:
             [self iconHidden:YES];
-            [self.island open];
+            [self.island openAt:[icon convertPoint:CGPointMake(icon.bounds.size.width / 2, icon.bounds.size.height / 2) toView:w]];
             break;
         case LLUnlocked:
-            if (ModeFor(was) == LLScanning || self.island.isOut) {
+            if (!self.island.isOut && ModeFor(was) != LLScanning) break;
+            if (!self.island.isOut) [self.island openAt:[icon convertPoint:CGPointMake(icon.bounds.size.width / 2, icon.bounds.size.height / 2) toView:w]];
+            {
                 [self iconHidden:YES];
                 [self.island success:^{ [ws iconHidden:NO]; }];
             }
             break;
         case LLFailed:
-            [self iconHidden:YES];
+            if (!self.island.isOut) break;
             [self.island fail];
             break;
         case LLLocked:

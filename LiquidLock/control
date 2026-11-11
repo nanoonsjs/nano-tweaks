@@ -1,8 +1,8 @@
 Package: com.nano.liquidlock
 Name: LiquidLock
-Version: 0.2
+Version: 0.3
 Architecture: iphoneos-arm
-Description: Dynamic Island style Face ID for notched iPhones: a black island drips out of the notch with a Face ID scan, turns into a check when you unlock and pulls back in, and shakes like jelly when it does not recognize you. Made by nano.
+Description: Liquid glass Face ID for notched iPhones: a glass Face ID face appears where the lock is, curls into a liquid glass ring that spins and pops when you unlock, and shakes like jelly when it does not recognize you. Made by nano.
 Maintainer: nano
 Author: nano
 Section: Tweaks
