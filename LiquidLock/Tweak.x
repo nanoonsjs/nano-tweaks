@@ -1,4 +1,5 @@
-// LiquidLock 0.5 - made by nano
+// LiquidLock 0.6 - made by nano
+// 0.6: one face animation: he's waiting on you.
 // 0.5: unlocking is Apple-like (white ring spins, then a check), and the face has two animations that take turns.
 // 0.4: lock-sized, plain (no glass), the face also replaces the lock on the passcode screen, and unlocking turns
 //      it into a glowing blue ring that spins, wobbles and bursts into blue sparks.
@@ -164,7 +165,6 @@ static CASpringAnimation *Spring(NSString *kp, id from, id to, CGFloat stiff, CG
     _box.center = CGPointMake(round(c.x), round(c.y));
     if (_out && !_closing) return;
     _out = YES; _closing = NO; _openedAt = CACurrentMediaTime();
-    _variant = 1 - _variant;   // the two face animations take turns
     [self reset];
     // the lock turns into the face: it pops in with a little overshoot
     _box.alpha = 1;
@@ -176,35 +176,32 @@ static CASpringAnimation *Spring(NSString *kp, id from, id to, CGFloat stiff, CG
     [_corners addAnimation:draw forKey:@"draw"];
     [self scanMotion];
 }
+// one animation: he's waiting on you. He looks at you, floats gently, blinks slowly, and every so often
+// glances to one side and the other, like he's wondering where you are, then looks back at you.
 - (void)scanMotion {
     CABasicAnimation *br = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
-    br.fromValue = @1; br.toValue = @1.1; br.duration = 0.55; br.autoreverses = YES; br.repeatCount = HUGE_VALF;
+    br.fromValue = @1; br.toValue = @1.06; br.duration = 1.1; br.autoreverses = YES; br.repeatCount = HUGE_VALF;
     br.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
     [_corners addAnimation:br forKey:@"breathe"];
     NSArray *faceParts = @[_face, _eyeL, _eyeR];
-    if (_variant == 0) {
-        // 1. looking around: the face glances left and right, nods a little, and blinks
-        CAKeyframeAnimation *look = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
-        look.values = @[@0, @1.6, @1.6, @0, @-1.6, @-1.6, @0]; look.keyTimes = @[@0, @0.15, @0.35, @0.5, @0.65, @0.85, @1]; look.duration = 1.6; look.repeatCount = HUGE_VALF;
-        CAKeyframeAnimation *nod = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
-        nod.values = @[@0, @-0.8, @0, @0.9, @0]; nod.duration = 2.1; nod.repeatCount = HUGE_VALF;
-        for (CALayer *l in faceParts) { [l addAnimation:look forKey:@"look"]; [l addAnimation:nod forKey:@"nod"]; }
-        CAKeyframeAnimation *blink = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
-        blink.values = @[@1, @1, @0.15, @1, @1]; blink.keyTimes = @[@0, @0.84, @0.89, @0.94, @1]; blink.duration = 2.4; blink.repeatCount = HUGE_VALF;
-        [_eyeL addAnimation:blink forKey:@"blink"]; [_eyeR addAnimation:blink forKey:@"blink"];
-    } else {
-        // 2. playful: the head tilts side to side, it winks, and the smile grows
-        CAKeyframeAnimation *tilt = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"];
-        tilt.values = @[@0, @0.2, @0.2, @0, @-0.2, @-0.2, @0]; tilt.keyTimes = @[@0, @0.18, @0.35, @0.5, @0.68, @0.85, @1]; tilt.duration = 1.9; tilt.repeatCount = HUGE_VALF;
-        tilt.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-        [_box.layer addAnimation:tilt forKey:@"tilt"];   // the whole face tilts around its middle
-        CAKeyframeAnimation *wink = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
-        wink.values = @[@1, @1, @0.12, @0.12, @1, @1]; wink.keyTimes = @[@0, @0.3, @0.36, @0.5, @0.56, @1]; wink.duration = 1.9; wink.repeatCount = HUGE_VALF;
-        [_eyeR addAnimation:wink forKey:@"blink"];
-        CAKeyframeAnimation *smile = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-        smile.values = @[@1, @1.12, @1, @1, @1.1, @1]; smile.keyTimes = @[@0, @0.3, @0.5, @0.7, @0.85, @1]; smile.duration = 1.9; smile.repeatCount = HUGE_VALF;
-        [_face addAnimation:smile forKey:@"smile"];
-    }
+    CGFloat T = 4.2;   // one round of waiting
+    // glance: center ... left, pause, right, pause, back to you
+    CAKeyframeAnimation *look = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+    look.values = @[@0, @0, @-1.7, @-1.7, @1.7, @1.7, @0, @0];
+    look.keyTimes = @[@0, @0.45, @0.52, @0.62, @0.7, @0.8, @0.88, @1];
+    look.duration = T; look.repeatCount = HUGE_VALF;
+    look.timingFunctions = @[[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
+    // a gentle float up and down
+    CAKeyframeAnimation *flt = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
+    flt.values = @[@0, @-0.7, @0, @0.6, @0]; flt.duration = T / 2; flt.repeatCount = HUGE_VALF;
+    flt.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    for (CALayer *l in faceParts) { [l addAnimation:look forKey:@"look"]; [l addAnimation:flt forKey:@"nod"]; }
+    // slow blinks: one while looking at you, one after looking back
+    CAKeyframeAnimation *blink = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
+    blink.values = @[@1, @1, @0.12, @1, @1, @0.12, @1, @1];
+    blink.keyTimes = @[@0, @0.2, @0.235, @0.27, @0.9, @0.935, @0.97, @1];
+    blink.duration = T; blink.repeatCount = HUGE_VALF;
+    [_eyeL addAnimation:blink forKey:@"blink"]; [_eyeR addAnimation:blink forKey:@"blink"];
 }
 - (void)stopScan {
     for (CALayer *l in @[_corners, _face, _eyeL, _eyeR]) for (NSString *k in @[@"breathe", @"look", @"nod", @"blink", @"tilt", @"smile"]) [l removeAnimationForKey:k];
