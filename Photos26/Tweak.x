@@ -1,4 +1,5 @@
-// Photos26 3.0 - made by nano
+// Photos26 3.1 - made by nano
+// 3.1: glass video player in Recently Deleted; Recover / Delete there use the iOS 26 card; only full-screen photos get framed
 // 3.0: Delete grows out of the trash button as an iOS 26 glass card
 // 2.9: video player sits lower; with the bars showing the photo is framed with round corners (full screen when you tap)
 // 2.8: the look in Camera's photo viewer too (also the camera on the lock screen)
@@ -782,6 +783,80 @@ static BOOL InPhotosViewer(UIView *bar) {
     }
     return NO;
 }
+// The glass video player (also used in Recently Deleted's text-button bar)
+static void LayoutVideo(UIToolbar *tb, UIView *c, CGFloat W) {
+    // Video player capsule (only for videos: Apple shows play/pause then).
+    // Videos only: Apple's play button is really showing (photos can keep a hidden one).
+    UIBarButtonItem *playItem = AppleItem(@"play");
+    UIView *pv = KV(playItem, @"view");
+    BOOL video = gPlayer && playItem && playItem.enabled && pv.window && !pv.hidden && pv.alpha > 0.01 && pv.bounds.size.width > 2;
+    for (UIView *p = pv.superview; p && p != tb && video; p = p.superview) if (p.hidden || p.alpha < 0.01) video = NO;
+    gBottomDebug = [gBottomDebug stringByAppendingFormat:@" video=%d", video];
+    static __weak UIView *gFilm;
+    UIView *film = FindFilmstrip(tb.window, 0);
+    if (film) gFilm = film;
+    // Apple's own frame strip goes away while our scrubber has a real player.
+    AVPlayer *pl = gAVPlayer;
+    BOOL ours = video && pl && Dur(pl) > 0;
+    (void)ours;
+    if (gFilm) Unmask(gFilm);   // thumbnails always stay
+    PGGlass *gv = GlassIn(c, @"video");
+    PGButton *bPlay = ButtonIn(c, @"play"), *bMute = ButtonIn(c, @"mute");
+    PGScrubber *scrub = nil;
+    for (UIView *v in c.subviews) if ([v isKindOfClass:[PGScrubber class]]) scrub = (PGScrubber *)v;
+    if (!scrub) { scrub = [PGScrubber new]; [c addSubview:scrub]; }
+    gv.hidden = bPlay.hidden = bMute.hidden = scrub.hidden = !video;
+    if (video) {
+        CGFloat filmTop = film ? [film convertRect:film.bounds toView:tb].origin.y : -58;
+        CGFloat VD = 54;
+        CGFloat vy = MIN(filmTop, -40) + 16 - VD;   // 2.9: lower, close to the thumbnails
+        CGFloat vx = 22, vw = W - vx * 2;
+        gToolbarFwd = tb;
+        UILabel *le = nil, *lt = nil;
+        for (UIView *v in c.subviews) if ([v isKindOfClass:[UILabel class]]) {
+            if ([v.accessibilityIdentifier isEqualToString:@"elapsed"]) le = (UILabel *)v;
+            if ([v.accessibilityIdentifier isEqualToString:@"total"]) lt = (UILabel *)v;
+        }
+        if (!le) { le = [UILabel new]; le.accessibilityIdentifier = @"elapsed"; [c addSubview:le]; }
+        if (!lt) { lt = [UILabel new]; lt.accessibilityIdentifier = @"total"; lt.textAlignment = NSTextAlignmentRight; [c addSubview:lt]; }
+        for (UILabel *l in @[le, lt]) {
+            l.font = [UIFont monospacedDigitSystemFontOfSize:19 weight:UIFontWeightSemibold];
+            l.textColor = GIcon();
+            l.userInteractionEnabled = NO;
+        }
+        if (gScrubbing) {
+            // iOS 26 timer: taller capsule, times on top, a thick bar across the bottom.
+            CGFloat TH = 80, ty = vy + VD - TH;
+            SetFrame(gv, CGRectMake(vx, ty, vw, TH));
+            SetFrame(le, CGRectMake(vx + 24, ty + 12, vw / 2 - 24, 26));
+            SetFrame(lt, CGRectMake(vx + vw / 2, ty + 12, vw / 2 - 24, 26));
+            le.alpha = lt.alpha = 1;
+            bPlay.alpha = bMute.alpha = 0;
+            bPlay.transform = bMute.transform = CGAffineTransformMakeScale(0.5, 0.5);
+            SetFrame(scrub, CGRectMake(vx + 22, ty + 40, vw - 44, 34));
+            le.hidden = lt.hidden = NO;
+            gv.hidden = NO;
+            StartLink();
+            return;
+        }
+        le.alpha = lt.alpha = 0;
+        if (bPlay.alpha < 1) { bPlay.alpha = bMute.alpha = 1; bPlay.transform = bMute.transform = CGAffineTransformIdentity; }
+        SetFrame(le, CGRectMake(vx + 24, vy + 6, vw / 2 - 24, 26));
+        SetFrame(lt, CGRectMake(vx + vw / 2, vy + 6, vw / 2 - 24, 26));
+        SetFrame(gv, CGRectMake(vx, vy, vw, VD));
+        bPlay.capsule = bMute.capsule = gv;
+        BOOL playing = [ItemSymbolText(AppleItem(@"play")) containsString:@"pause"];
+        SetSym(bPlay, playing ? @"pause.fill" : @"play.fill", 21);
+        NSString *m = ItemSymbolText(AppleItem(@"mute"));
+        SetSym(bMute, ([m containsString:@"slash"] || [m containsString:@"mute"]) ? @"speaker.slash.fill" : @"speaker.wave.2.fill", 18);
+        bMute.hidden = !AppleItem(@"mute");
+        SetFrame(bPlay, CGRectMake(vx + 5, vy + 2, 50, VD - 4));
+        SetFrame(bMute, CGRectMake(vx + vw - 55, vy + 2, 50, VD - 4));
+        CGFloat sx = vx + 60, ex = vx + vw - (AppleItem(@"mute") ? 62 : 22);
+        SetFrame(scrub, CGRectMake(sx, vy, ex - sx, VD));
+        StartLink();
+    }
+}
 static void LayoutBottom(UIToolbar *tb) {
     PGPass *c = (PGPass *)[tb viewWithTag:BOTTOM_TAG];
     if (c.superview != tb) c = nil;
@@ -827,6 +902,14 @@ static void LayoutBottom(UIToolbar *tb) {
         if (bg) [tb insertSubview:c aboveSubview:bg];
         SetFrame(c, tb.bounds);
         gBottomDebug = [NSString stringWithFormat:@"text mode: %lu buttons", (unsigned long)textViews.count];
+        // 3.1: a video in Recently Deleted gets the glass player too
+        gItems = found;
+        if (found[@"play"]) {
+            LayoutVideo(tb, c, tb.bounds.size.width);
+            BOOL vid = NO; for (UIView *v in c.subviews) if ([v.accessibilityIdentifier isEqualToString:@"video"] && !v.hidden) vid = YES;
+            for (NSString *k in @[@"play", @"mute"]) { UIView *av = KV(((PGBox *)found[k]).obj, @"view"); if (av) { if (vid) Mask(av); else Unmask(av); } }
+            if (vid && c.superview == tb) [tb bringSubviewToFront:c];
+        }
         StartLink();
         return;
     }
@@ -1037,77 +1120,7 @@ static void LayoutBottom(UIToolbar *tb) {
     SetFrame(bInfo, CGRectMake(gm.frame.origin.x + third, gm.frame.origin.y, third, D));
     SetFrame(bEdit, CGRectMake(gm.frame.origin.x + third * 2, gm.frame.origin.y, third, D));
 
-    // Video player capsule (only for videos: Apple shows play/pause then).
-    // Videos only: Apple's play button is really showing (photos can keep a hidden one).
-    UIBarButtonItem *playItem = AppleItem(@"play");
-    UIView *pv = KV(playItem, @"view");
-    BOOL video = gPlayer && playItem && playItem.enabled && pv.window && !pv.hidden && pv.alpha > 0.01 && pv.bounds.size.width > 2;
-    for (UIView *p = pv.superview; p && p != tb && video; p = p.superview) if (p.hidden || p.alpha < 0.01) video = NO;
-    gBottomDebug = [gBottomDebug stringByAppendingFormat:@" video=%d", video];
-    static __weak UIView *gFilm;
-    UIView *film = FindFilmstrip(tb.window, 0);
-    if (film) gFilm = film;
-    // Apple's own frame strip goes away while our scrubber has a real player.
-    AVPlayer *pl = gAVPlayer;
-    BOOL ours = video && pl && Dur(pl) > 0;
-    (void)ours;
-    if (gFilm) Unmask(gFilm);   // thumbnails always stay
-    PGGlass *gv = GlassIn(c, @"video");
-    PGButton *bPlay = ButtonIn(c, @"play"), *bMute = ButtonIn(c, @"mute");
-    PGScrubber *scrub = nil;
-    for (UIView *v in c.subviews) if ([v isKindOfClass:[PGScrubber class]]) scrub = (PGScrubber *)v;
-    if (!scrub) { scrub = [PGScrubber new]; [c addSubview:scrub]; }
-    gv.hidden = bPlay.hidden = bMute.hidden = scrub.hidden = !video;
-    if (video) {
-        CGFloat filmTop = film ? [film convertRect:film.bounds toView:tb].origin.y : -58;
-        CGFloat VD = 54;
-        CGFloat vy = MIN(filmTop, -40) + 16 - VD;   // 2.9: lower, close to the thumbnails
-        CGFloat vx = 22, vw = W - vx * 2;
-        gToolbarFwd = tb;
-        UILabel *le = nil, *lt = nil;
-        for (UIView *v in c.subviews) if ([v isKindOfClass:[UILabel class]]) {
-            if ([v.accessibilityIdentifier isEqualToString:@"elapsed"]) le = (UILabel *)v;
-            if ([v.accessibilityIdentifier isEqualToString:@"total"]) lt = (UILabel *)v;
-        }
-        if (!le) { le = [UILabel new]; le.accessibilityIdentifier = @"elapsed"; [c addSubview:le]; }
-        if (!lt) { lt = [UILabel new]; lt.accessibilityIdentifier = @"total"; lt.textAlignment = NSTextAlignmentRight; [c addSubview:lt]; }
-        for (UILabel *l in @[le, lt]) {
-            l.font = [UIFont monospacedDigitSystemFontOfSize:19 weight:UIFontWeightSemibold];
-            l.textColor = GIcon();
-            l.userInteractionEnabled = NO;
-        }
-        if (gScrubbing) {
-            // iOS 26 timer: taller capsule, times on top, a thick bar across the bottom.
-            CGFloat TH = 80, ty = vy + VD - TH;
-            SetFrame(gv, CGRectMake(vx, ty, vw, TH));
-            SetFrame(le, CGRectMake(vx + 24, ty + 12, vw / 2 - 24, 26));
-            SetFrame(lt, CGRectMake(vx + vw / 2, ty + 12, vw / 2 - 24, 26));
-            le.alpha = lt.alpha = 1;
-            bPlay.alpha = bMute.alpha = 0;
-            bPlay.transform = bMute.transform = CGAffineTransformMakeScale(0.5, 0.5);
-            SetFrame(scrub, CGRectMake(vx + 22, ty + 40, vw - 44, 34));
-            le.hidden = lt.hidden = NO;
-            gv.hidden = NO;
-            StartLink();
-            return;
-        }
-        le.alpha = lt.alpha = 0;
-        if (bPlay.alpha < 1) { bPlay.alpha = bMute.alpha = 1; bPlay.transform = bMute.transform = CGAffineTransformIdentity; }
-        SetFrame(le, CGRectMake(vx + 24, vy + 6, vw / 2 - 24, 26));
-        SetFrame(lt, CGRectMake(vx + vw / 2, vy + 6, vw / 2 - 24, 26));
-        SetFrame(gv, CGRectMake(vx, vy, vw, VD));
-        bPlay.capsule = bMute.capsule = gv;
-        BOOL playing = [ItemSymbolText(AppleItem(@"play")) containsString:@"pause"];
-        SetSym(bPlay, playing ? @"pause.fill" : @"play.fill", 21);
-        NSString *m = ItemSymbolText(AppleItem(@"mute"));
-        SetSym(bMute, ([m containsString:@"slash"] || [m containsString:@"mute"]) ? @"speaker.slash.fill" : @"speaker.wave.2.fill", 18);
-        bMute.hidden = !AppleItem(@"mute");
-        SetFrame(bPlay, CGRectMake(vx + 5, vy + 2, 50, VD - 4));
-        SetFrame(bMute, CGRectMake(vx + vw - 55, vy + 2, 50, VD - 4));
-        CGFloat sx = vx + 60, ex = vx + vw - (AppleItem(@"mute") ? 62 : 22);
-        SetFrame(scrub, CGRectMake(sx, vy, ex - sx, VD));
-        StartLink();
-    }
+    LayoutVideo(tb, c, W);
 }
 
 #pragma mark - bar backgrounds
@@ -1713,7 +1726,7 @@ static void LoopTick(AVPlayer *p) {
 static CFTimeInterval gTrashAt;
 static __weak UIView *gTrashButton;
 @interface PGDeleteCard : UIView
-+ (BOOL)showFor:(UIAlertController *)a;
++ (BOOL)showFor:(UIAlertController *)a from:(UIView *)btn;
 @end
 @implementation PGDeleteCard {
     UIAlertController *_alert; UIView *_card, *_content; CGRect _from, _to; BOOL _closing;
@@ -1724,8 +1737,7 @@ static void RunAction(UIAlertAction *x) {
     @try { h = [x valueForKey:@"handler"]; } @catch (__unused id e) {}
     if (h) h(x);
 }
-+ (BOOL)showFor:(UIAlertController *)a {
-    UIView *btn = gTrashButton;
++ (BOOL)showFor:(UIAlertController *)a from:(UIView *)btn {
     UIWindow *w = btn.window;
     if (!w || !a.actions.count) return NO;
     PGDeleteCard *v = [[PGDeleteCard alloc] initWithFrame:w.bounds];
@@ -1733,7 +1745,7 @@ static void RunAction(UIAlertAction *x) {
     v.backgroundColor = UIColor.clearColor;
     CGRect b = [btn convertRect:btn.bounds toView:w];
     CGFloat d = MIN(b.size.width, b.size.height);
-    v->_from = CGRectMake(CGRectGetMidX(b) - d / 2, CGRectGetMidY(b) - d / 2, d, d);
+    v->_from = b;   // a circle (trash) or a capsule (Delete / Recover)
     CGFloat W = MIN(w.bounds.size.width - 32, 272), pad = 20;
     // Apple's words: title and message, the way the sheet had them
     NSMutableArray *parts = [NSMutableArray array];
@@ -1747,8 +1759,14 @@ static void RunAction(UIAlertAction *x) {
     for (UIAlertAction *x in a.actions) if (x.style != UIAlertActionStyleCancel) [acts addObject:x];
     CGFloat bh = 50, gap = 8;
     CGFloat H = pad + mh + (mh > 0 ? 18 : 0) + acts.count * bh + MAX(0, (CGFloat)acts.count - 1) * gap + 12;
-    CGFloat right = MIN(w.bounds.size.width - 12, CGRectGetMaxX(b) + 6), bottom = MIN(w.bounds.size.height - 8, CGRectGetMaxY(b) + 6);
-    v->_to = CGRectMake(right - W, bottom - H, W, H);
+    CGFloat bottom = MIN(w.bounds.size.height - 8, CGRectGetMaxY(b) + 6);
+    if (CGRectGetMidX(b) < w.bounds.size.width / 2) {
+        CGFloat left = MAX(12, CGRectGetMinX(b) - 6);   // a button on the left: the card opens to the right
+        v->_to = CGRectMake(left, bottom - H, W, H);
+    } else {
+        CGFloat right = MIN(w.bounds.size.width - 12, CGRectGetMaxX(b) + 6);
+        v->_to = CGRectMake(right - W, bottom - H, W, H);
+    }
     UIView *card = [[UIView alloc] initWithFrame:v->_from];
     card.clipsToBounds = YES; card.layer.cornerRadius = d / 2; card.layer.cornerCurve = kCACornerCurveContinuous;
     card.layer.borderWidth = 0.75; card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
@@ -1772,7 +1790,7 @@ static void RunAction(UIAlertAction *x) {
         y += bh + gap;
     }
     content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.82, 0.82);
-    content.center = CGPointMake(d / 2, d / 2);
+    content.center = CGPointMake(b.size.width / 2, b.size.height / 2);
     [card addSubview:content];
     v->_card = card; v->_content = content;
     [v addSubview:card];
@@ -1809,11 +1827,11 @@ static void RunAction(UIAlertAction *x) {
     UIView *card = _card, *content = _content;
     CALayer *pl = card.layer.presentationLayer; CGRect cur = pl ? pl.frame : card.frame;
     [card.layer removeAllAnimations]; card.frame = cur;
-    CGRect from = _from; CGFloat d = from.size.width;
+    CGRect from = _from; CGFloat d = MIN(from.size.width, from.size.height);
     [UIView animateWithDuration:0.1 animations:^{ content.alpha = 0; }];
     [UIView animateWithDuration:0.38 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:0 animations:^{
         card.frame = from; card.layer.cornerRadius = d / 2;
-        content.center = CGPointMake(d / 2, d / 2); content.transform = CGAffineTransformMakeScale(0.82, 0.82);
+        content.center = CGPointMake(from.size.width / 2, from.size.height / 2); content.transform = CGAffineTransformMakeScale(0.82, 0.82);
     } completion:^(__unused BOOL f) {
         [UIView animateWithDuration:0.12 animations:^{ self.alpha = 0; } completion:^(__unused BOOL f2) { [self removeFromSuperview]; }];
     }];
@@ -1828,6 +1846,47 @@ static BOOL gFramed;
 static BOOL Shown(UIView *v) {
     for (UIView *p = v; p; p = p.superview) if (p.hidden || p.alpha < 0.5) return NO;
     return v.window != nil;
+}
+// 3.1: how tall the photo / video on screen really is (window coords): the content tile (the smallest
+// big tile under the middle of the screen), narrowed by the video's own picture or the image inside it.
+static CGFloat ContentHeight(UIView *tv, UIWindow *w, UIView **outTile) {
+    CGPoint mid = CGPointMake(w.bounds.size.width / 2, w.bounds.size.height / 2);
+    UIView *tile = nil; CGFloat best = CGFLOAT_MAX;
+    NSMutableArray *stack = [NSMutableArray arrayWithArray:tv.subviews]; int guard = 0;
+    while (stack.count && guard++ < 400) {
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if (v.hidden || v.alpha < 0.05) continue;
+        CGRect r = [v convertRect:v.bounds toView:nil];
+        if (r.size.height < 120 || r.size.width < 120 || !CGRectContainsPoint(r, mid)) continue;
+        CGFloat area = r.size.width * r.size.height;
+        if (area < best) { best = area; tile = v; }
+        if ([v.superview isEqual:tv] || [v.superview.superview isEqual:tv]) [stack addObjectsFromArray:v.subviews];
+    }
+    if (outTile) *outTile = tile;
+    if (!tile) return 0;
+    CGFloat h = [tile convertRect:tile.bounds toView:nil].size.height;
+    // a video: the picture inside its player
+    NSMutableArray *ls = [NSMutableArray arrayWithObject:tile.layer]; int g2 = 0;
+    while (ls.count && g2++ < 300) {
+        CALayer *l = ls.lastObject; [ls removeLastObject];
+        if ([l isKindOfClass:[AVPlayerLayer class]]) {
+            CGRect vr = ((AVPlayerLayer *)l).videoRect;
+            if (vr.size.height > 10) h = MIN(h, [l convertRect:vr toLayer:w.layer].size.height);
+        } else if (l.contents && l.bounds.size.height > 120 && CFGetTypeID((__bridge CFTypeRef)l.contents) == CGImageGetTypeID()) {
+            CGImageRef im = (__bridge CGImageRef)l.contents;
+            CGFloat iw = CGImageGetWidth(im), ih = CGImageGetHeight(im);
+            if (iw > 0 && ih > 0 && ([l.contentsGravity isEqualToString:kCAGravityResizeAspect])) {
+                CGFloat fit = MIN(l.bounds.size.width / iw, l.bounds.size.height / ih) * ih;
+                h = MIN(h, [l convertRect:CGRectMake(0, 0, 1, fit) toLayer:w.layer].size.height);
+            }
+        }
+        [ls addObjectsFromArray:l.sublayers ?: @[]];
+    }
+    for (UIView *iv in tile.subviews) if ([iv isKindOfClass:[UIImageView class]] && ((UIImageView *)iv).image && iv.contentMode == UIViewContentModeScaleAspectFit) {
+        CGSize is = ((UIImageView *)iv).image.size;
+        if (is.width > 0 && is.height > 0) h = MIN(h, [iv convertRect:CGRectMake(0, 0, 1, MIN(iv.bounds.size.width / is.width, iv.bounds.size.height / is.height) * is.height) toView:nil].size.height);
+    }
+    return h;
 }
 static void FramePhoto(UIToolbar *tb, BOOL live) {
     UIView *tv = gBigTiling;
@@ -1845,6 +1904,12 @@ static void FramePhoto(UIToolbar *tb, BOOL live) {
     }
     if (!tv) return;
     BOOL want = live && gEnabled && gFramePref && w && Shown(tb);
+    // only a photo / video that fills the screen top to bottom gets framed (squares and wide ones stay as they are)
+    UIView *contentTile = nil;
+    if (want) {
+        CGFloat untransformed = ContentHeight(tv, w, &contentTile) / MAX(0.01, tv.transform.d);
+        if (untransformed < w.bounds.size.height * 0.9) want = NO;
+    }
     UINavigationBar *nb = gNavBar;
     CGFloat H = tv.bounds.size.height, W = tv.bounds.size.width;
     CGAffineTransform t = CGAffineTransformIdentity;
@@ -1875,6 +1940,7 @@ static void FramePhoto(UIToolbar *tb, BOOL live) {
             tile.layer.cornerRadius = radius; tile.layer.masksToBounds = radius > 0;
             if (@available(iOS 13.0, *)) tile.layer.cornerCurve = kCACornerCurveContinuous;
         }
+        if (contentTile && contentTile.superview != tv) { contentTile.layer.cornerRadius = radius; contentTile.layer.masksToBounds = radius > 0; }
     };
     if (changed && tv.window) [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:apply completion:nil];
     else [UIView performWithoutAnimation:apply];
@@ -2006,15 +2072,41 @@ static void StartLink(void) {
 
 #pragma mark - hooks
 
+// Recently Deleted: Delete / Recover are Apple's text buttons on our glass. The card comes out of the glass
+// under the one that was tapped (picked by the sheet's own button: "Recover…" or "Delete…").
+static UIView *TextModeAnchor(UIAlertController *a) {
+    UIToolbar *tb = gToolbar;
+    UIView *c = [tb viewWithTag:BOTTOM_TAG];
+    if (!gTextMode || !tb.window || !c) return nil;
+    BOOL recover = NO;
+    for (UIAlertAction *x in a.actions) if (x.style != UIAlertActionStyleCancel && [x.title.lowercaseString containsString:@"recover"]) recover = YES;
+    UIView *best = nil;
+    for (UIBarButtonItem *it in tb.items) {
+        UIView *v = KV(it, @"view"); if (!v.window) continue;
+        NSString *t = [NSString stringWithFormat:@"%@ %@ %@", it.title ?: @"", it.accessibilityLabel ?: @"", v.accessibilityLabel ?: @""].lowercaseString;
+        UIView *g = TextGlyph(v, 0);
+        if (g) { if ([g isKindOfClass:[UILabel class]]) t = [t stringByAppendingString:((UILabel *)g).text.lowercaseString ?: @""]; }
+        BOOL isRecover = [t containsString:@"recover"], isDelete = [t containsString:@"delete"];
+        if (!(recover ? isRecover : isDelete)) continue;
+        CGPoint cp = [v convertPoint:CGPointMake(v.bounds.size.width / 2, v.bounds.size.height / 2) toView:c];
+        for (UIView *gl in c.subviews) if ([gl.accessibilityIdentifier hasPrefix:@"txt"] && !gl.hidden && CGRectContainsPoint(CGRectInset(gl.frame, -6, -6), cp)) best = gl;
+        if (!best) best = v;
+    }
+    return best;
+}
 %hook UIViewController
 - (void)presentViewController:(UIViewController *)vc animated:(BOOL)animated completion:(void (^)(void))completion {
-    // the viewer's Delete: our card out of the trash button instead of the sheet
-    if (gEnabled && gDeleteCardPref && [vc isKindOfClass:[UIAlertController class]] && ((UIAlertController *)vc).preferredStyle == UIAlertControllerStyleActionSheet &&
-        CACurrentMediaTime() - gTrashAt < 1.5 && gTrashButton.window) {
-        gTrashAt = 0;
-        BOOL shown = NO;
-        @try { shown = [PGDeleteCard showFor:(UIAlertController *)vc]; } @catch (__unused id e) {}
-        if (shown) { if (completion) completion(); return; }
+    // the viewer's Delete / Recover: our card out of the button instead of the sheet
+    if (gEnabled && gDeleteCardPref && [vc isKindOfClass:[UIAlertController class]] && ((UIAlertController *)vc).preferredStyle == UIAlertControllerStyleActionSheet) {
+        UIView *from = nil;
+        if (CACurrentMediaTime() - gTrashAt < 1.5 && gTrashButton.window) from = gTrashButton;
+        else @try { from = TextModeAnchor((UIAlertController *)vc); } @catch (__unused id e) {}
+        if (from) {
+            gTrashAt = 0;
+            BOOL shown = NO;
+            @try { shown = [PGDeleteCard showFor:(UIAlertController *)vc from:from]; } @catch (__unused id e) {}
+            if (shown) { if (completion) completion(); return; }
+        }
     }
     %orig;
 }
