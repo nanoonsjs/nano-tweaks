@@ -31,15 +31,15 @@
 			<key>nanoName</key>
 			<string>LiquidLock</string>
 			<key>nanoSub</key>
-			<string>Liquid Face ID unlock</string>
+			<string>Dynamic Island Face ID for notched iPhones</string>
 			<key>nanoVersion</key>
-			<string>0.1</string>
+			<string>0.2</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>While Face ID looks for you, the padlock melts into a drop of liquid glass. When it recognizes you, the drop pops back into a padlock that bursts open with a splash. If it doesn't, the lock shakes like jelly.</string>
+			<string>When Face ID starts looking, a black island drips out of the notch with a Face ID scan. When it recognizes you, the scan turns into a check and the island pulls back up into the notch. If it doesn't, the island shakes like jelly. For iPhones with a notch (X to 14).</string>
 			<key>label</key>
 			<string>General</string>
 		</dict>
