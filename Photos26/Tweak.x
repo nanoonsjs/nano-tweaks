@@ -1,4 +1,5 @@
-// Photos26 3.1 - made by nano
+// Photos26 3.2 - made by nano
+// 3.2: Info as an iOS 26 glass sheet (camera, lens, settings, file, map); swipe up opens it too
 // 3.1: glass video player in Recently Deleted; Recover / Delete there use the iOS 26 card; only full-screen photos get framed
 // 3.0: Delete grows out of the trash button as an iOS 26 glass card
 // 2.9: video player sits lower; with the bars showing the photo is framed with round corners (full screen when you tap)
@@ -86,6 +87,10 @@
 #include "../shared/LGCompat.h"
 #import <QuartzCore/QuartzCore.h>
 #import <AVFoundation/AVFoundation.h>
+#import <Photos/Photos.h>
+#import <MapKit/MapKit.h>
+#import <CoreLocation/CoreLocation.h>
+#import <ImageIO/ImageIO.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 // Light mode: clear frosted glass, dark icons. Dark mode: dark glass, white icons.
@@ -109,7 +114,8 @@ static BOOL gEnabled = YES, gTopBar = YES, gPlayer = YES, gDebug = NO, gLoop = Y
 static BOOL gInMessages, gMessagesPref = YES;
 static BOOL gInCamera, gCameraPref = YES;
 static BOOL gFramePref = YES;
-static BOOL gDeleteCardPref = YES;   // 3.0: Delete as a glass card out of the trash button   // 2.9: with the bars showing, the photo sits framed between them with round corners   // 2.8: Camera's photo viewer (also from the lock screen) is Photos' own too   // 2.6: also in Messages (its photo/video viewer is Photos' own)
+static BOOL gDeleteCardPref = YES;
+static BOOL gInfoSheetPref = YES;   // 3.2: Info as an iOS 26 glass sheet   // 3.0: Delete as a glass card out of the trash button   // 2.9: with the bars showing, the photo sits framed between them with round corners   // 2.8: Camera's photo viewer (also from the lock screen) is Photos' own too   // 2.6: also in Messages (its photo/video viewer is Photos' own)
 
 static const void *kMasked = &kMasked;
 static const void *kBusy = &kBusy;
@@ -149,6 +155,7 @@ static void LoadPrefs(void) {
     gCameraPref = PrefBool(f, @"camera", YES);
     gFramePref = PrefBool(f, @"frame", YES);
     gDeleteCardPref = PrefBool(f, @"deletecard", YES);
+    gInfoSheetPref = PrefBool(f, @"infosheet", YES);
     if (gInMessages && !gInCamera && !gMessagesPref) gEnabled = NO;
     if (gInCamera && !gCameraPref) gEnabled = NO;
 }
@@ -1724,6 +1731,7 @@ static void LoopTick(AVPlayer *p) {
 // 3.0 (iOS 26): Delete grows out of the trash button as a glass card with Apple's own words and a red
 // "Delete Photo" button, instead of the old sheet from the bottom. Tap outside and it shrinks back in.
 static CFTimeInterval gTrashAt;
+static CFTimeInterval gAppleInfoUntil;   // "More Info": let Apple's own panel open
 static __weak UIView *gTrashButton;
 @interface PGDeleteCard : UIView
 + (BOOL)showFor:(UIAlertController *)a from:(UIView *)btn;
@@ -1838,6 +1846,284 @@ static void RunAction(UIAlertAction *x) {
     if (then) then();
 }
 @end
+
+#pragma mark - 3.2: Info as a glass sheet
+
+// The photo / video on screen right now, as a PHAsset (from the viewer's own tile / browsing session).
+static __weak UIView *gBigTilingFwd;
+static PHAsset *CurrentAsset(UIView *from) {
+    UIWindow *w = from.window;
+    id found = nil;
+    // 1. the viewer's browsing session
+    for (UIResponder *r = from; r && !found; r = r.nextResponder) {
+        if (![r isKindOfClass:[UIViewController class]]) continue;
+        for (UIViewController *vc = (UIViewController *)r; vc && !found; vc = vc.parentViewController) {
+            if (![NSStringFromClass(vc.class) containsString:@"OneUp"]) continue;
+            for (NSString *kp in @[@"browsingSession.viewModel.currentAssetReference.asset", @"_browsingSession.viewModel.currentAssetReference.asset"]) {
+                @try { id a = [vc valueForKeyPath:kp]; if ([a isKindOfClass:[PHAsset class]]) { found = a; break; } } @catch (__unused id e) {}
+            }
+        }
+    }
+    // 2. the tile under the middle of the screen
+    if (!found && w) {
+        CGPoint mid = CGPointMake(w.bounds.size.width / 2, w.bounds.size.height / 2);
+        UIView *hit = [w hitTest:mid withEvent:nil];
+        for (UIResponder *r = hit; r && !found; r = r.nextResponder) {
+            for (NSString *kp in @[@"assetViewModel.asset", @"viewModel.asset", @"asset"]) {
+                @try { if ([r respondsToSelector:NSSelectorFromString([kp componentsSeparatedByString:@"."].firstObject)]) { id a = [r valueForKeyPath:kp]; if ([a isKindOfClass:[PHAsset class]]) { found = a; break; } } } @catch (__unused id e) {}
+            }
+        }
+    }
+    return found;
+}
+static NSString *PGSize(long long b) {
+    if (b <= 0) return nil;
+    return [NSByteCountFormatter stringFromByteCount:b countStyle:NSByteCountFormatterCountStyleFile];
+}
+static UILabel *PGL(NSString *t, CGFloat size, UIFontWeight w, UIColor *c) {
+    UILabel *l = [UILabel new]; l.text = t; l.font = [UIFont systemFontOfSize:size weight:w]; l.textColor = c ?: UIColor.labelColor;
+    l.adjustsFontSizeToFitWidth = YES; l.minimumScaleFactor = 0.75; return l;
+}
+@interface PGInfoSheet : UIView
++ (BOOL)showFrom:(UIView *)btn asset:(PHAsset *)asset;
+@end
+@implementation PGInfoSheet {
+    UIView *_card, *_content; CGRect _from, _to; BOOL _closing; PHAsset *_asset;
+    UILabel *_camera, *_lens, *_specs, *_place, *_file; UIStackView *_exif; UIImageView *_map; UILabel *_badge;
+}
++ (BOOL)showFrom:(UIView *)btn asset:(PHAsset *)asset {
+    UIWindow *w = btn.window;
+    if (!w || !asset) return NO;
+    PGInfoSheet *v = [[PGInfoSheet alloc] initWithFrame:w.bounds];
+    v->_asset = asset;
+    v.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
+    CGRect b = [btn convertRect:btn.bounds toView:w];
+    v->_from = b;
+    CGFloat W = w.bounds.size.width - 16, pad = 20;
+    UIView *content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, 10)];
+    UIColor *dim = UIColor.secondaryLabelColor;
+    CGFloat y = 14;
+    // grabber
+    UIView *grab = [[UIView alloc] initWithFrame:CGRectMake(W / 2 - 18, 8, 36, 5)]; grab.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.5]; grab.layer.cornerRadius = 2.5; [content addSubview:grab];
+    y = 26;
+    // date
+    NSDate *d = asset.creationDate ?: [NSDate date];
+    NSDateFormatter *df = [NSDateFormatter new]; df.dateFormat = @"EEEE"; NSString *day = [df stringFromDate:d];
+    df.dateStyle = NSDateFormatterLongStyle; df.timeStyle = NSDateFormatterShortStyle;
+    UILabel *t = PGL(day, 22, UIFontWeightBold, nil); t.frame = CGRectMake(pad, y, W - pad * 2, 28); [content addSubview:t]; y += 28;
+    UILabel *t2 = PGL([df stringFromDate:d], 15, UIFontWeightMedium, dim); t2.frame = CGRectMake(pad, y, W - pad * 2, 20); [content addSubview:t2]; y += 30;
+    // camera card
+    CGFloat cw = W - 24;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(12, y, cw, 128)];
+    card.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.14]; card.layer.cornerRadius = 22; card.layer.cornerCurve = kCACornerCurveContinuous;
+    [content addSubview:card];
+    v->_camera = PGL(asset.mediaType == PHAssetMediaTypeVideo ? @"Video" : @"Photo", 17, UIFontWeightSemibold, nil); v->_camera.frame = CGRectMake(16, 14, cw - 90, 22); [card addSubview:v->_camera];
+    v->_badge = PGL(@"", 12, UIFontWeightBold, dim); v->_badge.textAlignment = NSTextAlignmentCenter;
+    v->_badge.layer.borderColor = [UIColor colorWithWhite:0.5 alpha:0.6].CGColor; v->_badge.layer.borderWidth = 1; v->_badge.layer.cornerRadius = 6;
+    v->_badge.frame = CGRectMake(cw - 70, 15, 56, 20); v->_badge.hidden = YES; [card addSubview:v->_badge];
+    v->_lens = PGL(@"", 14, UIFontWeightRegular, dim); v->_lens.frame = CGRectMake(16, 38, cw - 32, 18); [card addSubview:v->_lens];
+    NSString *dims = [NSString stringWithFormat:@"%lu × %lu", (unsigned long)asset.pixelWidth, (unsigned long)asset.pixelHeight];
+    double mp = asset.pixelWidth * (double)asset.pixelHeight / 1e6;
+    NSString *spec = asset.mediaType == PHAssetMediaTypeVideo ? [NSString stringWithFormat:@"%@  •  %d:%02d", dims, (int)asset.duration / 60, (int)asset.duration % 60] : [NSString stringWithFormat:@"%.0f MP  •  %@", MAX(1, round(mp)), dims];
+    v->_specs = PGL(spec, 14, UIFontWeightRegular, dim); v->_specs.frame = CGRectMake(16, 58, cw - 32, 18); [card addSubview:v->_specs];
+    UIView *line = [[UIView alloc] initWithFrame:CGRectMake(0, 86, cw, 0.5)]; line.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.35]; [card addSubview:line];
+    UIStackView *ex = [[UIStackView alloc] initWithFrame:CGRectMake(8, 92, cw - 16, 30)];
+    ex.axis = UILayoutConstraintAxisHorizontal; ex.distribution = UIStackViewDistributionFillEqually;
+    [card addSubview:ex]; v->_exif = ex;
+    y += 128 + 12;
+    // file
+    v->_file = PGL(@"", 14, UIFontWeightRegular, dim); v->_file.frame = CGRectMake(pad, y, W - pad * 2, 18); [content addSubview:v->_file]; y += 26;
+    // map + place
+    if (asset.location) {
+        v->_place = PGL(@"", 15, UIFontWeightSemibold, nil); v->_place.frame = CGRectMake(pad, y, W - pad * 2, 20); [content addSubview:v->_place]; y += 26;
+        UIImageView *map = [[UIImageView alloc] initWithFrame:CGRectMake(12, y, cw, 150)];
+        map.layer.cornerRadius = 22; map.layer.cornerCurve = kCACornerCurveContinuous; map.clipsToBounds = YES;
+        map.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.14]; map.contentMode = UIViewContentModeScaleAspectFill;
+        [content addSubview:map]; v->_map = map; y += 150 + 12;
+    }
+    // Apple's full panel (caption, adjust date, ...)
+    UIButton *more = [UIButton buttonWithType:UIButtonTypeSystem];
+    [more setTitle:@"More Info" forState:UIControlStateNormal]; more.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
+    [more setTitleColor:UIColor.labelColor forState:UIControlStateNormal];
+    more.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.16]; more.layer.cornerRadius = 24; more.layer.cornerCurve = kCACornerCurveContinuous;
+    more.frame = CGRectMake(12, y, cw, 48); [more addTarget:v action:@selector(moreTap) forControlEvents:UIControlEventTouchUpInside];
+    [content addSubview:more]; y += 48 + 14 + MAX(8, w.safeAreaInsets.bottom - 10);
+    CGFloat H = MIN(y, w.bounds.size.height - w.safeAreaInsets.top - 20);
+    content.frame = CGRectMake(0, 0, W, H);
+    v->_to = CGRectMake(8, w.bounds.size.height - H - 8, W, H);
+    // the glass
+    UIView *shape = [[UIView alloc] initWithFrame:b];
+    shape.clipsToBounds = YES; shape.layer.cornerRadius = MIN(b.size.width, b.size.height) / 2; shape.layer.cornerCurve = kCACornerCurveContinuous;
+    shape.layer.borderWidth = 0.75; shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
+    UIVisualEffectView *glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterial]];
+    glass.frame = shape.bounds; glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [shape addSubview:glass];
+    content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.86, 0.86);
+    content.center = CGPointMake(b.size.width / 2, b.size.height / 2);
+    [shape addSubview:content];
+    v->_card = shape; v->_content = content;
+    [v addSubview:shape];
+    [w addSubview:v];
+    [v addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:v action:@selector(outside:)]];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:v action:@selector(drag:)];
+    [shape addGestureRecognizer:pan];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    // grows out of the info button and settles as a sheet at the bottom
+    CGRect to = v->_to;
+    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        shape.frame = to; shape.layer.cornerRadius = 34;
+        content.center = CGPointMake(to.size.width / 2, to.size.height / 2);
+        content.transform = CGAffineTransformIdentity;
+        v.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25];
+    } completion:nil];
+    [UIView animateWithDuration:0.2 delay:0.08 options:UIViewAnimationOptionCurveEaseOut animations:^{ content.alpha = 1; } completion:nil];
+    [v loadDetails];
+    gInfoSheet = v;
+    return YES;
+}
+- (void)loadDetails {
+    PHAsset *a = _asset;
+    __weak PGInfoSheet *ws = self;
+    // file name, size, format
+    NSArray *res = [PHAssetResource assetResourcesForAsset:a];
+    PHAssetResource *r = res.firstObject;
+    for (PHAssetResource *x in res) if (x.type == PHAssetResourceTypePhoto || x.type == PHAssetResourceTypeVideo) { r = x; break; }
+    long long bytes = 0; @try { bytes = [[r valueForKey:@"fileSize"] longLongValue]; } @catch (__unused id e) {}
+    NSString *ext = r.originalFilename.pathExtension.uppercaseString;
+    NSMutableArray *fp = [NSMutableArray array];
+    if (r.originalFilename) [fp addObject:r.originalFilename];
+    if (PGSize(bytes)) [fp addObject:PGSize(bytes)];
+    _file.text = [fp componentsJoinedByString:@"  •  "];
+    if (ext.length) { _badge.text = [ext isEqualToString:@"HEIC"] ? @"HEIF" : ([ext isEqualToString:@"MOV"] ? @"HEVC" : ext); _badge.hidden = NO; }
+    // camera, lens, settings
+    if (a.mediaType == PHAssetMediaTypeImage) {
+        PHContentEditingInputRequestOptions *o = [PHContentEditingInputRequestOptions new]; o.networkAccessAllowed = NO;
+        [a requestContentEditingInputWithOptions:o completionHandler:^(PHContentEditingInput *in, NSDictionary *info) {
+            NSURL *u = in.fullSizeImageURL;
+            NSDictionary *props = nil;
+            if (u) { CGImageSourceRef src = CGImageSourceCreateWithURL((__bridge CFURLRef)u, NULL); if (src) { props = (__bridge_transfer NSDictionary *)CGImageSourceCopyPropertiesAtIndex(src, 0, NULL); CFRelease(src); } }
+            dispatch_async(dispatch_get_main_queue(), ^{ [ws fillExif:props]; });
+        }];
+    } else if (a.mediaType == PHAssetMediaTypeVideo) {
+        PHVideoRequestOptions *o = [PHVideoRequestOptions new]; o.networkAccessAllowed = NO;
+        [[PHImageManager defaultManager] requestAVAssetForVideo:a options:o resultHandler:^(AVAsset *av, AVAudioMix *mix, NSDictionary *info) {
+            AVAssetTrack *tr = [av tracksWithMediaType:AVMediaTypeVideo].firstObject;
+            float fps = tr.nominalFrameRate;
+            NSString *model = nil;
+            for (AVMetadataItem *m in av.commonMetadata) if ([m.commonKey isEqualToString:AVMetadataCommonKeyModel]) model = m.stringValue;
+            dispatch_async(dispatch_get_main_queue(), ^{ [ws fillVideoFPS:fps model:model]; });
+        }];
+    }
+    // place + map
+    CLLocation *loc = a.location;
+    if (loc) {
+        [[CLGeocoder new] reverseGeocodeLocation:loc completionHandler:^(NSArray<CLPlacemark *> *pl, NSError *e) {
+            CLPlacemark *p = pl.firstObject;
+            NSString *name = p.locality ? (p.administrativeArea ? [NSString stringWithFormat:@"%@, %@", p.locality, p.administrativeArea] : p.locality) : (p.name ?: @"Location");
+            dispatch_async(dispatch_get_main_queue(), ^{ PGInfoSheet *s = ws; if (s) s->_place.text = name; });
+        }];
+        MKMapSnapshotOptions *mo = [MKMapSnapshotOptions new];
+        mo.region = MKCoordinateRegionMakeWithDistance(loc.coordinate, 900, 900);
+        mo.size = _map.bounds.size; mo.scale = UIScreen.mainScreen.scale;
+        mo.traitCollection = self.traitCollection;
+        [[[MKMapSnapshotter alloc] initWithOptions:mo] startWithCompletionHandler:^(MKMapSnapshot *snap, NSError *e) {
+            if (!snap.image) return;
+            UIGraphicsImageRenderer *rr = [[UIGraphicsImageRenderer alloc] initWithSize:snap.image.size];
+            UIImage *img = [rr imageWithActions:^(UIGraphicsImageRendererContext *c) {
+                [snap.image drawAtPoint:CGPointZero];
+                CGPoint pt = [snap pointForCoordinate:loc.coordinate];
+                [[UIColor colorWithRed:0.0 green:0.48 blue:1 alpha:1] setFill];
+                [[UIColor whiteColor] setStroke];
+                UIBezierPath *dot = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(pt.x - 8, pt.y - 8, 16, 16)]; dot.lineWidth = 3; [dot fill]; [dot stroke];
+            }];
+            dispatch_async(dispatch_get_main_queue(), ^{ PGInfoSheet *s = ws; if (!s) return; s->_map.alpha = 0; s->_map.image = img; [UIView animateWithDuration:0.25 animations:^{ s->_map.alpha = 1; }]; });
+        }];
+    }
+}
+- (void)addExif:(NSString *)t {
+    UILabel *l = PGL(t, 13, UIFontWeightMedium, UIColor.secondaryLabelColor); l.textAlignment = NSTextAlignmentCenter;
+    [_exif addArrangedSubview:l];
+}
+- (void)fillExif:(NSDictionary *)p {
+    NSDictionary *tiff = p[(__bridge NSString *)kCGImagePropertyTIFFDictionary], *exif = p[(__bridge NSString *)kCGImagePropertyExifDictionary];
+    NSString *make = tiff[(__bridge NSString *)kCGImagePropertyTIFFMake], *model = tiff[(__bridge NSString *)kCGImagePropertyTIFFModel];
+    if (model.length) _camera.text = (make.length && ![model hasPrefix:make]) ? [NSString stringWithFormat:@"%@ %@", make, model] : model;
+    NSString *lens = exif[(__bridge NSString *)kCGImagePropertyExifLensModel];
+    NSNumber *fl35 = exif[(__bridge NSString *)kCGImagePropertyExifFocalLenIn35mmFilm], *fn = exif[(__bridge NSString *)kCGImagePropertyExifFNumber];
+    if (lens.length) {
+        NSString *nice = [lens containsString:@"back"] ? ([lens containsString:@"ultra"] ? @"Ultra Wide Camera" : ([lens containsString:@"telephoto"] ? @"Telephoto Camera" : @"Main Camera")) : ([lens containsString:@"front"] ? @"Front Camera" : lens);
+        NSMutableString *ls = [nice mutableCopy];
+        if (fl35) [ls appendFormat:@" — %@ mm", fl35];
+        if (fn) [ls appendFormat:@" ƒ%.1f", fn.doubleValue];
+        _lens.text = ls;
+    } else if (!model.length) _lens.text = @"No camera details";
+    for (UIView *x in _exif.arrangedSubviews) [x removeFromSuperview];
+    NSArray *isos = exif[(__bridge NSString *)kCGImagePropertyExifISOSpeedRatings];
+    NSNumber *fl = exif[(__bridge NSString *)kCGImagePropertyExifFocalLength], *ev = exif[(__bridge NSString *)kCGImagePropertyExifExposureBiasValue], *et = exif[(__bridge NSString *)kCGImagePropertyExifExposureTime];
+    if (isos.count) [self addExif:[NSString stringWithFormat:@"ISO %@", isos.firstObject]];
+    if (fl35 ?: fl) [self addExif:[NSString stringWithFormat:@"%@ mm", fl35 ?: fl]];
+    if (ev) [self addExif:[NSString stringWithFormat:@"%g ev", round(ev.doubleValue * 10) / 10]];
+    if (fn) [self addExif:[NSString stringWithFormat:@"ƒ%.1f", fn.doubleValue]];
+    if (et.doubleValue > 0) [self addExif:et.doubleValue >= 1 ? [NSString stringWithFormat:@"%gs", et.doubleValue] : [NSString stringWithFormat:@"1/%.0f s", 1 / et.doubleValue]];
+    if (!_exif.arrangedSubviews.count) [self addExif:@"—"];
+}
+- (void)fillVideoFPS:(float)fps model:(NSString *)model {
+    if (model.length) _camera.text = model;
+    for (UIView *x in _exif.arrangedSubviews) [x removeFromSuperview];
+    PHAsset *a = _asset;
+    NSString *res = a.pixelHeight >= 2160 || a.pixelWidth >= 2160 ? @"4K" : (MIN(a.pixelWidth, a.pixelHeight) >= 1080 ? @"HD" : @"SD");
+    [self addExif:res];
+    if (fps > 0) [self addExif:[NSString stringWithFormat:@"%.0f fps", fps]];
+    [self addExif:[NSString stringWithFormat:@"%d:%02d", (int)a.duration / 60, (int)a.duration % 60]];
+    _lens.text = model.length ? @"Video" : @"No camera details";
+}
+- (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e { return _closing ? nil : [super hitTest:p withEvent:e]; }
+- (void)outside:(UITapGestureRecognizer *)g { if (!CGRectContainsPoint(_card.frame, [g locationInView:self])) [self close:0]; }
+- (void)drag:(UIPanGestureRecognizer *)g {
+    CGFloat dy = [g translationInView:self].y;
+    if (g.state == UIGestureRecognizerStateChanged) {
+        CGFloat y = dy > 0 ? dy : -12 * (1 - 1 / (fabs(dy) / 60 + 1));
+        _card.transform = CGAffineTransformMakeTranslation(0, y);
+        self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25 * MAX(0, 1 - dy / 300)];
+    } else if (g.state >= UIGestureRecognizerStateEnded) {
+        CGFloat vy = [g velocityInView:self].y;
+        if (dy > 90 || vy > 700) { [self close:vy]; return; }
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            self->_card.transform = CGAffineTransformIdentity; self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.25];
+        } completion:nil];
+    }
+}
+// back into the info button
+- (void)close:(CGFloat)vy {
+    if (_closing) return;
+    _closing = YES;
+    UIView *card = _card, *content = _content;
+    CALayer *pl = card.layer.presentationLayer; CGRect cur = pl ? pl.frame : card.frame;
+    [card.layer removeAllAnimations]; card.transform = CGAffineTransformIdentity; card.frame = cur;
+    CGRect from = _from; CGFloat d = MIN(from.size.width, from.size.height);
+    [UIView animateWithDuration:0.12 animations:^{ content.alpha = 0; }];
+    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:MIN(3, vy / 600) options:0 animations:^{
+        card.frame = from; card.layer.cornerRadius = d / 2;
+        content.center = CGPointMake(from.size.width / 2, from.size.height / 2); content.transform = CGAffineTransformMakeScale(0.86, 0.86);
+        self.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
+    } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.12 animations:^{ self.alpha = 0; } completion:^(__unused BOOL f2) { [self removeFromSuperview]; }];
+    }];
+}
+- (void)moreTap {
+    [self close:0];
+    gAppleInfoUntil = CACurrentMediaTime() + 1.5;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ Forward(AppleItem(@"info")); });
+}
+@end
+static __weak UIView *gInfoSheet;
+static BOOL ShowInfoSheet(UIView *btn) {
+    if (!gEnabled || !gInfoSheetPref || CACurrentMediaTime() < gAppleInfoUntil || gInfoSheet.window) return NO;
+    PHAsset *a = nil;
+    @try { a = CurrentAsset(btn); } @catch (__unused id e) {}
+    if (!a) return NO;   // couldn't tell which photo: Apple's own info
+    @try { return [PGInfoSheet showFrom:btn asset:a]; } @catch (__unused id e) { return NO; }
+}
 
 // 2.9 (iOS 26): while the bars are showing, the photo / video sits framed between the top buttons and the
 // thumbnails, a little smaller, with round corners. Tap to hide the bars and it grows back to full screen.
@@ -1971,6 +2257,7 @@ static void FramePhoto(UIToolbar *tb, BOOL live) {
     }
     BOOL wasFav = [ItemSymbolText(AppleItem(@"heart")) containsString:@"heart.fill"];
     if ([k isEqualToString:@"trash"]) { gTrashAt = CACurrentMediaTime(); gTrashButton = b; }
+    if ([k isEqualToString:@"info"] && gInfoSheetPref && ShowInfoSheet(b)) return;
     if (![k isEqualToString:@"edit"]) Forward(AppleItem(k));
     if ([k isEqualToString:@"heart"]) {
         UIImageView *iv = b.imageView;
@@ -2026,6 +2313,16 @@ static void FramePhoto(UIToolbar *tb, BOOL live) {
     static NSUInteger frame; frame++;
     @try {
         if (frame % 2 == 0) FramePhoto(tb, YES);
+        if (frame % 4 == 1 && gInfoSheetPref) {
+            // swiping up on a photo opens Apple's details: ours comes up instead
+            static BOOL wasInfo;
+            BOOL infoOn = [ItemSymbolText(AppleItem(@"info")) containsString:@"fill"];
+            if (infoOn && !wasInfo && CACurrentMediaTime() > gAppleInfoUntil && !gInfoSheet.window) {
+                PGButton *bi = ButtonIn(c, @"info");
+                if (bi.window && !bi.hidden && CurrentAsset(bi)) { Forward(AppleItem(@"info")); ShowInfoSheet(bi); }
+            }
+            wasInfo = infoOn;
+        }
         if (frame % 12 == 0) LayoutBottom(tb);
         if (frame % 20 == 9) StyleFilmstrip(tb.window);
         if (frame % 30 == 2) {
