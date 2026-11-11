@@ -781,18 +781,19 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
         CGRect c = seen; CGFloat r = c.size.width / 2;
         CGRect tall = CGRectMake(CGRectGetMidX(c) - r * 1.25, CGRectGetMaxY(c) - r * 5.2, r * 2.5, r * 5.2);
         tall.origin.y = MAX(v->_to.origin.y, tall.origin.y);
-        [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
+        content.layer.shouldRasterize = YES; content.layer.rasterizationScale = UIScreen.mainScreen.scale;
+        [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
             shape.frame = tall; shape.layer.cornerRadius = tall.size.width / 2;
             content.center = CGPointMake(tall.size.width / 2, tall.size.height / 2);
         } completion:^(__unused BOOL f) {
-            [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+            [UIView animateWithDuration:0.46 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.8 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
                 shape.frame = v->_to; shape.layer.cornerRadius = 44;
                 content.center = CGPointMake(v->_to.size.width / 2, v->_to.size.height / 2);
                 content.transform = CGAffineTransformIdentity;
-            } completion:nil];
+            } completion:^(__unused BOOL f2) { content.layer.shouldRasterize = NO; }];
         }];
-        [UIView animateWithDuration:0.22 delay:0.12 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{ content.alpha = 1; } completion:nil];
-        [UIView animateWithDuration:0.35 animations:^{ v.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3]; }];
+        [UIView animateWithDuration:0.18 delay:0.07 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{ content.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.3 animations:^{ v.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3]; }];
         return;
     }
     [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.35 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{
@@ -878,7 +879,7 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     CFTimeInterval now = l.targetTimestamp > 0 ? l.targetTimestamp : CACurrentMediaTime();
     double dt = _lastT > 0 ? MIN(1.0 / 30, now - _lastT) : 1.0 / 60; _lastT = now;
     // a real spring (like iOS's own): response 0.42s, then integrate in small steps so it's the same at 60 or 120Hz
-    double w = 2 * M_PI / 0.42, k = w * w, c = 2 * _zeta * w;
+    double w = 2 * M_PI / 0.32, k = w * w, c = 2 * _zeta * w;
     int n = MAX(1, (int)ceil(dt / (1.0 / 240)));
     double h = dt / n;
     for (int i = 0; i < n; i++) { double a = -k * (_prog - _goal) - c * _vel; _vel += a * h; _prog += _vel * h; }
@@ -1018,7 +1019,7 @@ static void XLandBounce(CALayer *L) {
     if ([pill isKindOfClass:[MPMiniPill class]] && pill.window) {
         // the drop takes over right where the island became one, and gets sucked into the pill
         XGooAbsorb(pill, [self convertRect:_P toView:nil]);
-        [UIView animateWithDuration:0.12 animations:^{ self.alpha = 0; } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
+        [UIView animateWithDuration:0.08 animations:^{ self.alpha = 0; } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
         return;
     }
     if (pill.window) XLandBounce(pill.layer);
@@ -1154,7 +1155,7 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     CGRect c = [pill.window convertRect:cw toView:host];
     CGFloat top = CGRectGetMinY(pill.frame) + 0.5;
     _x = _tx = _bx = CGRectGetMidX(c);
-    _d = MAX(0, top - CGRectGetMidY(c)); _vd = -40;
+    _d = MAX(0, top - CGRectGetMidY(c)); _vd = -160;
     _mode = 1; _td = 0; _absorbing = YES;
     [self draw];
 }
@@ -1162,15 +1163,15 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
 - (void)step:(CADisplayLink *)l {
     CFTimeInterval now = CACurrentMediaTime(); double dt = _last > 0 ? MIN(1.0 / 30, now - _last) : 1.0 / 60; _last = now;
     // the drop chases the finger on a bouncy spring; the neck's foot on a lazier one
-    double wD = 2 * M_PI / (_mode == 1 ? 0.34 : 0.2), zD = _mode == 1 ? 0.62 : 0.55;
-    double wB = 2 * M_PI / 0.42, zB = 0.7;
+    double wD = 2 * M_PI / (_mode == 1 ? (_absorbing ? 0.22 : 0.26) : 0.16), zD = _mode == 1 ? 0.66 : 0.58;
+    double wB = 2 * M_PI / 0.32, zB = 0.72;
     int n = 6; double h = dt / n;
     for (int i = 0; i < n; i++) {
         double ax = -wD * wD * (_x - _tx) - 2 * zD * wD * _vx; _vx += ax * h; _x += _vx * h;
         double ad = -wD * wD * (_d - _td) - 2 * zD * wD * _vd; _vd += ad * h; _d += _vd * h;
         double ab = -wB * wB * (_bx - _x) - 2 * zB * wB * _vbx; _vbx += ab * h; _bx += _vbx * h;
     }
-    if (_mode == 2) { _rScale = MAX(0, _rScale - dt * 9); }
+    if (_mode == 2) { _rScale = MAX(0, _rScale - dt * 12); }
     if (_mode != 0 && _d < 0.5 && fabs(_vd) < 8) { [self cleanup]; return; }
     [self draw];
 }

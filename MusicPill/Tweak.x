@@ -1,4 +1,5 @@
-// MusicPill 1.5.1 - made by nano
+// MusicPill 1.5.2 - made by nano
+// 1.5.2: faster, smoother liquid open/close
 // 1.5.1: Dynamic Pill opens as liquid out of the drop and closes back into a drop that's sucked into the pill; Back button in Sleep Timer
 // 1.5: settings demo shows the liquid pull
 // 1.4.11: the liquid drop is one piece with the pill's glass (dark glossy, light mode too), springy and wobbly; the Dynamic Pill opens out of the drop
@@ -1479,7 +1480,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.5.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.5.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
