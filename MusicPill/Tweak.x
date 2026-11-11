@@ -1,4 +1,5 @@
-// MusicPill 1.4.3 - made by nano
+// MusicPill 1.4.4 - made by nano
+// 1.4.4: the pill's spot is locked (no more resizing by itself, no grow while scrolling); Dynamic Pill closes on one real spring every frame; smoother player close
 // 1.4.3: Dynamic Pill close/pull-down is one continuous morph: contents shrink and cross-fade into the pill, outline melts away
 // 1.4.2: pill no longer changes size after leaving Music and coming back; new open/close morphs; pill settles in when you come back
 // 1.4.1: Smooth Lyrics in landscape: every frame, glide, karaoke fill, depth + soft focus, breathing ••• in breaks, ± timing nudge per song
@@ -1469,7 +1470,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2362,6 +2363,36 @@ static void PillOpenMorph(UIView *pillView, UIView *snap, UIWindow *win) {
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
 }
 
+// 1.4.4: the pill's spot is LOCKED. Once Music's bar has sat still at the pill size for a moment, that spot
+// (size, and distance from the bottom of the screen) is remembered, and our pill stays exactly there from
+// then on, whatever Music does to its own bar afterwards. Separate spots for Library (smaller pill) and
+// for screen widths; nothing else moves it.
+static NSMutableDictionary<NSString *, NSValue *> *gPillLocks;
+static CGRect LockedPillRect(CGRect live, UIView *host, UIView *mini) {
+    CGFloat HW = host.bounds.size.width, HH = host.bounds.size.height;
+    if (HW < 100 || HH < 100) return live;
+    if (!gPillLocks) gPillLocks = [NSMutableDictionary dictionary];
+    NSString *key = [NSString stringWithFormat:@"%.0fx%.0f-%d", HW, HH, (int)OnLibraryTab()];
+    NSValue *v = gPillLocks[key];
+    if (v) {
+        CGRect L = v.CGRectValue;   // x = left, y = gap to the bottom, w, h
+        return CGRectMake(L.origin.x, HH - L.origin.y - L.size.height, L.size.width, L.size.height);
+    }
+    // not locked yet: lock once it has been the same for half a second, settled at our size
+    static CGRect cand; static CFTimeInterval candAt; static NSString *candKey;
+    BOOL settled = UIApplication.sharedApplication.applicationState == UIApplicationStateActive && !gPillAway &&
+                   CACurrentMediaTime() >= gPillSnapUntil && !mini.layer.animationKeys.count &&
+                   CGAffineTransformEqualToTransform(mini.transform, PillTransform(mini)) &&
+                   live.size.width > 120 && live.size.width <= HW && live.size.height > 30 && live.size.height < 100 &&
+                   CGRectGetMaxY(live) <= HH && CGRectGetMaxY(live) > HH * 0.6;
+    if (!settled) { candAt = 0; return live; }
+    CGRect rl = CGRectMake(round(live.origin.x * 2) / 2, round(live.origin.y * 2) / 2, round(live.size.width * 2) / 2, round(live.size.height * 2) / 2);
+    if (candAt == 0 || ![candKey isEqualToString:key] || !CGRectEqualToRect(cand, rl)) { cand = rl; candAt = CACurrentMediaTime(); candKey = key; return live; }
+    if (CACurrentMediaTime() - candAt < 0.5) return live;
+    gPillLocks[key] = [NSValue valueWithCGRect:CGRectMake(rl.origin.x, HH - CGRectGetMaxY(rl), rl.size.width, rl.size.height)];
+    return rl;
+}
+
 // Our pill stands in for Music's bar in both states. Expanded, it sits exactly
 // where Music's (hidden) bar is; while the full player is up, Music's bar is back.
 static __weak UIView *gHiddenMini;
@@ -2420,8 +2451,19 @@ static void SyncPill(void) {
     BOOL pillAnimating = NO;
     for (NSString *k in pill.layer.animationKeys) if (![k hasPrefix:@"mp."]) pillAnimating = YES;
     if (!gCollapsed && !pillAnimating && !gLSActive && !gPillAway && CACurrentMediaTime() >= gLSSettle) {
-        CGRect r = [mini convertRect:mini.bounds toView:host];
-        if (!CGRectEqualToRect(pill.frame, r)) { pill.compact = NO; pill.frame = r; [pill setNeedsLayout]; }
+        CGRect r = LockedPillRect([mini convertRect:mini.bounds toView:host], host, mini);
+        static CGRect lastWant;
+        if (!CGRectEqualToRect(pill.frame, r)) {
+            pill.compact = NO;
+            CGFloat jump = fabs(CGRectGetWidth(pill.frame) - r.size.width) + fabs(CGRectGetMidY(pill.frame) - CGRectGetMidY(r));
+            // a real change of spot (Library's smaller pill): glide there once; small differences just snap
+            if (jump > 3 && !CGRectEqualToRect(lastWant, r) && pill.window && CACurrentMediaTime() >= gPillSnapUntil) {
+                [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ pill.frame = r; [pill layoutIfNeeded]; } completion:nil];
+            } else if (!pill.layer.animationKeys.count || jump <= 3) {
+                [UIView performWithoutAnimation:^{ pill.frame = r; [pill setNeedsLayout]; }];
+            }
+        }
+        lastWant = r;
     }
     static CFTimeInterval lastRefresh;
     CGFloat every = CACurrentMediaTime() < gFastRefreshUntil ? 0.3 : 1.0;
@@ -2462,15 +2504,19 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     snap.frame = wrap.bounds;
     snap.autoresizingMask = UIViewAutoresizingNone;
     [wrap addSubview:snap];
-    UIView *pillPic = nil;
-    if (target == pill) {
-        pillPic = [pill snapshotViewAfterScreenUpdates:YES];
-        pill.alpha = 0;
-    }
-    if (pillPic) {
-        pillPic.frame = wrap.bounds; pillPic.alpha = 0;
-        pillPic.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [wrap addSubview:pillPic];
+    __block UIView *pillPic = nil;
+    BOOL wantPic = target == pill;
+    if (wantPic) {
+        // taken one frame later, once the pill has drawn under the morph (forcing a redraw right now stuttered)
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIView *pp = pill.window ? [pill snapshotViewAfterScreenUpdates:NO] : nil;
+            pill.alpha = 0;
+            if (!pp || !wrap.superview) return;
+            pp.frame = wrap.bounds; pp.alpha = 0;
+            pp.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [wrap addSubview:pp]; pillPic = pp;
+            [UIView animateWithDuration:0.22 delay:0.08 options:UIViewAnimationOptionCurveEaseOut animations:^{ pp.alpha = 1; } completion:nil];
+        });
     }
     [win addSubview:wrap];
     CGFloat s = to.size.width / MAX(1, from.size.width);
@@ -2504,8 +2550,7 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     [fold addCompletion:^(__unused UIViewAnimatingPosition p) { land(); }];
     [fold startAnimation];
     [UIView animateWithDuration:0.2 delay:0.02 options:UIViewAnimationOptionCurveEaseIn animations:^{ snap.alpha = 0; } completion:nil];
-    [UIView animateWithDuration:0.22 delay:0.1 options:UIViewAnimationOptionCurveEaseOut animations:^{ pillPic.alpha = 1; } completion:nil];
-    if (!pillPic) [UIView animateWithDuration:0.14 delay:0.34 options:0 animations:^{ wrap.alpha = 0; } completion:nil];
+    if (!wantPic) [UIView animateWithDuration:0.14 delay:0.34 options:0 animations:^{ wrap.alpha = 0; } completion:nil];
     // never leave the pill invisible
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ MPMiniPill *p = wp; if (p && p.alpha < 0.01) p.alpha = 1; });
 }
@@ -2762,6 +2807,7 @@ static void PlayerStarSync(void);
 #pragma mark - grow while scrolling
 
 static void SetPillExpanded(BOOL expanded) {
+    return;   // 1.4.4: the pill keeps one size (growing while you scrolled looked like it resized by itself)
     if (gExpanded == expanded) return;
     gExpanded = expanded;
     UITabBar *tb = gLastTabBar;
