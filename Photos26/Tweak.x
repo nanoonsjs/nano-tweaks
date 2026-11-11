@@ -1,4 +1,5 @@
-// Photos26 2.9 - made by nano
+// Photos26 3.0 - made by nano
+// 3.0: Delete grows out of the trash button as an iOS 26 glass card
 // 2.9: video player sits lower; with the bars showing the photo is framed with round corners (full screen when you tap)
 // 2.8: the look in Camera's photo viewer too (also the camera on the lock screen)
 // 2.7: new icon (settings and header)
@@ -106,7 +107,8 @@ static UIColor *GIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackCo
 static BOOL gEnabled = YES, gTopBar = YES, gPlayer = YES, gDebug = NO, gLoop = YES;
 static BOOL gInMessages, gMessagesPref = YES;
 static BOOL gInCamera, gCameraPref = YES;
-static BOOL gFramePref = YES;   // 2.9: with the bars showing, the photo sits framed between them with round corners   // 2.8: Camera's photo viewer (also from the lock screen) is Photos' own too   // 2.6: also in Messages (its photo/video viewer is Photos' own)
+static BOOL gFramePref = YES;
+static BOOL gDeleteCardPref = YES;   // 3.0: Delete as a glass card out of the trash button   // 2.9: with the bars showing, the photo sits framed between them with round corners   // 2.8: Camera's photo viewer (also from the lock screen) is Photos' own too   // 2.6: also in Messages (its photo/video viewer is Photos' own)
 
 static const void *kMasked = &kMasked;
 static const void *kBusy = &kBusy;
@@ -145,6 +147,7 @@ static void LoadPrefs(void) {
     gMessagesPref = PrefBool(f, @"messages", YES);
     gCameraPref = PrefBool(f, @"camera", YES);
     gFramePref = PrefBool(f, @"frame", YES);
+    gDeleteCardPref = PrefBool(f, @"deletecard", YES);
     if (gInMessages && !gInCamera && !gMessagesPref) gEnabled = NO;
     if (gInCamera && !gCameraPref) gEnabled = NO;
 }
@@ -1705,6 +1708,119 @@ static void LoopTick(AVPlayer *p) {
 
 #pragma mark - taps and the per-frame update
 
+// 3.0 (iOS 26): Delete grows out of the trash button as a glass card with Apple's own words and a red
+// "Delete Photo" button, instead of the old sheet from the bottom. Tap outside and it shrinks back in.
+static CFTimeInterval gTrashAt;
+static __weak UIView *gTrashButton;
+@interface PGDeleteCard : UIView
++ (BOOL)showFor:(UIAlertController *)a;
+@end
+@implementation PGDeleteCard {
+    UIAlertController *_alert; UIView *_card, *_content; CGRect _from, _to; BOOL _closing;
+}
+static void RunAction(UIAlertAction *x) {
+    if (!x) return;
+    void (^h)(UIAlertAction *) = nil;
+    @try { h = [x valueForKey:@"handler"]; } @catch (__unused id e) {}
+    if (h) h(x);
+}
++ (BOOL)showFor:(UIAlertController *)a {
+    UIView *btn = gTrashButton;
+    UIWindow *w = btn.window;
+    if (!w || !a.actions.count) return NO;
+    PGDeleteCard *v = [[PGDeleteCard alloc] initWithFrame:w.bounds];
+    v->_alert = a;
+    v.backgroundColor = UIColor.clearColor;
+    CGRect b = [btn convertRect:btn.bounds toView:w];
+    CGFloat d = MIN(b.size.width, b.size.height);
+    v->_from = CGRectMake(CGRectGetMidX(b) - d / 2, CGRectGetMidY(b) - d / 2, d, d);
+    CGFloat W = MIN(w.bounds.size.width - 32, 272), pad = 20;
+    // Apple's words: title and message, the way the sheet had them
+    NSMutableArray *parts = [NSMutableArray array];
+    if (a.title.length) [parts addObject:a.title];
+    if (a.message.length) [parts addObject:a.message];
+    UILabel *msg = [UILabel new]; msg.numberOfLines = 0;
+    msg.text = [parts componentsJoinedByString:@"\n\n"];
+    msg.font = [UIFont systemFontOfSize:16 weight:UIFontWeightRegular]; msg.textColor = UIColor.labelColor;
+    CGFloat mh = msg.text.length ? ceil([msg sizeThatFits:CGSizeMake(W - pad * 2, CGFLOAT_MAX)].height) : 0;
+    NSMutableArray *acts = [NSMutableArray array];
+    for (UIAlertAction *x in a.actions) if (x.style != UIAlertActionStyleCancel) [acts addObject:x];
+    CGFloat bh = 50, gap = 8;
+    CGFloat H = pad + mh + (mh > 0 ? 18 : 0) + acts.count * bh + MAX(0, (CGFloat)acts.count - 1) * gap + 12;
+    CGFloat right = MIN(w.bounds.size.width - 12, CGRectGetMaxX(b) + 6), bottom = MIN(w.bounds.size.height - 8, CGRectGetMaxY(b) + 6);
+    v->_to = CGRectMake(right - W, bottom - H, W, H);
+    UIView *card = [[UIView alloc] initWithFrame:v->_from];
+    card.clipsToBounds = YES; card.layer.cornerRadius = d / 2; card.layer.cornerCurve = kCACornerCurveContinuous;
+    card.layer.borderWidth = 0.75; card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
+    UIVisualEffectView *glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterial]];
+    glass.frame = card.bounds; glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [card addSubview:glass];
+    UIView *content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, H)];
+    msg.frame = CGRectMake(pad, pad, W - pad * 2, mh); [content addSubview:msg];
+    CGFloat y = pad + mh + (mh > 0 ? 18 : 0);
+    for (UIAlertAction *x in acts) {
+        UIButton *bt = [UIButton buttonWithType:UIButtonTypeSystem];
+        [bt setTitle:x.title forState:UIControlStateNormal];
+        bt.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium];
+        [bt setTitleColor:x.style == UIAlertActionStyleDestructive ? [UIColor colorWithRed:1 green:0.27 blue:0.27 alpha:1] : UIColor.labelColor forState:UIControlStateNormal];
+        bt.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.16];
+        bt.frame = CGRectMake(10, y, W - 20, bh); bt.layer.cornerRadius = bh / 2; bt.layer.cornerCurve = kCACornerCurveContinuous;
+        bt.enabled = x.enabled;
+        bt.tag = [a.actions indexOfObject:x];
+        [bt addTarget:v action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
+        [content addSubview:bt];
+        y += bh + gap;
+    }
+    content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.82, 0.82);
+    content.center = CGPointMake(d / 2, d / 2);
+    [card addSubview:content];
+    v->_card = card; v->_content = content;
+    [v addSubview:card];
+    [w addSubview:v];
+    [v addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:v action:@selector(outside:)]];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    // it grows out of the button like liquid: up and to the left, with a little overshoot
+    CGRect to = v->_to;
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        card.frame = to; card.layer.cornerRadius = 30;
+        content.center = CGPointMake(to.size.width / 2, to.size.height / 2);
+        content.transform = CGAffineTransformIdentity;
+    } completion:nil];
+    [UIView animateWithDuration:0.18 delay:0.07 options:UIViewAnimationOptionCurveEaseOut animations:^{ content.alpha = 1; } completion:nil];
+    return YES;
+}
+- (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e { return _closing ? nil : [super hitTest:p withEvent:e]; }
+- (void)outside:(UITapGestureRecognizer *)g {
+    if (CGRectContainsPoint(_card.frame, [g locationInView:self])) return;
+    UIAlertAction *cancel = nil;
+    for (UIAlertAction *x in _alert.actions) if (x.style == UIAlertActionStyleCancel) cancel = x;
+    [self closeThen:^{ RunAction(cancel); }];
+}
+- (void)pick:(UIButton *)b {
+    UIAlertAction *x = b.tag < (NSInteger)_alert.actions.count ? _alert.actions[b.tag] : nil;
+    if (x.style == UIAlertActionStyleDestructive) [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    [self closeThen:nil];
+    RunAction(x);
+}
+// back into the button it came from
+- (void)closeThen:(void (^)(void))then {
+    if (_closing) return;
+    _closing = YES;
+    UIView *card = _card, *content = _content;
+    CALayer *pl = card.layer.presentationLayer; CGRect cur = pl ? pl.frame : card.frame;
+    [card.layer removeAllAnimations]; card.frame = cur;
+    CGRect from = _from; CGFloat d = from.size.width;
+    [UIView animateWithDuration:0.1 animations:^{ content.alpha = 0; }];
+    [UIView animateWithDuration:0.38 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:0 animations:^{
+        card.frame = from; card.layer.cornerRadius = d / 2;
+        content.center = CGPointMake(d / 2, d / 2); content.transform = CGAffineTransformMakeScale(0.82, 0.82);
+    } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.12 animations:^{ self.alpha = 0; } completion:^(__unused BOOL f2) { [self removeFromSuperview]; }];
+    }];
+    if (then) then();
+}
+@end
+
 // 2.9 (iOS 26): while the bars are showing, the photo / video sits framed between the top buttons and the
 // thumbnails, a little smaller, with round corners. Tap to hide the bars and it grows back to full screen.
 static __weak UIView *gBigTiling;
@@ -1788,6 +1904,7 @@ static void FramePhoto(UIToolbar *tb, BOOL live) {
         Forward(ed);
     }
     BOOL wasFav = [ItemSymbolText(AppleItem(@"heart")) containsString:@"heart.fill"];
+    if ([k isEqualToString:@"trash"]) { gTrashAt = CACurrentMediaTime(); gTrashButton = b; }
     if (![k isEqualToString:@"edit"]) Forward(AppleItem(k));
     if ([k isEqualToString:@"heart"]) {
         UIImageView *iv = b.imageView;
@@ -1888,6 +2005,20 @@ static void StartLink(void) {
 }
 
 #pragma mark - hooks
+
+%hook UIViewController
+- (void)presentViewController:(UIViewController *)vc animated:(BOOL)animated completion:(void (^)(void))completion {
+    // the viewer's Delete: our card out of the trash button instead of the sheet
+    if (gEnabled && gDeleteCardPref && [vc isKindOfClass:[UIAlertController class]] && ((UIAlertController *)vc).preferredStyle == UIAlertControllerStyleActionSheet &&
+        CACurrentMediaTime() - gTrashAt < 1.5 && gTrashButton.window) {
+        gTrashAt = 0;
+        BOOL shown = NO;
+        @try { shown = [PGDeleteCard showFor:(UIAlertController *)vc]; } @catch (__unused id e) {}
+        if (shown) { if (completion) completion(); return; }
+    }
+    %orig;
+}
+%end
 
 %hook UIToolbar
 - (void)setHidden:(BOOL)h {
