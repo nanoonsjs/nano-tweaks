@@ -653,11 +653,24 @@ static CGFloat XStep(CGFloat a, CGFloat b, CGFloat x) { x = MAX(0, MIN(1, (x - a
     __weak UIView *_pill;
     CADisplayLink *_link; CFTimeInterval _lastT;
     CGFloat _prog, _vel, _goal, _zeta;   // 0 = open island, 1 = the pill: one spring, every frame
-    CGRect _P;                            // where the pill is, fixed for the whole move
+    CGRect _P;                            // where it closes to, fixed for the whole move
+    UIView *_insightsC; CGRect _insightsTo;   // kept while the Sleep Timer is showing, for Back
     CGRect _from, _to;
     CGFloat _fromR;
 }
 static __weak MPIsland *gIsland;
+static void XGooAbsorb(UIView *pill, CGRect circleWin);   // MPGoo, below
+static CGFloat gDropX = -1;                               // where the last drop was (window x)
+// 1.5.1: the island goes back the way it came: it shrinks into a drop of liquid above the pill, which is then
+// sucked back down into the pill
+static CGRect XDropAbove(CGRect pillWin) {
+    CGFloat d = 40, r = MIN(pillWin.size.height * 0.5, 7 + d * 0.3);
+    CGFloat R = pillWin.size.height / 2, base = r * 1.6 + 10;
+    CGFloat x = gDropX >= 0 ? gDropX : CGRectGetMidX(pillWin);
+    x = MAX(CGRectGetMinX(pillWin) + R + base, MIN(CGRectGetMaxX(pillWin) - R - base, x));
+    CGFloat cy = CGRectGetMinY(pillWin) + 0.5 - d;
+    return CGRectMake(x - r, cy - r, r * 2, r * 2);
+}
 static CGRect XPillRect(UIView *pill, UIView *in) {
     // the pill as it looks right now (its shrink and position included)
     CALayer *pl = pill.layer.presentationLayer ?: pill.layer;
@@ -742,7 +755,7 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     [w addSubview:v];
     if (seenPill != pill) {
         // from the drop the island needs a moment to grow over the pill before the pill steps away
-        if (fromDrop) { __weak UIView *ws = seenPill; dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.16 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ UIView *sp = ws; if (sp && gIsland.window) [UIView performWithoutAnimation:^{ sp.alpha = 0; }]; }); }
+        if (fromDrop) { __weak UIView *ws = seenPill; dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ UIView *sp = ws; if (sp && gIsland.window) [UIView performWithoutAnimation:^{ sp.alpha = 0; }]; }); }
         else [UIView performWithoutAnimation:^{ seenPill.alpha = 0; }];
     }
 
@@ -762,6 +775,26 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     });
     // one spring, straight out of the pill (the same curve every time)
     // one spring out of the pill: quick, a touch of overshoot, settles like the Dynamic Island
+    if (fromDrop) {
+        // 1.5.1: liquid: the drop swells and stretches up like it's being poured upward, then spreads out
+        // into the island with a wobble
+        CGRect c = seen; CGFloat r = c.size.width / 2;
+        CGRect tall = CGRectMake(CGRectGetMidX(c) - r * 1.25, CGRectGetMaxY(c) - r * 5.2, r * 2.5, r * 5.2);
+        tall.origin.y = MAX(v->_to.origin.y, tall.origin.y);
+        [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
+            shape.frame = tall; shape.layer.cornerRadius = tall.size.width / 2;
+            content.center = CGPointMake(tall.size.width / 2, tall.size.height / 2);
+        } completion:^(__unused BOOL f) {
+            [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+                shape.frame = v->_to; shape.layer.cornerRadius = 44;
+                content.center = CGPointMake(v->_to.size.width / 2, v->_to.size.height / 2);
+                content.transform = CGAffineTransformIdentity;
+            } completion:nil];
+        }];
+        [UIView animateWithDuration:0.22 delay:0.12 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{ content.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.35 animations:^{ v.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3]; }];
+        return;
+    }
     [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.35 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{
         shape.frame = v->_to;
         shape.layer.cornerRadius = 44;
@@ -797,7 +830,7 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     return CGRectMake(cx - w / 2, top, w, MAX(P.size.height, bottom - top));
 }
 - (void)beginMove {
-    _P = [self pillRect];
+    _P = [_pill isKindOfClass:[MPMiniPill class]] ? XDropAbove([self pillRect]) : [self pillRect];
     UIView *fresh = nil;
     if (_pill.window) {
         CGFloat a0 = _pill.alpha;
@@ -872,7 +905,7 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     _content.alpha = 1 - XStep(0.12, 0.62, p);
     // the pill's own picture: its real size, at the bottom where the pill is, fading in
     _snap.frame = CGRectMake((f.size.width - P.size.width) / 2, f.size.height - P.size.height, P.size.width, P.size.height);
-    _snap.alpha = XStep(0.25, 0.75, p);
+    _snap.alpha = [_pill isKindOfClass:[MPMiniPill class]] ? 0 : XStep(0.25, 0.75, p);
     self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3 * (1 - MIN(1, p))];
 }
 - (void)bgTap:(UITapGestureRecognizer *)g { if (!CGRectContainsPoint(_shape.frame, [g locationInView:self])) [self collapse]; }
@@ -894,12 +927,21 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     UIView *nc = [[UIView alloc] initWithFrame:CGRectMake(0, 0, to.size.width, h)];
     __weak MPIsland *ws = self;
     [[MPSleepCtl shared] buildIn:nc width:to.size.width close:^{ [ws collapse]; }];
+    // 1.5.1: Back, right beside the X, goes back to Insights
+    UIButton *back = [UIButton buttonWithType:UIButtonTypeSystem];
+    [back setImage:[UIImage systemImageNamed:@"chevron.left" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+    back.tintColor = UIColor.whiteColor; back.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    back.frame = CGRectMake(to.size.width - 104, 20, 38, 38); back.layer.cornerRadius = 19;
+    [back addTarget:self action:@selector(backTap) forControlEvents:UIControlEventTouchUpInside];
+    [nc addSubview:back];
+    _insightsC = old; _insightsTo = _to;
     nc.alpha = 0; nc.transform = CGAffineTransformMakeScale(0.92, 0.92);
     // keep the new contents pinned to the bottom of the shape while it shrinks
     nc.center = CGPointMake(to.size.width / 2, shape.bounds.size.height - h / 2);
     [shape addSubview:nc];
     _content = nc;
-    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ old.alpha = 0; old.transform = CGAffineTransformMakeScale(0.94, 0.94); } completion:^(__unused BOOL f) { [old removeFromSuperview]; }];
+    old.userInteractionEnabled = NO;
+    [UIView animateWithDuration:0.16 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ old.alpha = 0; old.transform = CGAffineTransformMakeScale(0.94, 0.94); } completion:nil];
     CGRect squeeze = CGRectInset(shape.frame, 6, 0);
     [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ shape.frame = squeeze; nc.center = CGPointMake(squeeze.size.width / 2, squeeze.size.height - h / 2); } completion:^(__unused BOOL f) {
         [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.76 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{
@@ -910,6 +952,24 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     }];
     [UIView animateWithDuration:0.42 delay:0.2 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction animations:^{ nc.alpha = 1; nc.transform = CGAffineTransformIdentity; } completion:nil];
     _to = to;
+}
+// back from the Sleep Timer to Insights: the island grows back and Insights comes back in
+- (void)backTap {
+    if (!_insightsC || self.tag == 0x4D50) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    UIView *sleepC = _content, *ins = _insightsC, *shape = _shape;
+    CGRect to = _insightsTo;
+    _content = ins; _to = to; _insightsC = nil;
+    [shape bringSubviewToFront:ins];
+    ins.transform = CGAffineTransformMakeScale(0.94, 0.94);
+    ins.center = CGPointMake(shape.bounds.size.width / 2, shape.bounds.size.height - to.size.height / 2);
+    [UIView animateWithDuration:0.14 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ sleepC.alpha = 0; sleepC.transform = CGAffineTransformMakeScale(0.94, 0.94); } completion:^(__unused BOOL f) { [sleepC removeFromSuperview]; }];
+    [UIView animateWithDuration:0.6 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        shape.frame = to; shape.layer.cornerRadius = 44;
+        ins.center = CGPointMake(to.size.width / 2, to.size.height / 2);
+        ins.transform = CGAffineTransformIdentity;
+    } completion:^(__unused BOOL f) { ins.userInteractionEnabled = YES; }];
+    [UIView animateWithDuration:0.3 delay:0.12 options:0 animations:^{ ins.alpha = 1; } completion:nil];
 }
 - (void)collapse { [self collapseWithVelocity:0]; }
 // closing, like the Dynamic Island going back: the contents tuck away, the top comes down first,
@@ -955,6 +1015,12 @@ static void XLandBounce(CALayer *L) {
     [_link invalidate]; _link = nil;
     UIView *pill = _pill;
     if (pill.alpha < 0.99) [UIView performWithoutAnimation:^{ pill.alpha = 1; }];
+    if ([pill isKindOfClass:[MPMiniPill class]] && pill.window) {
+        // the drop takes over right where the island became one, and gets sucked into the pill
+        XGooAbsorb(pill, [self convertRect:_P toView:nil]);
+        [UIView animateWithDuration:0.12 animations:^{ self.alpha = 0; } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
+        return;
+    }
     if (pill.window) XLandBounce(pill.layer);
     XLandBounce(_shape.layer);
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
@@ -1030,13 +1096,13 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     CGFloat _bx, _vbx;             // the neck's foot (follows slower, so the neck leans)
     CGFloat _rScale;               // 1 normally; shrinks to 0 when the drop leaves
     int _mode;                     // 0 follow, 1 retract, 2 detached
-    BOOL _light;
+    BOOL _light, _absorbing;
 }
 - (void)beginOn:(UIView *)pill touchX:(CGFloat)x {
     UIView *host = pill.superview;
     if (!host) return;
     [self cleanup];
-    _pill = pill; _mode = 0; _rScale = 1;
+    _pill = pill; _mode = 0; _rScale = 1; _absorbing = NO;
     CGRect P = pill.frame;
     _tx = _x = _bx = MAX(CGRectGetMinX(P), MIN(CGRectGetMaxX(P), x)); _td = _d = 0; _vx = _vd = _vbx = 0;
     _light = pill.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
@@ -1081,6 +1147,17 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     _tx = px.x; _td = MAX(0, d);
 }
 - (void)retract { _mode = 1; _td = 0; }
+// a drop (window circle) sitting above the pill is sucked down into it
+- (void)absorbInto:(UIView *)pill circle:(CGRect)cw {
+    [self beginOn:pill touchX:0];
+    UIView *host = pill.superview; if (!host) return;
+    CGRect c = [pill.window convertRect:cw toView:host];
+    CGFloat top = CGRectGetMinY(pill.frame) + 0.5;
+    _x = _tx = _bx = CGRectGetMidX(c);
+    _d = MAX(0, top - CGRectGetMidY(c)); _vd = -40;
+    _mode = 1; _td = 0; _absorbing = YES;
+    [self draw];
+}
 - (void)detach { _mode = 2; _td = 0; }
 - (void)step:(CADisplayLink *)l {
     CFTimeInterval now = CACurrentMediaTime(); double dt = _last > 0 ? MIN(1.0 / 30, now - _last) : 1.0 / 60; _last = now;
@@ -1157,17 +1234,28 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
 - (void)cleanup {
     [_link invalidate]; _link = nil;
     UIView *pill = _pill;
+    if (_holder && _mode == 1 && pill.window) {
+        // swallowed: the pill gives a squishy bounce
+        XLandBounce(pill.layer);
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:_absorbing ? UIImpactFeedbackStyleSoft : UIImpactFeedbackStyleLight] impactOccurred];
+    }
+    _absorbing = NO;
     UIView *pg = [pill respondsToSelector:@selector(glass)] ? [pill valueForKey:@"glass"] : nil;
     pg.hidden = NO;
     [_holder removeFromSuperview]; _holder = nil;
 }
 @end
 static MPGoo *gGoo;
+static void XGooAbsorb(UIView *pill, CGRect circleWin) {
+    if (!gGoo) gGoo = [MPGoo new];
+    [gGoo absorbInto:pill circle:circleWin];
+}
 
 @implementation MPPillPan { int _axis; BOOL _opened; }   // 1 = sideways, 2 = up
 // the drop lets go of the pill and becomes the Dynamic Pill: it grows out of the drop, the neck snaps back
 - (void)openFrom:(UIView *)v {
     CGRect c = [gGoo dropRectInWindow];
+    gDropX = CGRectGetMidX(c);
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     XTouchLight(v, CGPointZero, NO);
     [MPIsland expandFrom:v circle:c];
