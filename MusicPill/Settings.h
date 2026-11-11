@@ -4,7 +4,7 @@
 // Sleep Timer, tap outside and it shrinks back. Like Control26's Control Center card.
 // The cells are made at runtime as subclasses of PSTableCell, so Music never needs Preferences.framework.
 
-#define MP_VERSION @"1.4.5"
+#define MP_VERSION @"1.4.6"
 
 @interface NSObject (MPPS)
 - (id)propertyForKey:(NSString *)k;
@@ -22,7 +22,8 @@ static void MPSP(id spec, id v, NSString *k) { ((void (*)(id, SEL, id, id))objc_
 @interface MPDemoPhone : UIView
 @end
 @implementation MPDemoPhone {
-    UIView *_screen, *_pill, *_island, *_insights, *_sleep, *_dot;
+    UIView *_screen, *_pill, *_island, *_insights, *_sleep, *_dot, *_splash, *_splashC, *_pillArt;
+    CGRect _splashR;
     NSMutableArray<UIView *> *_bars, *_chips;
     NSUInteger _gen;
     CGRect _pillR, _bigR, _sleepR;
@@ -66,7 +67,7 @@ static UIView *MPBox(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
     _pillR = CGRectMake(4, S.height - 29, S.width - 8, 12);
     _pill = MPBox(_screen, _pillR, 6, [UIColor colorWithWhite:0.24 alpha:1]);
     _pill.layer.borderWidth = 0.5; _pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.25].CGColor;
-    MPBox(_pill, CGRectMake(2.5, 2.5, 7, 7), 1.5, pink);
+    _pillArt = MPBox(_pill, CGRectMake(2.5, 2.5, 7, 7), 1.5, pink);
     MPBox(_pill, CGRectMake(13, 4.5, 20, 3), 1.5, w);
     MPBox(_pill, CGRectMake(_pillR.size.width - 9, 3.5, 5, 5), 1, [UIColor colorWithWhite:1 alpha:0.75]);
     // the island (hidden until it grows out of the pill)
@@ -114,6 +115,21 @@ static UIView *MPBox(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
         [_chips addObject:c];
     }
     [_island addSubview:_sleep];
+    // the song change splash: grows up out of the pill with the new cover and its name
+    _splashR = CGRectMake(3, CGRectGetMaxY(_pillR) - 30, S.width - 6, 30);
+    _splash = MPBox(_screen, _pillR, 6, [UIColor colorWithWhite:0.03 alpha:1]);
+    _splash.clipsToBounds = YES; _splash.alpha = 0;
+    _splash.layer.borderWidth = 0.6; _splash.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2].CGColor;
+    _splashC = [[UIView alloc] initWithFrame:CGRectMake(0, 0, _splashR.size.width, _splashR.size.height)];
+    CAGradientLayer *sg = [CAGradientLayer layer]; sg.type = kCAGradientLayerRadial; sg.frame = _splashC.bounds;
+    sg.colors = @[(id)[violet colorWithAlphaComponent:0.55].CGColor, (id)[violet colorWithAlphaComponent:0].CGColor];
+    sg.startPoint = CGPointMake(0.12, 0.5); sg.endPoint = CGPointMake(0.9, 1.4);
+    [_splashC.layer addSublayer:sg];
+    UIView *sa = MPBox(_splashC, CGRectMake(4, 4, 22, 22), 4, violet); sa.tag = 11;
+    MPBox(_splashC, CGRectMake(31, 6, 12, 2.5), 1.25, pink).tag = 12;
+    MPBox(_splashC, CGRectMake(31, 12, _splashR.size.width - 38, 4), 2, w).tag = 13;
+    MPBox(_splashC, CGRectMake(31, 19, (_splashR.size.width - 38) * 0.6, 3), 1.5, [UIColor colorWithWhite:1 alpha:0.5]).tag = 14;
+    [_splash addSubview:_splashC];
     // the finger
     _dot = MPBox(_screen, CGRectMake(0, 0, 10, 10), 5, [UIColor colorWithWhite:1 alpha:0.9]);
     _dot.layer.shadowColor = UIColor.blackColor.CGColor; _dot.layer.shadowOpacity = 0.5; _dot.layer.shadowRadius = 2; _dot.layer.shadowOffset = CGSizeZero;
@@ -142,6 +158,8 @@ static UIView *MPBox(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
     _pill.alpha = 1; _pill.transform = CGAffineTransformIdentity;
     _island.alpha = 0; _island.frame = _pillR; _island.layer.cornerRadius = 6;
     _insights.alpha = 0; _sleep.alpha = 0;
+    _splash.alpha = 0; _splash.frame = _pillR; _splash.layer.cornerRadius = 6; _splashC.alpha = 0;
+    _pillArt.backgroundColor = [UIColor colorWithRed:0.98 green:0.24 blue:0.37 alpha:1];
     for (UIView *b in _bars) b.transform = CGAffineTransformMakeScale(1, 0.05);
     for (UIView *c in _chips) { c.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14]; c.alpha = 0; c.transform = CGAffineTransformMakeScale(0.6, 0.6); }
     _dot.alpha = 0;
@@ -206,7 +224,32 @@ static UIView *MPBox(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
             [UIView animateWithDuration:0.14 animations:^{ self->_island.alpha = 0; }];
         }];
     }];
-    [self after:7.0 gen:g do:^{ [self loop:g]; }];
+    // 5. a new song starts: the splash grows out of the pill with the new cover, then goes back in
+    [self after:6.5 gen:g do:^{
+        UIColor *violet = [UIColor colorWithRed:0.55 green:0.42 blue:1 alpha:1];
+        [UIView animateWithDuration:0.25 animations:^{ self->_pillArt.backgroundColor = violet; }];
+        self->_splash.alpha = 1; self->_splash.frame = self->_pillR;
+        self->_splashC.center = CGPointMake(self->_pillR.size.width / 2, self->_pillR.size.height / 2);
+        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.3 options:0 animations:^{
+            self->_splash.frame = self->_splashR; self->_splash.layer.cornerRadius = 9;
+            self->_splashC.center = CGPointMake(self->_splashR.size.width / 2, self->_splashR.size.height / 2);
+        } completion:nil];
+        [UIView animateWithDuration:0.18 delay:0.04 options:0 animations:^{ self->_splashC.alpha = 1; } completion:nil];
+        UIView *art = [self->_splashC viewWithTag:11];
+        art.transform = CGAffineTransformMakeScale(0.5, 0.5);
+        [UIView animateWithDuration:0.5 delay:0.1 usingSpringWithDamping:0.55 initialSpringVelocity:0 options:0 animations:^{ art.transform = CGAffineTransformIdentity; } completion:nil];
+        for (NSInteger i = 12; i <= 14; i++) {
+            UIView *v = [self->_splashC viewWithTag:i]; v.alpha = 0; v.transform = CGAffineTransformMakeTranslation(6, 0);
+            [UIView animateWithDuration:0.4 delay:0.16 + (i - 12) * 0.05 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{ v.alpha = 1; v.transform = CGAffineTransformIdentity; } completion:nil];
+        }
+    }];
+    [self after:8.6 gen:g do:^{
+        [UIView animateWithDuration:0.12 animations:^{ self->_splashC.alpha = 0; }];
+        [UIView animateWithDuration:0.42 delay:0.02 usingSpringWithDamping:1 initialSpringVelocity:0 options:0 animations:^{
+            self->_splash.frame = self->_pillR; self->_splash.layer.cornerRadius = 6;
+        } completion:^(__unused BOOL f) { [UIView animateWithDuration:0.14 animations:^{ self->_splash.alpha = 0; }]; }];
+    }];
+    [self after:9.8 gen:g do:^{ [self loop:g]; }];
 }
 @end
 
@@ -223,7 +266,7 @@ static void MPDemoLayout(UITableViewCell *self, SEL _cmd) {
         UILabel *t = [UILabel new]; t.tag = 0x4D5001; t.numberOfLines = 0;
         t.text = @"Try the Dynamic Pill"; t.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold]; t.textColor = UIColor.labelColor;
         UILabel *b = [UILabel new]; b.tag = 0x4D5002; b.numberOfLines = 0;
-        b.text = @"Open Music and swipe up on the now playing pill. It grows into Insights. Tap the moon for the Sleep Timer, tap anywhere outside to close.";
+        b.text = @"Open Music and swipe up on the now playing pill. It grows into Insights. Tap the moon for the Sleep Timer, tap anywhere outside to close. With Song Change Splash on, every new song pops up out of the pill.";
         b.font = [UIFont systemFontOfSize:15]; b.textColor = UIColor.secondaryLabelColor;
         MPDemoPhone *ph = [[MPDemoPhone alloc] initWithFrame:CGRectMake(0, 0, 66, 132)]; ph.tag = 0x4D5003;
         [cv addSubview:t]; [cv addSubview:b]; [cv addSubview:ph];

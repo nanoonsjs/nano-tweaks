@@ -1,4 +1,5 @@
-// MusicPill 1.4.5 - made by nano
+// MusicPill 1.4.6 - made by nano
+// 1.4.6: player close rebuilt (no jump up after), Dynamic Pill fades out as it closes, Song Change Splash shows right away + new look when the pill is minimized, settings demo shows the splash
 // 1.4.5: the pill no longer shows behind the Dynamic Pill
 // 1.4.4: the pill's spot is locked (no more resizing by itself, no grow while scrolling); Dynamic Pill closes on one real spring every frame; smoother player close
 // 1.4.3: Dynamic Pill close/pull-down is one continuous morph: contents shrink and cross-fade into the pill, outline melts away
@@ -1471,7 +1472,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2369,6 +2370,18 @@ static void PillOpenMorph(UIView *pillView, UIView *snap, UIWindow *win) {
 // then on, whatever Music does to its own bar afterwards. Separate spots for Library (smaller pill) and
 // for screen widths; nothing else moves it.
 static NSMutableDictionary<NSString *, NSValue *> *gPillLocks;
+// 1.4.6: where the pill belongs, worked out from Music's bar's LAYOUT and our own size (not from whatever
+// transform Music has on its bar right now): just after the player closes Music's bar is briefly unshrunk,
+// and copying that made our pill jump up for a moment.
+static CGRect PillWantRect(UIView *mini, UIView *host) {
+    UIView *root = host.superview ?: host;
+    CGRect u = UntransformedRect(mini, root);
+    if (CGRectIsNull(u) || u.size.width < 1) return [mini convertRect:mini.bounds toView:host];
+    u = [root convertRect:u toView:host];
+    CGAffineTransform t = PillTransform(mini);
+    CGFloat w = u.size.width * t.a, h = u.size.height * t.d;
+    return CGRectMake(CGRectGetMidX(u) + t.tx - w / 2, CGRectGetMidY(u) + t.ty - h / 2, w, h);
+}
 static CGRect LockedPillRect(CGRect live, UIView *host, UIView *mini) {
     CGFloat HW = host.bounds.size.width, HH = host.bounds.size.height;
     if (HW < 100 || HH < 100) return live;
@@ -2382,8 +2395,7 @@ static CGRect LockedPillRect(CGRect live, UIView *host, UIView *mini) {
     // not locked yet: lock once it has been the same for half a second, settled at our size
     static CGRect cand; static CFTimeInterval candAt; static NSString *candKey;
     BOOL settled = UIApplication.sharedApplication.applicationState == UIApplicationStateActive && !gPillAway &&
-                   CACurrentMediaTime() >= gPillSnapUntil && !mini.layer.animationKeys.count &&
-                   CGAffineTransformEqualToTransform(mini.transform, PillTransform(mini)) &&
+                   CACurrentMediaTime() >= gPillSnapUntil &&
                    live.size.width > 120 && live.size.width <= HW && live.size.height > 30 && live.size.height < 100 &&
                    CGRectGetMaxY(live) <= HH && CGRectGetMaxY(live) > HH * 0.6;
     if (!settled) { candAt = 0; return live; }
@@ -2452,7 +2464,7 @@ static void SyncPill(void) {
     BOOL pillAnimating = NO;
     for (NSString *k in pill.layer.animationKeys) if (![k hasPrefix:@"mp."]) pillAnimating = YES;
     if (!gCollapsed && !pillAnimating && !gLSActive && !gPillAway && CACurrentMediaTime() >= gLSSettle) {
-        CGRect r = LockedPillRect([mini convertRect:mini.bounds toView:host], host, mini);
+        CGRect r = LockedPillRect(PillWantRect(mini, host), host, mini);
         static CGRect lastWant;
         if (!CGRectEqualToRect(pill.frame, r)) {
             pill.compact = NO;
@@ -2479,6 +2491,15 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
     MPMiniPill *pill = nil;
     for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
+    {   // straight onto its locked spot, whatever Music's bar is doing this instant
+        UIView *mn = objc_getAssociatedObject(tb, kMini);
+        if (pill && mn && host && !gCollapsed) {
+            CGRect r = LockedPillRect(PillWantRect(mn, host), host, mn);
+            for (NSString *k in pill.layer.animationKeys) if ([k hasPrefix:@"mp."]) [pill.layer removeAnimationForKey:k];
+            [pill.layer removeAnimationForKey:@"position"]; [pill.layer removeAnimationForKey:@"bounds"];
+            [UIView performWithoutAnimation:^{ pill.frame = r; [pill layoutIfNeeded]; }];
+        }
+    }
     if (!snap) return;
     // Where it lands: our pill, else Music's bar, else just above the tab bar.
     // Only a spot in the bottom part of the screen counts (stale frames sent it up).
@@ -2493,67 +2514,54 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
         CGRect tr = tb.window ? [tb convertRect:tb.bounds toView:win] : CGRectMake(0, WH - 100, WW, 100);
         to = CGRectMake(16, CGRectGetMinY(tr) - 64, WW - 32, 56);
     }
-    // 1.4.2: the player keeps its shape and folds into the pill. Its picture fades out while a picture of the
-    // pill fades in, so at the end the morph IS the pill; then the real pill takes over (no double pill) and
-    // gives a small landing squash. A flick carries its speed into the spring.
+    // 1.4.6: the player shrinks evenly toward the pill (no squashed box with the cover in it). The window
+    // around it narrows straight onto the pill on one spring; the player's picture fades out early, the pill's
+    // picture fades in, then the real pill takes over in the same spot.
     UIView *wrap = [[UIView alloc] initWithFrame:from];
     wrap.userInteractionEnabled = NO;
     wrap.clipsToBounds = YES;
     wrap.layer.cornerRadius = ScreenCorner();
     wrap.layer.cornerCurve = kCACornerCurveContinuous;
     wrap.backgroundColor = PillMorphTint(pill.art.image);
-    snap.frame = wrap.bounds;
     snap.autoresizingMask = UIViewAutoresizingNone;
+    snap.layer.anchorPoint = CGPointMake(0.5, 0);
+    snap.frame = wrap.bounds;
     [wrap addSubview:snap];
-    __block UIView *pillPic = nil;
     BOOL wantPic = target == pill;
     if (wantPic) {
-        // taken one frame later, once the pill has drawn under the morph (forcing a redraw right now stuttered)
+        // the pill's picture is taken a frame later, once it has drawn (it was hidden while the player was up)
         dispatch_async(dispatch_get_main_queue(), ^{
             UIView *pp = pill.window ? [pill snapshotViewAfterScreenUpdates:NO] : nil;
             pill.alpha = 0;
             if (!pp || !wrap.superview) return;
-            pp.frame = wrap.bounds; pp.alpha = 0;
-            pp.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            [wrap addSubview:pp]; pillPic = pp;
-            [UIView animateWithDuration:0.22 delay:0.08 options:UIViewAnimationOptionCurveEaseOut animations:^{ pp.alpha = 1; } completion:nil];
+            pp.alpha = 0; pp.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            pp.frame = wrap.bounds; [wrap addSubview:pp];
+            [UIView animateWithDuration:0.24 delay:0.08 options:UIViewAnimationOptionCurveEaseOut animations:^{ pp.alpha = 1; } completion:nil];
         });
     }
     [win addSubview:wrap];
     CGFloat s = to.size.width / MAX(1, from.size.width);
-    CGFloat hInner = to.size.height / MAX(0.01, s);
     CGFloat dist = MAX(1, CGRectGetMidY(to) - CGRectGetMidY(from));
     CGFloat v0 = MAX(0, MIN(4, gCloseVelocity / dist));
     gCloseVelocity = 0;
-    UISpringTimingParameters *sp = [[UISpringTimingParameters alloc] initWithDampingRatio:0.9 initialVelocity:CGVectorMake(v0, v0)];
-    UIViewPropertyAnimator *fold = [[UIViewPropertyAnimator alloc] initWithDuration:0.5 timingParameters:sp];
+    UISpringTimingParameters *sp = [[UISpringTimingParameters alloc] initWithDampingRatio:0.92 initialVelocity:CGVectorMake(v0, v0)];
+    UIViewPropertyAnimator *fold = [[UIViewPropertyAnimator alloc] initWithDuration:0.48 timingParameters:sp];
     [fold addAnimations:^{
-        wrap.bounds = CGRectMake(0, 0, from.size.width, hInner);
-        wrap.center = CGPointMake(CGRectGetMidX(to), CGRectGetMidY(to));
-        wrap.transform = CGAffineTransformMakeScale(s, s);
-        wrap.layer.cornerRadius = hInner / 2;
-        snap.transform = CGAffineTransformMakeTranslation(0, -from.size.height * 0.08);
+        wrap.frame = to;
+        wrap.layer.cornerRadius = to.size.height / 2;
+        snap.transform = CGAffineTransformMakeScale(s, s);
+        snap.center = CGPointMake(to.size.width / 2, -to.size.height * 0.2);
     }];
     __weak UIView *wt = target; __weak MPMiniPill *wp = pill;
-    void (^land)(void) = ^{
-        UIView *t = wt; MPMiniPill *p = wp;
-        if (p && p.alpha < 0.01) p.alpha = 1;
-        [wrap removeFromSuperview];
-        if (!t) return;
-        CASpringAnimation *sx = [CASpringAnimation animationWithKeyPath:@"transform.scale.x"];
-        sx.fromValue = @1.05; sx.toValue = @1; sx.damping = 11; sx.stiffness = 260; sx.mass = 1; sx.duration = sx.settlingDuration;
-        CASpringAnimation *sy = [CASpringAnimation animationWithKeyPath:@"transform.scale.y"];
-        sy.fromValue = @0.9; sy.toValue = @1; sy.damping = 11; sy.stiffness = 260; sy.mass = 1; sy.duration = sy.settlingDuration;
-        sx.additive = NO; sy.additive = NO;
-        [t.layer addAnimation:sx forKey:@"mp.landx"]; [t.layer addAnimation:sy forKey:@"mp.landy"];
-        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
-    };
-    [fold addCompletion:^(__unused UIViewAnimatingPosition p) { land(); }];
+    [fold addCompletion:^(__unused UIViewAnimatingPosition p) {
+        MPMiniPill *pp = wp; UIView *t = wt;
+        if (pp && pp.alpha < 0.01) pp.alpha = 1;
+        [UIView animateWithDuration:0.12 animations:^{ wrap.alpha = 0; } completion:^(__unused BOOL f) { [wrap removeFromSuperview]; }];
+        if (t) [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+    }];
     [fold startAnimation];
-    [UIView animateWithDuration:0.2 delay:0.02 options:UIViewAnimationOptionCurveEaseIn animations:^{ snap.alpha = 0; } completion:nil];
-    if (!wantPic) [UIView animateWithDuration:0.14 delay:0.34 options:0 animations:^{ wrap.alpha = 0; } completion:nil];
-    // never leave the pill invisible
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ MPMiniPill *p = wp; if (p && p.alpha < 0.01) p.alpha = 1; });
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ snap.alpha = 0; } completion:nil];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ MPMiniPill *p = wp; if (p && p.alpha < 0.01) p.alpha = 1; if (wrap.superview) [wrap removeFromSuperview]; });
 }
 
 #pragma mark - drag to close

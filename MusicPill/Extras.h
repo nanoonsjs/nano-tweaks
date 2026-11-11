@@ -841,6 +841,12 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     double h = dt / n;
     for (int i = 0; i < n; i++) { double a = -k * (_prog - _goal) - c * _vel; _vel += a * h; _prog += _vel * h; }
     [self show:_prog];
+    if (_goal >= 1) {
+        // 1.4.6: closing: the real pill is back underneath once the island covers just its spot, and the
+        // island fades away as it lands on it
+        if (_prog > 0.5 && _pill.alpha < 0.99) [UIView performWithoutAnimation:^{ self->_pill.alpha = 1; }];
+        self.alpha = 1 - XStep(0.55, 0.97, _prog);
+    }
     if (fabs(_prog - _goal) < 0.0015 && fabs(_vel) < 0.02) {
         [_link invalidate]; _link = nil;
         _prog = _goal; [self show:_goal];

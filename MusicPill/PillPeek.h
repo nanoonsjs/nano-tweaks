@@ -238,12 +238,21 @@ static void AddPeek(UIView *v) {
     UIView *_holder, *_shape, *_content; __weak UIView *_pill;
     CADisplayLink *_link; CGRect _lastPill; CGFloat _H;
     NSUInteger _gen;
+    BOOL _compact;                 // the pill is minimized: the bubble version
+    UIImageView *_art; CAGradientLayer *_glow; UIImage *_shownArt;
+}
+// minimized pill: a floating bubble above the bar, centered on the screen
+static CGRect XSplashBubbleRect(CGRect pr) {
+    CGFloat SW = UIScreen.mainScreen.bounds.size.width, W = MIN(SW - 32, 300), H = 64;
+    return CGRectMake(round((SW - W) / 2), CGRectGetMinY(pr) - 12 - H, W, H);
 }
 + (instancetype)shared { static MPSplash *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [MPSplash new]; }); return s; }
 - (BOOL)up { return _holder.superview != nil; }
 - (void)show {
     UIView *pill = nil; CGRect pr = XPillOnScreen(&pill);
     if (!pill || pr.size.width < 30 || XPillBusy() || [self up]) return;
+    if (gCollapsed) { [self showBubble:pill rect:pr]; return; }
+    _compact = NO;
     _H = 112;
     CGRect to = XExpandRect(pr, _H); CGFloat W = to.size.width;
     UIView *c = [UIView new];
@@ -251,6 +260,8 @@ static void AddPeek(UIView *v) {
     art.image = gXArt; art.contentMode = UIViewContentModeScaleAspectFill; art.clipsToBounds = YES;
     art.layer.cornerRadius = 16; art.layer.cornerCurve = kCACornerCurveContinuous;
     [c addSubview:art];
+    if (!art.image) { art.image = [UIImage systemImageNamed:@"music.note"]; art.contentMode = UIViewContentModeCenter; art.tintColor = [UIColor colorWithWhite:1 alpha:0.6]; art.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1]; }
+    _art = art; _shownArt = gXArt;
     // a soft glow of the cover's color behind everything
     CAGradientLayer *glow = [CAGradientLayer layer]; glow.type = kCAGradientLayerRadial;
     UIColor *gc = XColorsOf(gXArt).firstObject ?: MusicPink();
@@ -258,6 +269,7 @@ static void AddPeek(UIView *v) {
     glow.startPoint = CGPointMake(0.15, 0.5); glow.endPoint = CGPointMake(0.9, 1.4);
     glow.frame = CGRectMake(0, 0, W, _H);
     [c.layer insertSublayer:glow atIndex:0];
+    _glow = glow;
     MPWave *wave = [[MPWave alloc] initWithFrame:CGRectMake(112, 20, 22, 16)]; wave.backgroundColor = UIColor.clearColor; [c addSubview:wave]; [wave setPlaying:YES];
     UILabel *k = XLabel(@"NOW PLAYING", 11, UIFontWeightBold, MusicPink()); k.frame = CGRectMake(138, 21, W - 152, 14); [c addSubview:k];
     UILabel *t = XLabel(gXTitle ?: @"", 19, UIFontWeightBold, nil); t.frame = CGRectMake(112, 40, W - 126, 24); t.adjustsFontSizeToFitWidth = NO; t.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:t];
@@ -287,16 +299,90 @@ static void AddPeek(UIView *v) {
     NSUInteger g = ++_gen;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (self->_gen == g) [self hide]; });
 }
+// 1.4.6: minimized pill: a bubble lifts off the little pill, floats up and opens wide above the bar;
+// the cover spins in, the words slide up. Going away it does the same backwards and drops back in.
+- (void)showBubble:(UIView *)pill rect:(CGRect)pr {
+    UIWindow *w = pill.window; if (!w) return;
+    _compact = YES; _H = 64;
+    CGRect to = XSplashBubbleRect(pr); CGFloat W = to.size.width, H = to.size.height;
+    UIView *holder = [[MPPassView alloc] initWithFrame:w.bounds]; holder.userInteractionEnabled = NO;
+    CGFloat d = MIN(pr.size.height, pr.size.width);
+    CGRect seed = CGRectMake(CGRectGetMidX(pr) - d / 2, CGRectGetMidY(pr) - d / 2, d, d);
+    UIView *shape = XIslandShape(seed);
+    shape.layer.cornerRadius = d / 2;
+    UIView *c = [[UIView alloc] initWithFrame:CGRectMake(0, 0, W, H)];
+    c.alpha = 0;
+    CAGradientLayer *glow = [CAGradientLayer layer]; glow.type = kCAGradientLayerRadial;
+    UIColor *gc = XColorsOf(gXArt).firstObject ?: MusicPink();
+    glow.colors = @[(id)[gc colorWithAlphaComponent:0.6].CGColor, (id)[gc colorWithAlphaComponent:0].CGColor];
+    glow.startPoint = CGPointMake(0.08, 0.5); glow.endPoint = CGPointMake(0.75, 1.6); glow.frame = c.bounds;
+    [c.layer addSublayer:glow]; _glow = glow;
+    UIImageView *art = [[UIImageView alloc] initWithFrame:CGRectMake(10, 10, 44, 44)];
+    art.image = gXArt; art.contentMode = UIViewContentModeScaleAspectFill; art.clipsToBounds = YES;
+    art.layer.cornerRadius = 22;
+    if (!art.image) { art.image = [UIImage systemImageNamed:@"music.note"]; art.contentMode = UIViewContentModeCenter; art.tintColor = [UIColor colorWithWhite:1 alpha:0.6]; art.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1]; }
+    [c addSubview:art]; _art = art; _shownArt = gXArt;
+    UILabel *t = XLabel(gXTitle ?: @"", 16, UIFontWeightBold, nil); t.frame = CGRectMake(64, 13, W - 64 - 44, 20); t.adjustsFontSizeToFitWidth = NO; t.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:t];
+    UILabel *a = XLabel(gXArtist ?: @"", 13, UIFontWeightMedium, [UIColor colorWithWhite:1 alpha:0.6]); a.frame = CGRectMake(64, 33, W - 64 - 44, 17); a.adjustsFontSizeToFitWidth = NO; a.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:a];
+    MPWave *wave = [[MPWave alloc] initWithFrame:CGRectMake(W - 36, 24, 22, 16)]; wave.backgroundColor = UIColor.clearColor; [c addSubview:wave]; [wave setPlaying:YES];
+    c.center = CGPointMake(d / 2, d / 2);
+    [shape addSubview:c];
+    [holder addSubview:shape]; [w addSubview:holder];
+    _holder = holder; _shape = shape; _content = c; _pill = pill; _lastPill = pr;
+    holder.userInteractionEnabled = YES; shape.userInteractionEnabled = YES;
+    [shape addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped)]];
+    // 1. the bubble lifts off the pill
+    CGRect lift = CGRectMake(CGRectGetMidX(pr) - H * 0.42, CGRectGetMidY(to) - H * 0.42, H * 0.84, H * 0.84);
+    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        shape.frame = lift; shape.layer.cornerRadius = lift.size.height / 2;
+        c.center = CGPointMake(lift.size.width / 2, lift.size.height / 2);
+    } completion:^(__unused BOOL f) {
+        // 2. it opens wide with a little overshoot
+        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.72 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            shape.frame = to; shape.layer.cornerRadius = H / 2;
+            c.center = CGPointMake(W / 2, H / 2);
+        } completion:nil];
+        [UIView animateWithDuration:0.2 delay:0.05 options:0 animations:^{ c.alpha = 1; } completion:nil];
+    }];
+    // the cover spins in, the words rise
+    CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+    spin.fromValue = @(-M_PI * 0.9); spin.toValue = @0; spin.duration = 0.75; spin.beginTime = CACurrentMediaTime() + 0.18;
+    spin.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2 :0.9 :0.25 :1]; spin.fillMode = kCAFillModeBackwards;
+    [art.layer addAnimation:spin forKey:@"spin"];
+    for (NSUInteger i = 0; i < 2; i++) {
+        UIView *v = i ? a : t; v.alpha = 0; v.transform = CGAffineTransformMakeTranslation(0, 10);
+        [UIView animateWithDuration:0.5 delay:0.3 + i * 0.06 usingSpringWithDamping:0.8 initialSpringVelocity:0 options:0 animations:^{ v.alpha = 1; v.transform = CGAffineTransformIdentity; } completion:nil];
+    }
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+    [_link invalidate];
+    _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(follow)];
+    [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    NSUInteger g = ++_gen;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (self->_gen == g) [self hide]; });
+}
+// the cover can arrive a moment after the song changes: swap it in with a crossfade
+- (void)updateArt {
+    if (!_art || !gXArt || gXArt == _shownArt) return;
+    _shownArt = gXArt;
+    UIImageView *art = _art;
+    [UIView transitionWithView:art duration:0.3 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+        art.image = gXArt; art.contentMode = UIViewContentModeScaleAspectFill; art.backgroundColor = nil;
+    } completion:nil];
+    UIColor *gc = XColorsOf(gXArt).firstObject ?: MusicPink();
+    _glow.colors = @[(id)[gc colorWithAlphaComponent:_compact ? 0.6 : 0.55].CGColor, (id)[gc colorWithAlphaComponent:0].CGColor];
+}
 // the pill minimizes / expands while you scroll: the splash moves with it, and anything that covers the pill closes it
 - (void)follow {
     if (!_holder.superview) { [_link invalidate]; _link = nil; return; }
     if (XPillBusy()) { [self hide]; return; }
     UIView *pill = nil; CGRect pr = XPillOnScreen(&pill);
     if (!pill) { [self hide]; return; }
+    [self updateArt];
+    if (_compact != gCollapsed) { [self hide]; return; }   // the pill changed mode: this splash's shape no longer fits
     if (pill != _pill) _pill = pill;
     if (fabs(CGRectGetMaxY(pr) - CGRectGetMaxY(_lastPill)) < 0.5 && fabs(CGRectGetMidX(pr) - CGRectGetMidX(_lastPill)) < 0.5 && fabs(pr.size.width - _lastPill.size.width) < 0.5) return;
     _lastPill = pr;
-    CGRect to = XExpandRect(pr, _H);
+    CGRect to = _compact ? XSplashBubbleRect(pr) : XExpandRect(pr, _H);
     UIView *shape = _shape, *c = _content;
     [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
         shape.frame = to;
@@ -312,24 +398,68 @@ static void AddPeek(UIView *v) {
     _gen++;
     [_link invalidate]; _link = nil;
     UIView *h = _holder, *s = _shape, *c = _content, *p = _pill;
-    _holder = nil; _shape = nil; _content = nil;
-    if (h) { h.userInteractionEnabled = NO; XShrinkToPill(h, s, c, p); }
+    _holder = nil; _shape = nil; _content = nil; _art = nil; _glow = nil;
+    if (!h) return;
+    h.userInteractionEnabled = NO;
+    if (!_compact) { XShrinkToPill(h, s, c, p); return; }
+    CALayer *pl = s.layer.presentationLayer; CGRect cur = pl ? pl.frame : s.frame;
+    [s.layer removeAllAnimations]; s.frame = cur;
+    CGRect pr = p.window ? [p convertRect:p.bounds toView:h] : cur;
+    CGFloat H = cur.size.height;
+    CGRect ball = CGRectMake(CGRectGetMidX(pr) - H * 0.42, CGRectGetMidY(cur) - H * 0.42, H * 0.84, H * 0.84);
+    CGFloat d = MIN(pr.size.height, pr.size.width);
+    CGRect drop = CGRectMake(CGRectGetMidX(pr) - d / 2, CGRectGetMidY(pr) - d / 2, d, d);
+    [UIView animateWithDuration:0.14 animations:^{ c.alpha = 0; }];
+    [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:0 animations:^{
+        s.frame = ball; s.layer.cornerRadius = ball.size.height / 2;
+        c.center = CGPointMake(ball.size.width / 2, ball.size.height / 2);
+    } completion:^(__unused BOOL f) {
+        [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+            s.frame = drop; s.layer.cornerRadius = d / 2; s.alpha = 0;
+        } completion:^(__unused BOOL f2) { [h removeFromSuperview]; }];
+    }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [h removeFromSuperview]; });
 }
 @end
 static NSString *gSplashLast;
 static CFTimeInterval gSplashChangedAt;
+static UIImage *gSplashArtAtChange;
+// 1.4.6: right away. The splash comes up as soon as the new song's name is in; it waits at most a
+// moment for the new cover (and swaps it in live if it's later than that).
 static void SplashTick(void) {
     if (!gSplashPref || !gRound) { gSplashLast = gXTitle; return; }
     NSString *now = gXTitle.length ? [NSString stringWithFormat:@"%@|%@", gXTitle, gXArtist ?: @""] : nil;
     if (!now) return;
     if (!gSplashLast) { gSplashLast = now; return; }   // not when Music opens
     if (![now isEqualToString:gSplashLast]) {
-        gSplashLast = now; gSplashChangedAt = CACurrentMediaTime();
+        gSplashLast = now; gSplashChangedAt = CACurrentMediaTime(); gSplashArtAtChange = gXArt;
         if ([[MPSplash shared] up]) [[MPSplash shared] hide];   // a quicker skip: the old one goes first
-        return;
     }
-    // wait a beat after the change so the new cover is in
-    if (gSplashChangedAt > 0 && CACurrentMediaTime() - gSplashChangedAt > 0.45) { gSplashChangedAt = 0; if (gXArt) [[MPSplash shared] show]; }
+    if (gSplashChangedAt <= 0) return;
+    BOOL artIn = gXArt && gXArt != gSplashArtAtChange;
+    CFTimeInterval waited = CACurrentMediaTime() - gSplashChangedAt;
+    if ([[MPSplash shared] up] && waited < 0.3) return;   // the old one is still going away
+    if (artIn || waited > 0.25) {
+        gSplashChangedAt = 0;
+        [[MPSplash shared] show];
+    }
+}
+// MediaRemote tells us the moment the song changes; ask for the new info and check quickly a few times
+static void SplashKick(void) {
+    XPoll();
+    for (NSNumber *d in @[@0.06, @0.14, @0.26, @0.4, @0.6]) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (d.doubleValue >= 0.26) XPoll();
+        SplashTick();
+    });
+}
+static void StartSplashWatch(void) {
+    static BOOL done; if (done) return; done = YES;
+    void *h = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY);
+    void (*reg)(dispatch_queue_t) = h ? (void (*)(dispatch_queue_t))dlsym(h, "MRMediaRemoteRegisterForNowPlayingNotifications") : NULL;
+    if (reg) reg(dispatch_get_main_queue());
+    for (NSString *n in @[@"kMRMediaRemoteNowPlayingInfoDidChangeNotification", @"kMRMediaRemoteNowPlayingApplicationIsPlayingDidChangeNotification", @"MPMusicPlayerControllerNowPlayingItemDidChangeNotification"])
+        [[NSNotificationCenter defaultCenter] addObserverForName:n object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(__unused NSNotification *x) { if (gSplashPref) SplashKick(); }];
+    @try { [[MPMusicPlayerController systemMusicPlayer] beginGeneratingPlaybackNotifications]; } @catch (__unused id e) {}
 }
 
 #pragma mark - share card (story size)
@@ -396,6 +526,7 @@ static void StartPeek(void) {
     static dispatch_source_t t;
     if (t) return;
     StartPeekGuard();
+    StartSplashWatch();
     t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
     dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), (uint64_t)(0.25 * NSEC_PER_SEC), (uint64_t)(0.05 * NSEC_PER_SEC));
     dispatch_source_set_event_handler(t, ^{
