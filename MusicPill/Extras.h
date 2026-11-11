@@ -671,10 +671,15 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     v.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
     gIsland = v;
-    v->_pill = pill;
+    // 1.4.5: the pill you SEE is our drawn pill (Music's own bar is invisible under it): the island takes its
+    // picture and spot from that one, and hides it while the island is up, so it never shows behind
+    UIView *seenPill = pill;
+    id po = gPillObj;
+    if ([po isKindOfClass:[UIView class]] && ((UIView *)po).window == w && !((UIView *)po).hidden && ((UIView *)po).alpha > 0.05) seenPill = po;
+    v->_pill = seenPill;
     // the island starts exactly where the pill is on screen right now: still stretched up by your swipe
     NSValue *dragV = objc_getAssociatedObject(pill, kDragT);
-    CGRect rest = [pill convertRect:pill.bounds toView:w];
+    CGRect rest = [seenPill convertRect:seenPill.bounds toView:w];
     CGRect seen = rest;
     if (dragV) {
         CATransform3D t = dragV.CATransform3DValue;
@@ -699,7 +704,7 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     UIView *ink = [[UIView alloc] initWithFrame:shape.bounds];   // deep and dark like the island
     ink.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; ink.autoresizingMask = blur.autoresizingMask;
     [shape addSubview:ink];
-    UIView *snap = [pill snapshotViewAfterScreenUpdates:NO];
+    UIView *snap = [seenPill snapshotViewAfterScreenUpdates:NO];
     // the pill's picture keeps its size and stays at the bottom while the island grows up out of it (no stretching)
     if (snap) { snap.frame = CGRectMake((seen.size.width - rest.size.width) / 2, seen.size.height - rest.size.height, rest.size.width, rest.size.height); snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin; [shape addSubview:snap]; }
     v->_snap = snap;
@@ -730,6 +735,7 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     v->_shape = shape; v->_content = content;
     [v addSubview:shape];
     [w addSubview:v];
+    if (seenPill != pill) [UIView performWithoutAnimation:^{ seenPill.alpha = 0; }];
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:v action:@selector(bgTap:)];
     [v addGestureRecognizer:tap];
@@ -783,7 +789,13 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
 }
 - (void)beginMove {
     _P = [self pillRect];
-    UIView *fresh = _pill.window ? [_pill snapshotViewAfterScreenUpdates:NO] : nil;
+    UIView *fresh = nil;
+    if (_pill.window) {
+        CGFloat a0 = _pill.alpha;
+        [UIView performWithoutAnimation:^{ self->_pill.alpha = 1; }];
+        fresh = [_pill snapshotViewAfterScreenUpdates:a0 < 0.99];
+        [UIView performWithoutAnimation:^{ self->_pill.alpha = a0; }];
+    }
     if (fresh) { fresh.alpha = _snap.alpha; [_snap removeFromSuperview]; _snap = fresh; [_shape addSubview:fresh]; }
     _snap.autoresizingMask = UIViewAutoresizingNone;
     [_shape bringSubviewToFront:_snap];
