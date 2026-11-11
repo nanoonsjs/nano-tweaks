@@ -1,4 +1,5 @@
-// Photos26 2.8 - made by nano
+// Photos26 2.9 - made by nano
+// 2.9: video player sits lower; with the bars showing the photo is framed with round corners (full screen when you tap)
 // 2.8: the look in Camera's photo viewer too (also the camera on the lock screen)
 // 2.7: new icon (settings and header)
 // 2.6.1: new settings page; Messages' viewer moved to Messages26 (it's Quick Look there, not Photos).
@@ -104,7 +105,8 @@ static UIColor *GIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackCo
 
 static BOOL gEnabled = YES, gTopBar = YES, gPlayer = YES, gDebug = NO, gLoop = YES;
 static BOOL gInMessages, gMessagesPref = YES;
-static BOOL gInCamera, gCameraPref = YES;   // 2.8: Camera's photo viewer (also from the lock screen) is Photos' own too   // 2.6: also in Messages (its photo/video viewer is Photos' own)
+static BOOL gInCamera, gCameraPref = YES;
+static BOOL gFramePref = YES;   // 2.9: with the bars showing, the photo sits framed between them with round corners   // 2.8: Camera's photo viewer (also from the lock screen) is Photos' own too   // 2.6: also in Messages (its photo/video viewer is Photos' own)
 
 static const void *kMasked = &kMasked;
 static const void *kBusy = &kBusy;
@@ -142,6 +144,7 @@ static void LoadPrefs(void) {
     gLoop    = PrefBool(f, @"loop", YES);
     gMessagesPref = PrefBool(f, @"messages", YES);
     gCameraPref = PrefBool(f, @"camera", YES);
+    gFramePref = PrefBool(f, @"frame", YES);
     if (gInMessages && !gInCamera && !gMessagesPref) gEnabled = NO;
     if (gInCamera && !gCameraPref) gEnabled = NO;
 }
@@ -1055,7 +1058,7 @@ static void LayoutBottom(UIToolbar *tb) {
     if (video) {
         CGFloat filmTop = film ? [film convertRect:film.bounds toView:tb].origin.y : -58;
         CGFloat VD = 54;
-        CGFloat vy = MIN(filmTop, -40) - 12 - VD;
+        CGFloat vy = MIN(filmTop, -40) + 16 - VD;   // 2.9: lower, close to the thumbnails
         CGFloat vx = 22, vw = W - vx * 2;
         gToolbarFwd = tb;
         UILabel *le = nil, *lt = nil;
@@ -1702,6 +1705,65 @@ static void LoopTick(AVPlayer *p) {
 
 #pragma mark - taps and the per-frame update
 
+// 2.9 (iOS 26): while the bars are showing, the photo / video sits framed between the top buttons and the
+// thumbnails, a little smaller, with round corners. Tap to hide the bars and it grows back to full screen.
+static __weak UIView *gBigTiling;
+static BOOL gFramed;
+static BOOL Shown(UIView *v) {
+    for (UIView *p = v; p; p = p.superview) if (p.hidden || p.alpha < 0.5) return NO;
+    return v.window != nil;
+}
+static void FramePhoto(UIToolbar *tb, BOOL live) {
+    UIView *tv = gBigTiling;
+    UIWindow *w = tb.window;
+    if (live && w && (!tv || tv.window != w)) {
+        // the big photo pager: the widest tiling view, taller than most of the screen
+        NSMutableArray *stack = [NSMutableArray arrayWithObject:w]; int guard = 0; tv = nil;
+        Class TC = objc_getClass("PUTilingView");
+        while (stack.count && guard++ < 2500) {
+            UIView *v = stack.lastObject; [stack removeLastObject];
+            if (TC && [v isKindOfClass:TC] && v.bounds.size.height > w.bounds.size.height * 0.6) { tv = v; break; }
+            [stack addObjectsFromArray:v.subviews];
+        }
+        gBigTiling = tv;
+    }
+    if (!tv) return;
+    BOOL want = live && gEnabled && gFramePref && w && Shown(tb);
+    UINavigationBar *nb = gNavBar;
+    CGFloat H = tv.bounds.size.height, W = tv.bounds.size.width;
+    CGAffineTransform t = CGAffineTransformIdentity;
+    CGFloat radius = 0;
+    if (want && H > 0) {
+        CGFloat top = nb.window ? CGRectGetMaxY([nb convertRect:nb.bounds toView:nil]) + 10 : w.safeAreaInsets.top + 64;
+        UIView *film = FindFilmstrip(w, 0);
+        CGFloat bottom = film ? [film convertRect:film.bounds toView:nil].origin.y - 6 : [tb convertRect:tb.bounds toView:nil].origin.y - 60;
+        // keep the video player's room free too
+        UIView *gv = nil; for (UIView *x in [tb viewWithTag:BOTTOM_TAG].subviews) if ([x.accessibilityIdentifier isEqualToString:@"video"] && !x.hidden) gv = x;
+        if (gv) bottom = MIN(bottom, [gv convertRect:gv.bounds toView:nil].origin.y - 8);
+        CGFloat sc = MIN((bottom - top) / H, (W - 28) / W);
+        sc = MAX(0.5, MIN(1, sc));
+        CGRect tf = [tv.superview convertRect:tv.frame toView:nil];
+        CGFloat midNow = CGRectGetMidY(tf), want2 = (top + bottom) / 2;
+        // tv.frame already includes the current transform: work from its untransformed center
+        CGPoint cWin = [tv.superview convertPoint:tv.center toView:nil];
+        (void)midNow;
+        t = CGAffineTransformScale(CGAffineTransformMakeTranslation(0, want2 - cWin.y), sc, sc);
+        radius = 26 / sc;
+    }
+    if (CGAffineTransformEqualToTransform(tv.transform, t) && gFramed == want) return;
+    BOOL changed = gFramed != want; gFramed = want;
+    void (^apply)(void) = ^{
+        tv.transform = t;
+        for (UIView *tile in tv.subviews) {
+            if (tile.bounds.size.height < 200) continue;
+            tile.layer.cornerRadius = radius; tile.layer.masksToBounds = radius > 0;
+            if (@available(iOS 13.0, *)) tile.layer.cornerCurve = kCACornerCurveContinuous;
+        }
+    };
+    if (changed && tv.window) [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:apply completion:nil];
+    else [UIView performWithoutAnimation:apply];
+}
+
 @implementation PGTarget
 + (instancetype)shared { static PGTarget *t; static dispatch_once_t o; dispatch_once(&o, ^{ t = [PGTarget new]; }); return t; }
 - (void)down:(PGButton *)b { }
@@ -1773,13 +1835,14 @@ static void LoopTick(AVPlayer *p) {
             UIToolbar *t = gToolbar; if (t) { @try { LayoutBottom(t); } @catch (__unused id e) {} }
         });
 }
-- (void)tick:(CADisplayLink *)link {
+- (void)tick:(CADisplayLink *)link {   // (FramePhoto above)
     UIToolbar *tb = gToolbar;
     UIView *c = [tb viewWithTag:BOTTOM_TAG];
     if (!tb.window || tb.hidden) gWasSelect = NO;
-    if (!tb.window || !c || c.hidden) { [gLink invalidate]; gLink = nil; return; }
+    if (!tb.window || !c || c.hidden) { FramePhoto(nil, NO); [gLink invalidate]; gLink = nil; return; }
     static NSUInteger frame; frame++;
     @try {
+        if (frame % 2 == 0) FramePhoto(tb, YES);
         if (frame % 12 == 0) LayoutBottom(tb);
         if (frame % 20 == 9) StyleFilmstrip(tb.window);
         if (frame % 30 == 2) {
