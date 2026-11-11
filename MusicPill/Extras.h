@@ -664,11 +664,14 @@ static CGFloat gDropX = -1;                               // where the last drop
 // 1.5.1: the island goes back the way it came: it shrinks into a drop of liquid above the pill, which is then
 // sucked back down into the pill
 static CGRect XDropAbove(CGRect pillWin) {
-    CGFloat d = 40, r = MIN(pillWin.size.height * 0.5, 7 + d * 0.3);
-    CGFloat R = pillWin.size.height / 2, base = r * 1.6 + 10;
+    // the same drop the pull makes at this height (1.5.6 shape), so the hand-off is seamless
+    CGFloat d = 60, t = MIN(1, d / 80); t = 1 - (1 - t) * (1 - t);
+    CGFloat r = MIN(pillWin.size.height * 0.5, 6 + 22 * t);
+    CGFloat f = MAX(0, MIN(1, (d - 4) / 56)); f = f * f * (3 - 2 * f);
+    CGFloat R = pillWin.size.height / 2, base = r * 1.9 + 12;
     CGFloat x = gDropX >= 0 ? gDropX : CGRectGetMidX(pillWin);
     x = MAX(CGRectGetMinX(pillWin) + R + base, MIN(CGRectGetMaxX(pillWin) - R - base, x));
-    CGFloat cy = CGRectGetMinY(pillWin) + 0.5 - d;
+    CGFloat cy = CGRectGetMinY(pillWin) + 0.5 - d + r * 0.8 * (1 - f);
     return CGRectMake(x - r, cy - r, r * 2, r * 2);
 }
 static CGRect XPillRect(UIView *pill, UIView *in) {
@@ -1178,12 +1181,20 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
 - (CGRect)dropRectInWindow {
     UIView *pill = _pill; CGRect P = pill.frame;
     CGFloat r = [self radiusFor:_d P:P];
-    CGFloat cx = [self clampX:_x r:r P:P], by = CGRectGetMinY(P) + 0.5 - MAX(0, _d);
+    CGFloat cx = [self clampX:_x r:r P:P], by = [self dropY:_d r:r P:P];
     return [pill.superview convertRect:CGRectMake(cx - r, by - r, r * 2, r * 2) toView:pill.window];
 }
-- (CGFloat)radiusFor:(CGFloat)d P:(CGRect)P { return MIN(P.size.height * 0.5, 7 + MAX(0, d) * 0.3); }
+// 1.5.6: the drop grows quickly at first and slows as it gets big
+- (CGFloat)radiusFor:(CGFloat)d P:(CGRect)P {
+    CGFloat t = MIN(1, MAX(0, d) / 80); t = 1 - (1 - t) * (1 - t);
+    return MIN(P.size.height * 0.5, 6 + 22 * t);
+}
+// how formed the drop is: 0 = a soft bump on the pill, 1 = a round drop on a thin neck
+static CGFloat GooForm(CGFloat d) { CGFloat x = MAX(0, MIN(1, (d - 4) / 56)); return x * x * (3 - 2 * x); }
+// the drop's middle: at first it sits mostly inside the pill (just a bump), then it rises out
+- (CGFloat)dropY:(CGFloat)d r:(CGFloat)r P:(CGRect)P { return CGRectGetMinY(P) + 0.5 - MAX(0, d) + r * 0.8 * (1 - GooForm(d)); }
 - (CGFloat)clampX:(CGFloat)x r:(CGFloat)r P:(CGRect)P {
-    CGFloat R = P.size.height / 2, base = r * 1.6 + 10;
+    CGFloat R = P.size.height / 2, base = r * 1.9 + 12;
     return MAX(CGRectGetMinX(P) + R + base, MIN(CGRectGetMaxX(P) - R - base, x));
 }
 - (void)draw {
@@ -1196,22 +1207,26 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     CGFloat r0 = [self radiusFor:d P:P] * _rScale;
     CGFloat rx = r0 * (1 - stretch * 0.5), ry = r0 * (1 + stretch);
     CGFloat cx = [self clampX:_x r:r0 P:P], fx = [self clampX:_bx r:r0 P:P];
-    CGFloat by = top - d;
-    CGFloat base = r0 * 1.6 + 10 * MIN(1, d / 6 + 0.2);
-    CGFloat neck = MAX(0.8, r0 * 0.7 - d * 0.06);
+    CGFloat form = GooForm(d);
+    // surface tension: while you hold it, it quivers a tiny bit
+    if (_mode == 0) { CGFloat q = sin(CACurrentMediaTime() * 9) * 0.025 * (1 - form * 0.5); ry *= 1 + q; rx *= 1 - q * 0.6; }
+    CGFloat by = [self dropY:d r:r0 P:P];
+    // a wide soft foot at first (a bump), narrowing into a neck that pinches thinner as it rises
+    CGFloat base = r0 * (1.9 - 0.3 * form) + 8 + 4 * form;
+    CGFloat neck = r0 * (1.05 - 0.75 * form) + 0.9 * form;
     CGFloat lean = (cx - fx) * 0.5;
     UIBezierPath *p = [UIBezierPath bezierPath];
     // the pill (a capsule) with the drop rising out of its top edge, as one outline
     [p moveToPoint:CGPointMake(CGRectGetMinX(P) + R, top)];
     if (r0 > 0.5 && d > 0.5) {
         [p addLineToPoint:CGPointMake(fx - base, top)];
-        CGPoint lt = CGPointMake(cx - rx * 0.95, by + ry * 0.3), rt = CGPointMake(cx + rx * 0.95, by + ry * 0.3);
-        [p addCurveToPoint:lt controlPoint1:CGPointMake(fx - base * 0.42, top) controlPoint2:CGPointMake(cx - neck + lean * 0.2, by + ry + (top - by - ry) * 0.5)];
+        CGPoint lt = CGPointMake(cx - rx * 0.95, MIN(top - 0.3, by + ry * 0.3)), rt = CGPointMake(cx + rx * 0.95, MIN(top - 0.3, by + ry * 0.3));
+        [p addCurveToPoint:lt controlPoint1:CGPointMake(fx - base * 0.42, top) controlPoint2:CGPointMake(cx - neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5))];
         // the drop: an ellipse top from left to right
         int segs = 18; double a0 = M_PI - 0.31, a1 = 2 * M_PI + 0.31;
-        for (int i = 1; i <= segs; i++) { double a = a0 + (a1 - a0) * i / segs; [p addLineToPoint:CGPointMake(cx + rx * cos(a), by + ry * sin(a))]; }
+        for (int i = 1; i <= segs; i++) { double a = a0 + (a1 - a0) * i / segs; [p addLineToPoint:CGPointMake(cx + rx * cos(a), MIN(top - 0.3, by + ry * sin(a)))]; }
         [p addLineToPoint:rt];
-        [p addCurveToPoint:CGPointMake(fx + base, top) controlPoint1:CGPointMake(cx + neck + lean * 0.2, by + ry + (top - by - ry) * 0.5) controlPoint2:CGPointMake(fx + base * 0.42, top)];
+        [p addCurveToPoint:CGPointMake(fx + base, top) controlPoint1:CGPointMake(cx + neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5)) controlPoint2:CGPointMake(fx + base * 0.42, top)];
     }
     [p addLineToPoint:CGPointMake(CGRectGetMaxX(P) - R, top)];
     [p addArcWithCenter:CGPointMake(CGRectGetMaxX(P) - R, top + R) radius:R startAngle:-M_PI_2 endAngle:M_PI_2 clockwise:YES];
@@ -1325,11 +1340,12 @@ static UIView *XVisualPill(UIView *touched) {
         if (g.state == UIGestureRecognizerStateBegan) { [v.layer removeAnimationForKey:@"mp.release"]; SetDrag(v, 0, 0); [gGoo beginOn:v touchX:[g locationInView:v.superview].x]; }
         if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
             [gGoo followX:[g locationInView:v.window].x d:d];
-            if (raw > 104) { _opened = YES; [self openFrom:v]; }
+            if (raw > 88) { _opened = YES; [self openFrom:v]; }   // the drop is full size: it snaps loose and opens
             return;
         }
         // let go: it opens (unless you barely moved, or pulled back down into the pill)
-        BOOL open = g.state == UIGestureRecognizerStateEnded && (raw > 14 || vel.y < -250) && vel.y < 300;
+        // 1.5.6: let go early and it goes back in; it only opens once the drop is big (or with a real flick up)
+        BOOL open = g.state == UIGestureRecognizerStateEnded && (raw > 62 || (vel.y < -900 && raw > 20)) && vel.y < 300;
         if (open) { _opened = YES; [self openFrom:v]; return; }
         [gGoo retract];
         XBounce(v, 0, -4, NO);
