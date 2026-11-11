@@ -1,4 +1,5 @@
-// MusicPill 1.4.11 - made by nano
+// MusicPill 1.5 - made by nano
+// 1.5: settings demo shows the liquid pull
 // 1.4.11: the liquid drop is one piece with the pill's glass (dark glossy, light mode too), springy and wobbly; the Dynamic Pill opens out of the drop
 // 1.4.10: the liquid drop is the pill's glass; letting go opens it, pulling high opens it
 // 1.4.9: liquid pull-up to open the Dynamic Pill; no splash while paused
@@ -1477,7 +1478,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.11 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
