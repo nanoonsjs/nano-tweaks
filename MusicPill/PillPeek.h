@@ -368,6 +368,7 @@ static CGRect XSplashBubbleRect(CGRect pr) {
     static CFTimeInterval lastPoll;
     if (CACurrentMediaTime() - lastPoll > 0.3) { lastPoll = CACurrentMediaTime(); XPoll(); }
     int now = gXPlaying ? 1 : 0;
+    if (!now) { [self hide]; return; }   // paused: the splash goes away
     if (now == _shownPlaying) return;
     _shownPlaying = now;
     [_wave setPlaying:now];
@@ -466,6 +467,7 @@ static void SplashTick(void) {
         if ([[MPSplash shared] up]) [[MPSplash shared] hide];   // a quicker skip: the old one goes first
     }
     if (gSplashChangedAt <= 0) return;
+    if (!gXPlaying) { if (CACurrentMediaTime() - gSplashChangedAt > 1.2) gSplashChangedAt = 0; return; }   // paused: no splash
     BOOL artIn = gXArt && gXArt != gSplashArtAtChange;
     CFTimeInterval waited = CACurrentMediaTime() - gSplashChangedAt;
     if ([[MPSplash shared] up] && waited < 0.3) return;   // the old one is still going away

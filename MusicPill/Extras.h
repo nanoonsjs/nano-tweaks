@@ -1001,7 +1001,74 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
 @interface MPPillPan : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 @end
-@implementation MPPillPan { int _axis; }   // 1 = sideways, 2 = up
+// 1.4.9: swiping up on the pill: a drop of dark liquid stretches up out of the pill's top edge and follows
+// your finger on a gooey neck that gets thinner the further you pull. Pull far enough and it snaps loose
+// with a pop and opens into the Dynamic Pill; let go early and it gets sucked back into the pill.
+@interface MPGoo : NSObject
+@property (nonatomic) CGRect pill;   // window coords
+@property (nonatomic) CGFloat x, d;  // finger x, pull distance
+@end
+@implementation MPGoo { UIView *_holder; CAShapeLayer *_shape, *_rim; CADisplayLink *_link; CGFloat _v; CFTimeInterval _last; }
+- (void)attachTo:(UIWindow *)w {
+    if (_holder.superview) return;
+    _holder = [[UIView alloc] initWithFrame:w.bounds]; _holder.userInteractionEnabled = NO;
+    _shape = [CAShapeLayer layer];
+    _shape.fillColor = [UIColor colorWithWhite:0.04 alpha:0.94].CGColor;
+    _shape.shadowColor = UIColor.blackColor.CGColor; _shape.shadowOpacity = 0.35; _shape.shadowRadius = 8; _shape.shadowOffset = CGSizeMake(0, 3);
+    _rim = [CAShapeLayer layer];
+    _rim.fillColor = UIColor.clearColor.CGColor; _rim.strokeColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor; _rim.lineWidth = 0.8;
+    [_holder.layer addSublayer:_shape]; [_holder.layer addSublayer:_rim];
+    [w addSubview:_holder];
+}
+- (void)draw {
+    CGRect P = _pill; CGFloat d = MAX(0, _d);
+    CGFloat top = CGRectGetMinY(P) + 1;
+    CGFloat r = MIN(P.size.height * 0.46, 5 + d * 0.32);                       // the drop grows as it rises
+    CGFloat cx = MAX(CGRectGetMinX(P) + P.size.height * 0.5 + r, MIN(CGRectGetMaxX(P) - P.size.height * 0.5 - r, _x));
+    CGFloat by = top - d;                                                      // drop center
+    CGFloat base = r * 1.7 + 6;                                                // where the neck leaves the pill
+    CGFloat neck = MAX(0.6, r * 0.75 - d * 0.09);                              // thins as you pull
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    [p moveToPoint:CGPointMake(cx - base, top + 1.5)];
+    [p addCurveToPoint:CGPointMake(cx - r * 0.96, by + r * 0.28)
+         controlPoint1:CGPointMake(cx - base * 0.45, top - 1)
+         controlPoint2:CGPointMake(cx - neck, by + r + (top - by - r) * 0.45)];
+    [p addArcWithCenter:CGPointMake(cx, by) radius:r startAngle:M_PI - 0.29 endAngle:0.29 clockwise:YES];
+    [p addCurveToPoint:CGPointMake(cx + base, top + 1.5)
+         controlPoint1:CGPointMake(cx + neck, by + r + (top - by - r) * 0.45)
+         controlPoint2:CGPointMake(cx + base * 0.45, top - 1)];
+    [p closePath];
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    _shape.path = p.CGPath; _shape.shadowPath = p.CGPath;
+    _rim.path = [UIBezierPath bezierPathWithArcCenter:CGPointMake(cx, by) radius:r startAngle:M_PI * 1.1 endAngle:M_PI * 1.9 clockwise:YES].CGPath;
+    _rim.opacity = MIN(1, d / 30);
+    [CATransaction commit];
+}
+// let go early: it's pulled back into the pill on a spring
+- (void)retract {
+    [_link invalidate];
+    _v = 0; _last = 0;
+    _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(step:)];
+    [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+- (void)step:(CADisplayLink *)l {
+    CFTimeInterval now = CACurrentMediaTime(); double dt = _last > 0 ? MIN(1.0 / 30, now - _last) : 1.0 / 60; _last = now;
+    double w = 2 * M_PI / 0.32, k = w * w, c = 2 * 0.75 * w;
+    for (int i = 0; i < 4; i++) { double a = -k * _d - c * _v; _v += a * dt / 4; _d += _v * dt / 4; }
+    if (_d < 0.4 && fabs(_v) < 5) { [self remove]; return; }
+    [self draw];
+}
+// snapped loose: the drop pops and is gone (the island takes over)
+- (void)pop {
+    [_link invalidate]; _link = nil;
+    UIView *h = _holder; _holder = nil;
+    [UIView animateWithDuration:0.16 animations:^{ h.alpha = 0; h.transform = CGAffineTransformMakeScale(1.0, 1.02); } completion:^(__unused BOOL f) { [h removeFromSuperview]; }];
+}
+- (void)remove { [_link invalidate]; _link = nil; [_holder removeFromSuperview]; _holder = nil; }
+@end
+static MPGoo *gGoo;
+
+@implementation MPPillPan { int _axis; BOOL _opened; }   // 1 = sideways, 2 = up
 + (instancetype)shared { static MPPillPan *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [MPPillPan new]; }); return s; }
 - (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
     if (!gRound) return NO;
@@ -1056,6 +1123,35 @@ static UIView *XVisualPill(UIView *touched) {
     }
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) XTouchLight(v, [g locationInView:v], YES);
     else XTouchLight(v, CGPointZero, NO);
+    if (g.state == UIGestureRecognizerStateBegan) _opened = NO;
+    if (_opened) { if (g.state != UIGestureRecognizerStateChanged) XTouchLight(v, CGPointZero, NO); return; }
+    if (_axis == 2 && v.window) {
+        // the drop of liquid follows your finger up
+        if (!gGoo) gGoo = [MPGoo new];
+        CGFloat raw = MAX(0, -t.y);
+        CGFloat d = raw < 70 ? raw : 70 + (raw - 70) * 0.25;
+        if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
+            [gGoo attachTo:v.window];
+            gGoo.pill = [v convertRect:v.bounds toView:v.window];
+            gGoo.x = [g locationInView:v.window].x; gGoo.d = d;
+            [gGoo draw];
+            SetDrag(v, 0, XRubber(MIN(0, t.y), 10));   // the pill leans up a touch with it
+            if (raw > 78) {
+                // far enough: it snaps loose and opens
+                _opened = YES;
+                [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+                [gGoo pop];
+                XTouchLight(v, CGPointZero, NO);
+                [MPIsland expandFrom:v];
+            }
+            return;
+        }
+        BOOL fling = g.state == UIGestureRecognizerStateEnded && (vel.y < -420 || raw > 40);
+        if (fling) { _opened = YES; [gGoo pop]; [MPIsland expandFrom:v]; return; }
+        [gGoo retract];
+        XBounce(v, 0, XRubber(MIN(0, t.y), 10), NO);
+        return;
+    }
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
         [v.layer removeAnimationForKey:@"mp.release"];
         if (_axis == 1) SetDrag(v, XRubber(t.x, 38), 0);
