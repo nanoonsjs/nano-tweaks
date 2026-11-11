@@ -1732,6 +1732,7 @@ static void LoopTick(AVPlayer *p) {
 // "Delete Photo" button, instead of the old sheet from the bottom. Tap outside and it shrinks back in.
 static CFTimeInterval gTrashAt;
 static CFTimeInterval gAppleInfoUntil;   // "More Info": let Apple's own panel open
+static __weak UIView *gInfoSheet;
 static __weak UIView *gTrashButton;
 @interface PGDeleteCard : UIView
 + (BOOL)showFor:(UIAlertController *)a from:(UIView *)btn;
@@ -2116,7 +2117,6 @@ static UILabel *PGL(NSString *t, CGFloat size, UIFontWeight w, UIColor *c) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ Forward(AppleItem(@"info")); });
 }
 @end
-static __weak UIView *gInfoSheet;
 static BOOL ShowInfoSheet(UIView *btn) {
     if (!gEnabled || !gInfoSheetPref || CACurrentMediaTime() < gAppleInfoUntil || gInfoSheet.window) return NO;
     PHAsset *a = nil;
