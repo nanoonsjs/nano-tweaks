@@ -240,6 +240,7 @@ static void AddPeek(UIView *v) {
     NSUInteger _gen;
     BOOL _compact;                 // the pill is minimized: the bubble version
     UIImageView *_art; CAGradientLayer *_glow; UIImage *_shownArt;
+    UILabel *_kicker; MPWave *_wave; int _shownPlaying;   // 1.4.8: follows play / pause
 }
 // minimized pill: a floating bubble above the bar, centered on the screen
 static CGRect XSplashBubbleRect(CGRect pr) {
@@ -270,8 +271,9 @@ static CGRect XSplashBubbleRect(CGRect pr) {
     glow.frame = CGRectMake(0, 0, W, _H);
     [c.layer insertSublayer:glow atIndex:0];
     _glow = glow;
-    MPWave *wave = [[MPWave alloc] initWithFrame:CGRectMake(112, 20, 22, 16)]; wave.backgroundColor = UIColor.clearColor; [c addSubview:wave]; [wave setPlaying:YES];
-    UILabel *k = XLabel(@"NOW PLAYING", 11, UIFontWeightBold, MusicPink()); k.frame = CGRectMake(138, 21, W - 152, 14); [c addSubview:k];
+    MPWave *wave = [[MPWave alloc] initWithFrame:CGRectMake(112, 20, 22, 16)]; wave.backgroundColor = UIColor.clearColor; [c addSubview:wave]; [wave setPlaying:gXPlaying];
+    UILabel *k = XLabel(gXPlaying ? @"NOW PLAYING" : @"PAUSED", 11, UIFontWeightBold, gXPlaying ? MusicPink() : [UIColor colorWithWhite:1 alpha:0.55]); k.frame = CGRectMake(138, 21, W - 152, 14); [c addSubview:k];
+    _kicker = k; _wave = wave; _shownPlaying = gXPlaying ? 1 : 0;
     UILabel *t = XLabel(gXTitle ?: @"", 19, UIFontWeightBold, nil); t.frame = CGRectMake(112, 40, W - 126, 24); t.adjustsFontSizeToFitWidth = NO; t.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:t];
     UILabel *a = XLabel(gXArtist ?: @"", 15, UIFontWeightMedium, [UIColor colorWithWhite:1 alpha:0.6]); a.frame = CGRectMake(112, 64, W - 126, 20); a.adjustsFontSizeToFitWidth = NO; a.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:a];
     // the words come in one after another, from the right
@@ -324,7 +326,8 @@ static CGRect XSplashBubbleRect(CGRect pr) {
     [c addSubview:art]; _art = art; _shownArt = gXArt;
     UILabel *t = XLabel(gXTitle ?: @"", 16, UIFontWeightBold, nil); t.frame = CGRectMake(64, 13, W - 64 - 44, 20); t.adjustsFontSizeToFitWidth = NO; t.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:t];
     UILabel *a = XLabel(gXArtist ?: @"", 13, UIFontWeightMedium, [UIColor colorWithWhite:1 alpha:0.6]); a.frame = CGRectMake(64, 33, W - 64 - 44, 17); a.adjustsFontSizeToFitWidth = NO; a.lineBreakMode = NSLineBreakByTruncatingTail; [c addSubview:a];
-    MPWave *wave = [[MPWave alloc] initWithFrame:CGRectMake(W - 36, 24, 22, 16)]; wave.backgroundColor = UIColor.clearColor; [c addSubview:wave]; [wave setPlaying:YES];
+    MPWave *wave = [[MPWave alloc] initWithFrame:CGRectMake(W - 36, 24, 22, 16)]; wave.backgroundColor = UIColor.clearColor; [c addSubview:wave]; [wave setPlaying:gXPlaying];
+    _kicker = nil; _wave = wave; _shownPlaying = gXPlaying ? 1 : 0;
     c.center = CGPointMake(d / 2, d / 2);
     [shape addSubview:c];
     [holder addSubview:shape]; [w addSubview:holder];
@@ -360,6 +363,23 @@ static CGRect XSplashBubbleRect(CGRect pr) {
     NSUInteger g = ++_gen;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (self->_gen == g) [self hide]; });
 }
+// paused (or played) while it's up: the words and the wave say so
+- (void)updatePlaying {
+    static CFTimeInterval lastPoll;
+    if (CACurrentMediaTime() - lastPoll > 0.3) { lastPoll = CACurrentMediaTime(); XPoll(); }
+    int now = gXPlaying ? 1 : 0;
+    if (now == _shownPlaying) return;
+    _shownPlaying = now;
+    [_wave setPlaying:now];
+    UILabel *k = _kicker;
+    if (k) [UIView transitionWithView:k duration:0.22 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+        k.text = now ? @"NOW PLAYING" : @"PAUSED";
+        k.textColor = now ? MusicPink() : [UIColor colorWithWhite:1 alpha:0.55];
+    } completion:nil];
+    // keep it up a little longer after you touch it
+    NSUInteger g = ++_gen;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (self->_gen == g) [self hide]; });
+}
 // the cover can arrive a moment after the song changes: swap it in with a crossfade
 - (void)updateArt {
     if (!_art || !gXArt || gXArt == _shownArt) return;
@@ -378,6 +398,7 @@ static CGRect XSplashBubbleRect(CGRect pr) {
     UIView *pill = nil; CGRect pr = XPillOnScreen(&pill);
     if (!pill) { [self hide]; return; }
     [self updateArt];
+    [self updatePlaying];
     if (_compact != gCollapsed) { [self hide]; return; }   // the pill changed mode: this splash's shape no longer fits
     if (pill != _pill) _pill = pill;
     if (fabs(CGRectGetMaxY(pr) - CGRectGetMaxY(_lastPill)) < 0.5 && fabs(CGRectGetMidX(pr) - CGRectGetMidX(_lastPill)) < 0.5 && fabs(pr.size.width - _lastPill.size.width) < 0.5) return;
@@ -398,7 +419,7 @@ static CGRect XSplashBubbleRect(CGRect pr) {
     _gen++;
     [_link invalidate]; _link = nil;
     UIView *h = _holder, *s = _shape, *c = _content, *p = _pill;
-    _holder = nil; _shape = nil; _content = nil; _art = nil; _glow = nil;
+    _holder = nil; _shape = nil; _content = nil; _art = nil; _glow = nil; _kicker = nil; _wave = nil;
     if (!h) return;
     h.userInteractionEnabled = NO;
     if (!_compact) { XShrinkToPill(h, s, c, p); return; }
@@ -417,6 +438,15 @@ static CGRect XSplashBubbleRect(CGRect pr) {
         [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
             s.frame = drop; s.layer.cornerRadius = d / 2; s.alpha = 0;
         } completion:^(__unused BOOL f2) { [h removeFromSuperview]; }];
+        // 1.4.8: the pill swallows it: squashes down as the bubble goes in, then springs back
+        if (p.window) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            CASpringAnimation *sx = [CASpringAnimation animationWithKeyPath:@"transform.scale.x"]; sx.fromValue = @1.16; sx.toValue = @1;
+            CASpringAnimation *sy = [CASpringAnimation animationWithKeyPath:@"transform.scale.y"]; sy.fromValue = @0.74; sy.toValue = @1;
+            CASpringAnimation *ty = [CASpringAnimation animationWithKeyPath:@"transform.translation.y"]; ty.fromValue = @2.5; ty.toValue = @0;
+            for (CASpringAnimation *a in @[sx, sy, ty]) { a.mass = 1; a.stiffness = 320; a.damping = 9; a.initialVelocity = 3; a.duration = a.settlingDuration; }
+            [p.layer addAnimation:sx forKey:@"mp.gulpx"]; [p.layer addAnimation:sy forKey:@"mp.gulpy"]; [p.layer addAnimation:ty forKey:@"mp.gulpt"];
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+        });
     }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [h removeFromSuperview]; });
 }
