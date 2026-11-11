@@ -645,6 +645,7 @@ static CGFloat XMorphCurve(CGFloat p) { p = MAX(0, MIN(1, p)); return p * p * (3
 static CGFloat XStep(CGFloat a, CGFloat b, CGFloat x) { x = MAX(0, MIN(1, (x - a) / (b - a))); return x * x * (3 - 2 * x); }
 @interface MPIsland : UIView <UIGestureRecognizerDelegate>
 + (void)expandFrom:(UIView *)pill;
++ (void)expandFrom:(UIView *)pill circle:(CGRect)circle;
 - (void)collapse;
 @end
 @implementation MPIsland {
@@ -663,7 +664,9 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     CGRect r = [pill.superview.layer convertRect:pl.frame toLayer:in.layer];
     return r.size.width > 20 ? r : [pill convertRect:pill.bounds toView:in];
 }
-+ (void)expandFrom:(UIView *)pill {
++ (void)expandFrom:(UIView *)pill { [self expandFrom:pill circle:CGRectNull]; }
+// circle: 1.4.11, the island grows out of the liquid drop you pulled up (window coords), not the pill
++ (void)expandFrom:(UIView *)pill circle:(CGRect)circle {
     UIWindow *w = pill.window;
     if (!w || gIsland.window) return;
     gSheetSource = pill;
@@ -686,6 +689,8 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
         CGFloat sx = t.m11, sy = t.m22, dx = t.m41, dy = t.m42;
         seen = CGRectMake(CGRectGetMidX(rest) - rest.size.width * sx / 2 + dx, CGRectGetMidY(rest) - rest.size.height * sy / 2 + dy, rest.size.width * sx, rest.size.height * sy);
     }
+    BOOL fromDrop = !CGRectIsNull(circle) && circle.size.width > 2;
+    if (fromDrop) seen = circle;
     for (NSString *k in @[@"mp.bounce", @"mp.release", @"mp.touchdown", @"mp.jelly", @"mp.absorb"]) [pill.layer removeAnimationForKey:k];
     v->_from = rest;
     v->_fromR = v->_from.size.height / 2;
@@ -704,13 +709,13 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     UIView *ink = [[UIView alloc] initWithFrame:shape.bounds];   // deep and dark like the island
     ink.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; ink.autoresizingMask = blur.autoresizingMask;
     [shape addSubview:ink];
-    UIView *snap = [seenPill snapshotViewAfterScreenUpdates:NO];
+    UIView *snap = fromDrop ? nil : [seenPill snapshotViewAfterScreenUpdates:NO];
     // the pill's picture keeps its size and stays at the bottom while the island grows up out of it (no stretching)
     if (snap) { snap.frame = CGRectMake((seen.size.width - rest.size.width) / 2, seen.size.height - rest.size.height, rest.size.width, rest.size.height); snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin; [shape addSubview:snap]; }
     v->_snap = snap;
     UIView *content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, v->_to.size.width, v->_to.size.height)];
     content.center = CGPointMake(seen.size.width / 2, seen.size.height / 2);
-    content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.94, 0.94);
+    content.alpha = 0; content.transform = fromDrop ? CGAffineTransformMakeScale(0.7, 0.7) : CGAffineTransformMakeScale(0.94, 0.94);
     [shape addSubview:content];
     [MPInsightsCtl buildIn:content size:content.bounds.size closeTarget:v action:@selector(collapse)];
     // Sleep Timer sits in the header next to close
@@ -735,7 +740,11 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     v->_shape = shape; v->_content = content;
     [v addSubview:shape];
     [w addSubview:v];
-    if (seenPill != pill) [UIView performWithoutAnimation:^{ seenPill.alpha = 0; }];
+    if (seenPill != pill) {
+        // from the drop the island needs a moment to grow over the pill before the pill steps away
+        if (fromDrop) { __weak UIView *ws = seenPill; dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.16 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ UIView *sp = ws; if (sp && gIsland.window) [UIView performWithoutAnimation:^{ sp.alpha = 0; }]; }); }
+        else [UIView performWithoutAnimation:^{ seenPill.alpha = 0; }];
+    }
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:v action:@selector(bgTap:)];
     [v addGestureRecognizer:tap];
@@ -1001,85 +1010,169 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
 @interface MPPillPan : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 @end
-// 1.4.9: swiping up on the pill: a drop of dark liquid stretches up out of the pill's top edge and follows
-// your finger on a gooey neck that gets thinner the further you pull. Pull far enough and it snaps loose
-// with a pop and opens into the Dynamic Pill; let go early and it gets sucked back into the pill.
+// 1.4.11: swiping up on the pill: the pill's own glass stretches up into a drop of dark, glossy liquid that
+// follows your finger on a springy, wobbly neck. The drop and the pill are ONE piece of glass (the pill's
+// glass is swapped for it while you pull), so they blend perfectly, in dark and light mode. Let go, or pull
+// it high, and the Dynamic Pill opens out of the drop itself.
 @interface MPGoo : NSObject
-@property (nonatomic) CGRect pill;   // window coords
-@property (nonatomic) CGFloat x, d;  // finger x, pull distance
+- (void)beginOn:(UIView *)pill touchX:(CGFloat)x;
+- (void)followX:(CGFloat)x d:(CGFloat)d;
+- (CGRect)dropRectInWindow;
+- (void)retract;
+- (void)detach;
 @end
-@implementation MPGoo { UIView *_holder, *_maskV; UIVisualEffectView *_glassV; CAShapeLayer *_shape, *_rim, *_shine; CADisplayLink *_link; CGFloat _v; CFTimeInterval _last; }
-static UIVisualEffect *TabGlassEffect(void);
-- (void)attachTo:(UIWindow *)w {
-    if (_holder.superview) return;
-    _holder = [[UIView alloc] initWithFrame:w.bounds]; _holder.userInteractionEnabled = NO;
-    // 1.4.10: the drop is made of the same liquid glass as the pill (same effect, same rim)
-    _glassV = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+@implementation MPGoo {
+    __weak UIView *_pill; UIView *_holder, *_maskV, *_tint; UIVisualEffectView *_glassV;
+    CAShapeLayer *_shape, *_rim, *_shine, *_inkMask; CAGradientLayer *_ink;
+    CADisplayLink *_link; CFTimeInterval _last;
+    CGFloat _tx, _td;              // where the finger wants it
+    CGFloat _x, _d, _vx, _vd;      // the drop (springy, wobbles)
+    CGFloat _bx, _vbx;             // the neck's foot (follows slower, so the neck leans)
+    CGFloat _rScale;               // 1 normally; shrinks to 0 when the drop leaves
+    int _mode;                     // 0 follow, 1 retract, 2 detached
+    BOOL _light;
+}
+- (void)beginOn:(UIView *)pill touchX:(CGFloat)x {
+    UIView *host = pill.superview;
+    if (!host) return;
+    [self cleanup];
+    _pill = pill; _mode = 0; _rScale = 1;
+    CGRect P = pill.frame;
+    _tx = _x = _bx = MAX(CGRectGetMinX(P), MIN(CGRectGetMaxX(P), x)); _td = _d = 0; _vx = _vd = _vbx = 0;
+    _light = pill.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+    _holder = [[UIView alloc] initWithFrame:host.bounds]; _holder.userInteractionEnabled = NO;
+    // the same glass as the pill
+    _glassV = [[UIVisualEffectView alloc] initWithEffect:_light ? [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight] : TabGlassEffect()];
     _glassV.frame = _holder.bounds; _glassV.userInteractionEnabled = NO;
+    if (_light) { _tint = [[UIView alloc] initWithFrame:_glassV.bounds]; _tint.backgroundColor = [UIColor colorWithWhite:1 alpha:0.62]; [_glassV.contentView addSubview:_tint]; }
+    // the drop itself goes inky and glossy (dark mode), fading back to the pill's glass down the neck
+    _ink = [CAGradientLayer layer]; _ink.frame = _holder.bounds;
+    UIColor *inkC = _light ? [UIColor colorWithWhite:0.0 alpha:0.10] : [UIColor colorWithWhite:0.0 alpha:0.55];
+    _ink.colors = @[(id)inkC.CGColor, (id)[inkC colorWithAlphaComponent:0].CGColor];
+    _inkMask = [CAShapeLayer layer]; _inkMask.fillColor = UIColor.blackColor.CGColor; _ink.mask = _inkMask;
+    [_glassV.contentView.layer addSublayer:_ink];
+    // the album glow the pill has
+    UIView *pg = [pill respondsToSelector:@selector(glass)] ? [pill valueForKey:@"glass"] : nil;
     _maskV = [[UIView alloc] initWithFrame:_holder.bounds];
     _shape = [CAShapeLayer layer]; _shape.fillColor = UIColor.blackColor.CGColor;
     [_maskV.layer addSublayer:_shape];
     _glassV.maskView = _maskV;
     [_holder addSubview:_glassV];
-    _rim = [CAShapeLayer layer];
-    _rim.fillColor = UIColor.clearColor.CGColor; _rim.strokeColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor; _rim.lineWidth = 0.75;
-    _rim.lineCap = kCALineCapRound;
-    _shine = [CAShapeLayer layer];   // the bright edge along the top of the drop, like light on glass
-    _shine.fillColor = UIColor.clearColor.CGColor; _shine.strokeColor = [UIColor colorWithWhite:1 alpha:0.45].CGColor; _shine.lineWidth = 1.2; _shine.lineCap = kCALineCapRound;
+    _rim = [CAShapeLayer layer]; _rim.fillColor = UIColor.clearColor.CGColor;
+    _rim.strokeColor = (_light ? [UIColor colorWithWhite:0 alpha:0.08] : [UIColor colorWithWhite:1 alpha:0.2]).CGColor;
+    _rim.lineWidth = _light ? 0.8 : 0.75;
+    _shine = [CAShapeLayer layer]; _shine.fillColor = UIColor.clearColor.CGColor;
+    _shine.strokeColor = [UIColor colorWithWhite:1 alpha:_light ? 0.9 : 0.55].CGColor; _shine.lineWidth = 1.4; _shine.lineCap = kCALineCapRound;
+    _shine.shadowColor = UIColor.whiteColor.CGColor; _shine.shadowOpacity = _light ? 0 : 0.5; _shine.shadowRadius = 2; _shine.shadowOffset = CGSizeZero;
     [_holder.layer addSublayer:_rim]; [_holder.layer addSublayer:_shine];
-    [w addSubview:_holder];
-}
-- (void)draw {
-    CGRect P = _pill; CGFloat d = MAX(0, _d);
-    CGFloat top = CGRectGetMinY(P) + 0.5;
-    CGFloat r = MIN(P.size.height * 0.5, 6 + d * 0.3);                        // the drop grows as it rises
-    CGFloat cx = MAX(CGRectGetMinX(P) + P.size.height * 0.5 + r, MIN(CGRectGetMaxX(P) - P.size.height * 0.5 - r, _x));
-    CGFloat by = top - d;
-    CGFloat base = r * 1.6 + 8;
-    CGFloat neck = MAX(0.8, r * 0.72 - d * 0.07);
-    CGPoint L0 = CGPointMake(cx - base, top + 1.5), R0 = CGPointMake(cx + base, top + 1.5);
-    UIBezierPath *edge = [UIBezierPath bezierPath];
-    [edge moveToPoint:L0];
-    [edge addCurveToPoint:CGPointMake(cx - r * 0.96, by + r * 0.28)
-            controlPoint1:CGPointMake(cx - base * 0.45, top - 1)
-            controlPoint2:CGPointMake(cx - neck, by + r + (top - by - r) * 0.45)];
-    [edge addArcWithCenter:CGPointMake(cx, by) radius:r startAngle:M_PI - 0.29 endAngle:0.29 clockwise:YES];
-    [edge addCurveToPoint:R0
-            controlPoint1:CGPointMake(cx + neck, by + r + (top - by - r) * 0.45)
-            controlPoint2:CGPointMake(cx + base * 0.45, top - 1)];
-    UIBezierPath *fill = [edge copy]; [fill closePath];
-    [CATransaction begin]; [CATransaction setDisableActions:YES];
-    _shape.path = fill.CGPath;
-    _rim.path = edge.CGPath;                       // the rim follows the outline but not across the pill
-    _shine.path = [UIBezierPath bezierPathWithArcCenter:CGPointMake(cx, by) radius:MAX(1, r - 1.5) startAngle:M_PI * 1.18 endAngle:M_PI * 1.62 clockwise:YES].CGPath;
-    _rim.opacity = MIN(1, d / 14); _shine.opacity = MIN(1, d / 30);
-    [CATransaction commit];
-}
-// let go early: it's pulled back into the pill on a spring
-- (void)retract {
-    [_link invalidate];
-    _v = 0; _last = 0;
+    if (_light) { _holder.layer.shadowColor = UIColor.blackColor.CGColor; _holder.layer.shadowOpacity = 0.12; _holder.layer.shadowRadius = 12; _holder.layer.shadowOffset = CGSizeMake(0, 4); }
+    [host insertSubview:_holder belowSubview:pill];
+    // the pill's glass steps aside: from now on the pill sits on this one piece of glass
+    pg.hidden = YES; (void)pg;
+    [self draw];
+    _last = 0;
     _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(step:)];
+    if (@available(iOS 15.0, *)) _link.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
     [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
+- (void)followX:(CGFloat)x d:(CGFloat)d {
+    UIView *pill = _pill; if (!pill.superview || _mode != 0) return;
+    CGPoint px = [pill.window convertPoint:CGPointMake(x, 0) toView:pill.superview];
+    _tx = px.x; _td = MAX(0, d);
+}
+- (void)retract { _mode = 1; _td = 0; }
+- (void)detach { _mode = 2; _td = 0; }
 - (void)step:(CADisplayLink *)l {
     CFTimeInterval now = CACurrentMediaTime(); double dt = _last > 0 ? MIN(1.0 / 30, now - _last) : 1.0 / 60; _last = now;
-    double w = 2 * M_PI / 0.32, k = w * w, c = 2 * 0.75 * w;
-    for (int i = 0; i < 4; i++) { double a = -k * _d - c * _v; _v += a * dt / 4; _d += _v * dt / 4; }
-    if (_d < 0.4 && fabs(_v) < 5) { [self remove]; return; }
+    // the drop chases the finger on a bouncy spring; the neck's foot on a lazier one
+    double wD = 2 * M_PI / (_mode == 1 ? 0.34 : 0.2), zD = _mode == 1 ? 0.62 : 0.55;
+    double wB = 2 * M_PI / 0.42, zB = 0.7;
+    int n = 6; double h = dt / n;
+    for (int i = 0; i < n; i++) {
+        double ax = -wD * wD * (_x - _tx) - 2 * zD * wD * _vx; _vx += ax * h; _x += _vx * h;
+        double ad = -wD * wD * (_d - _td) - 2 * zD * wD * _vd; _vd += ad * h; _d += _vd * h;
+        double ab = -wB * wB * (_bx - _x) - 2 * zB * wB * _vbx; _vbx += ab * h; _bx += _vbx * h;
+    }
+    if (_mode == 2) { _rScale = MAX(0, _rScale - dt * 9); }
+    if (_mode != 0 && _d < 0.5 && fabs(_vd) < 8) { [self cleanup]; return; }
     [self draw];
 }
-// snapped loose: the drop pops and is gone (the island takes over)
-- (void)pop {
-    [_link invalidate]; _link = nil;
-    UIView *h = _holder; _holder = nil;
-    [UIView animateWithDuration:0.16 animations:^{ h.alpha = 0; h.transform = CGAffineTransformMakeScale(1.0, 1.02); } completion:^(__unused BOOL f) { [h removeFromSuperview]; }];
+- (CGRect)dropRectInWindow {
+    UIView *pill = _pill; CGRect P = pill.frame;
+    CGFloat r = [self radiusFor:_d P:P];
+    CGFloat cx = [self clampX:_x r:r P:P], by = CGRectGetMinY(P) + 0.5 - MAX(0, _d);
+    return [pill.superview convertRect:CGRectMake(cx - r, by - r, r * 2, r * 2) toView:pill.window];
 }
-- (void)remove { [_link invalidate]; _link = nil; [_holder removeFromSuperview]; _holder = nil; }
+- (CGFloat)radiusFor:(CGFloat)d P:(CGRect)P { return MIN(P.size.height * 0.5, 7 + MAX(0, d) * 0.3); }
+- (CGFloat)clampX:(CGFloat)x r:(CGFloat)r P:(CGRect)P {
+    CGFloat R = P.size.height / 2, base = r * 1.6 + 10;
+    return MAX(CGRectGetMinX(P) + R + base, MIN(CGRectGetMaxX(P) - R - base, x));
+}
+- (void)draw {
+    UIView *pill = _pill; if (!pill.superview) return;
+    CGRect P = pill.frame;
+    CGFloat d = MAX(0, _d);
+    CGFloat R = P.size.height / 2, top = CGRectGetMinY(P), bottom = CGRectGetMaxY(P);
+    // squash and stretch with the speed: moving fast it gets taller and thinner
+    CGFloat stretch = MIN(0.22, fabs(_vd) / 2600);
+    CGFloat r0 = [self radiusFor:d P:P] * _rScale;
+    CGFloat rx = r0 * (1 - stretch * 0.5), ry = r0 * (1 + stretch);
+    CGFloat cx = [self clampX:_x r:r0 P:P], fx = [self clampX:_bx r:r0 P:P];
+    CGFloat by = top - d;
+    CGFloat base = r0 * 1.6 + 10 * MIN(1, d / 6 + 0.2);
+    CGFloat neck = MAX(0.8, r0 * 0.7 - d * 0.06);
+    CGFloat lean = (cx - fx) * 0.5;
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    // the pill (a capsule) with the drop rising out of its top edge, as one outline
+    [p moveToPoint:CGPointMake(CGRectGetMinX(P) + R, top)];
+    if (r0 > 0.5 && d > 0.5) {
+        [p addLineToPoint:CGPointMake(fx - base, top)];
+        CGPoint lt = CGPointMake(cx - rx * 0.95, by + ry * 0.3), rt = CGPointMake(cx + rx * 0.95, by + ry * 0.3);
+        [p addCurveToPoint:lt controlPoint1:CGPointMake(fx - base * 0.42, top) controlPoint2:CGPointMake(cx - neck + lean * 0.2, by + ry + (top - by - ry) * 0.5)];
+        // the drop: an ellipse top from left to right
+        int segs = 18; double a0 = M_PI - 0.31, a1 = 2 * M_PI + 0.31;
+        for (int i = 1; i <= segs; i++) { double a = a0 + (a1 - a0) * i / segs; [p addLineToPoint:CGPointMake(cx + rx * cos(a), by + ry * sin(a))]; }
+        [p addLineToPoint:rt];
+        [p addCurveToPoint:CGPointMake(fx + base, top) controlPoint1:CGPointMake(cx + neck + lean * 0.2, by + ry + (top - by - ry) * 0.5) controlPoint2:CGPointMake(fx + base * 0.42, top)];
+    }
+    [p addLineToPoint:CGPointMake(CGRectGetMaxX(P) - R, top)];
+    [p addArcWithCenter:CGPointMake(CGRectGetMaxX(P) - R, top + R) radius:R startAngle:-M_PI_2 endAngle:M_PI_2 clockwise:YES];
+    [p addLineToPoint:CGPointMake(CGRectGetMinX(P) + R, bottom)];
+    [p addArcWithCenter:CGPointMake(CGRectGetMinX(P) + R, top + R) radius:R startAngle:M_PI_2 endAngle:M_PI_2 * 3 clockwise:YES];
+    [p closePath];
+    // ink only on the drop and neck
+    UIBezierPath *inkP = [UIBezierPath bezierPathWithRect:CGRectMake(CGRectGetMinX(P), by - ry - 4, P.size.width, MAX(0, top - (by - ry - 4)) + 2)];
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    _shape.path = p.CGPath; _rim.path = p.CGPath;
+    _inkMask.path = inkP.CGPath;
+    _ink.startPoint = CGPointMake(0.5, (by - ry) / MAX(1, _holder.bounds.size.height));
+    _ink.endPoint = CGPointMake(0.5, (top + 2) / MAX(1, _holder.bounds.size.height));
+    _ink.opacity = MIN(1, d / 24);
+    _shine.path = r0 > 3 ? [UIBezierPath bezierPathWithOvalInRect:CGRectMake(cx - rx + 2.5, by - ry + 2.5, rx * 2 - 5, ry * 2 - 5)].CGPath : nil;
+    _shine.strokeStart = 0.55; _shine.strokeEnd = 0.82;
+    _shine.opacity = MIN(1, d / 26);
+    if (_light) _holder.layer.shadowPath = p.CGPath;
+    [CATransaction commit];
+}
+- (void)cleanup {
+    [_link invalidate]; _link = nil;
+    UIView *pill = _pill;
+    UIView *pg = [pill respondsToSelector:@selector(glass)] ? [pill valueForKey:@"glass"] : nil;
+    pg.hidden = NO;
+    [_holder removeFromSuperview]; _holder = nil;
+}
 @end
 static MPGoo *gGoo;
 
 @implementation MPPillPan { int _axis; BOOL _opened; }   // 1 = sideways, 2 = up
+// the drop lets go of the pill and becomes the Dynamic Pill: it grows out of the drop, the neck snaps back
+- (void)openFrom:(UIView *)v {
+    CGRect c = [gGoo dropRectInWindow];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    XTouchLight(v, CGPointZero, NO);
+    [MPIsland expandFrom:v circle:c];
+    [gGoo detach];
+}
 + (instancetype)shared { static MPPillPan *s; static dispatch_once_t o; dispatch_once(&o, ^{ s = [MPPillPan new]; }); return s; }
 - (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
     if (!gRound) return NO;
@@ -1136,32 +1229,21 @@ static UIView *XVisualPill(UIView *touched) {
     else XTouchLight(v, CGPointZero, NO);
     if (g.state == UIGestureRecognizerStateBegan) _opened = NO;
     if (_opened) { if (g.state != UIGestureRecognizerStateChanged) XTouchLight(v, CGPointZero, NO); return; }
-    if (_axis == 2 && v.window) {
-        // the drop of liquid follows your finger up
+    if (_axis == 2 && v.window && [v isKindOfClass:[MPMiniPill class]]) {
         if (!gGoo) gGoo = [MPGoo new];
         CGFloat raw = MAX(0, -t.y);
-        CGFloat d = raw < 90 ? raw : 90 + (raw - 90) * 0.3;
+        CGFloat d = raw < 100 ? raw : 100 + (raw - 100) * 0.3;
+        if (g.state == UIGestureRecognizerStateBegan) { [v.layer removeAnimationForKey:@"mp.release"]; SetDrag(v, 0, 0); [gGoo beginOn:v touchX:[g locationInView:v.superview].x]; }
         if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
-            [gGoo attachTo:v.window];
-            gGoo.pill = [v convertRect:v.bounds toView:v.window];
-            gGoo.x = [g locationInView:v.window].x; gGoo.d = d;
-            [gGoo draw];
-            SetDrag(v, 0, XRubber(MIN(0, t.y), 10));   // the pill leans up a touch with it
-            if (raw > 96) {
-                // far enough: it snaps loose and opens
-                _opened = YES;
-                [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
-                [gGoo pop];
-                XTouchLight(v, CGPointZero, NO);
-                [MPIsland expandFrom:v];
-            }
+            [gGoo followX:[g locationInView:v.window].x d:d];
+            if (raw > 104) { _opened = YES; [self openFrom:v]; }
             return;
         }
-        // let go: it opens (unless you pulled back down into the pill first)
-        BOOL fling = g.state == UIGestureRecognizerStateEnded && (raw > 14 || vel.y < -250) && vel.y < 300;
-        if (fling) { _opened = YES; [gGoo pop]; [MPIsland expandFrom:v]; return; }
+        // let go: it opens (unless you barely moved, or pulled back down into the pill)
+        BOOL open = g.state == UIGestureRecognizerStateEnded && (raw > 14 || vel.y < -250) && vel.y < 300;
+        if (open) { _opened = YES; [self openFrom:v]; return; }
         [gGoo retract];
-        XBounce(v, 0, XRubber(MIN(0, t.y), 10), NO);
+        XBounce(v, 0, -4, NO);
         return;
     }
     if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
