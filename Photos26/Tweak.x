@@ -1,4 +1,5 @@
-// Photos26 2.7 - made by nano
+// Photos26 2.8 - made by nano
+// 2.8: the look in Camera's photo viewer too (also the camera on the lock screen)
 // 2.7: new icon (settings and header)
 // 2.6.1: new settings page; Messages' viewer moved to Messages26 (it's Quick Look there, not Photos).
 // 2.6: Messages too: the photo/video viewer you open from a chat is Photos' own, so it gets the same glass buttons and video player.
@@ -102,7 +103,8 @@ static UIColor *GIcon(void) { static UIColor *c; if (!c) c = Dyn(UIColor.blackCo
 #define DEBUG_TAG  0x50473632
 
 static BOOL gEnabled = YES, gTopBar = YES, gPlayer = YES, gDebug = NO, gLoop = YES;
-static BOOL gInMessages, gMessagesPref = YES;   // 2.6: also in Messages (its photo/video viewer is Photos' own)
+static BOOL gInMessages, gMessagesPref = YES;
+static BOOL gInCamera, gCameraPref = YES;   // 2.8: Camera's photo viewer (also from the lock screen) is Photos' own too   // 2.6: also in Messages (its photo/video viewer is Photos' own)
 
 static const void *kMasked = &kMasked;
 static const void *kBusy = &kBusy;
@@ -139,7 +141,9 @@ static void LoadPrefs(void) {
     gDebug   = PrefBool(f, @"debug", NO);
     gLoop    = PrefBool(f, @"loop", YES);
     gMessagesPref = PrefBool(f, @"messages", YES);
-    if (gInMessages && !gMessagesPref) gEnabled = NO;
+    gCameraPref = PrefBool(f, @"camera", YES);
+    if (gInMessages && !gInCamera && !gMessagesPref) gEnabled = NO;
+    if (gInCamera && !gCameraPref) gEnabled = NO;
 }
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
     dispatch_async(dispatch_get_main_queue(), ^{ LoadPrefs(); });
@@ -1960,6 +1964,24 @@ static void InitMain(void) { static BOOL done; if (done) return; done = YES; %in
         LoadPrefs();
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
         if (!gMessagesPref) return;
+        InitMain();
+        if (objc_getClass("PUScrubberView")) InitScrubber();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __block int tries = 0;
+            [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *tm) {
+                if (objc_getClass("PUScrubberView")) { InitScrubber(); [tm invalidate]; }
+                else if (++tries > 600) [tm invalidate];
+            }];
+        });
+        return;
+    }
+    if ([bid isEqualToString:@"com.apple.camera"] || [bid hasPrefix:@"com.apple.camera."]) {
+        // Camera (and the camera from the lock screen): only its photo / video viewer, which is Photos' own.
+        // The same "viewer only" mode as Messages, so the camera itself is never touched.
+        gInMessages = YES; gInCamera = YES;
+        LoadPrefs();
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
+        if (!gCameraPref) return;
         InitMain();
         if (objc_getClass("PUScrubberView")) InitScrubber();
         dispatch_async(dispatch_get_main_queue(), ^{
