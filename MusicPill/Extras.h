@@ -1008,40 +1008,51 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
 @property (nonatomic) CGRect pill;   // window coords
 @property (nonatomic) CGFloat x, d;  // finger x, pull distance
 @end
-@implementation MPGoo { UIView *_holder; CAShapeLayer *_shape, *_rim; CADisplayLink *_link; CGFloat _v; CFTimeInterval _last; }
+@implementation MPGoo { UIView *_holder, *_maskV; UIVisualEffectView *_glassV; CAShapeLayer *_shape, *_rim, *_shine; CADisplayLink *_link; CGFloat _v; CFTimeInterval _last; }
+static UIVisualEffect *TabGlassEffect(void);
 - (void)attachTo:(UIWindow *)w {
     if (_holder.superview) return;
     _holder = [[UIView alloc] initWithFrame:w.bounds]; _holder.userInteractionEnabled = NO;
-    _shape = [CAShapeLayer layer];
-    _shape.fillColor = [UIColor colorWithWhite:0.04 alpha:0.94].CGColor;
-    _shape.shadowColor = UIColor.blackColor.CGColor; _shape.shadowOpacity = 0.35; _shape.shadowRadius = 8; _shape.shadowOffset = CGSizeMake(0, 3);
+    // 1.4.10: the drop is made of the same liquid glass as the pill (same effect, same rim)
+    _glassV = [[UIVisualEffectView alloc] initWithEffect:TabGlassEffect()];
+    _glassV.frame = _holder.bounds; _glassV.userInteractionEnabled = NO;
+    _maskV = [[UIView alloc] initWithFrame:_holder.bounds];
+    _shape = [CAShapeLayer layer]; _shape.fillColor = UIColor.blackColor.CGColor;
+    [_maskV.layer addSublayer:_shape];
+    _glassV.maskView = _maskV;
+    [_holder addSubview:_glassV];
     _rim = [CAShapeLayer layer];
-    _rim.fillColor = UIColor.clearColor.CGColor; _rim.strokeColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor; _rim.lineWidth = 0.8;
-    [_holder.layer addSublayer:_shape]; [_holder.layer addSublayer:_rim];
+    _rim.fillColor = UIColor.clearColor.CGColor; _rim.strokeColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor; _rim.lineWidth = 0.75;
+    _rim.lineCap = kCALineCapRound;
+    _shine = [CAShapeLayer layer];   // the bright edge along the top of the drop, like light on glass
+    _shine.fillColor = UIColor.clearColor.CGColor; _shine.strokeColor = [UIColor colorWithWhite:1 alpha:0.45].CGColor; _shine.lineWidth = 1.2; _shine.lineCap = kCALineCapRound;
+    [_holder.layer addSublayer:_rim]; [_holder.layer addSublayer:_shine];
     [w addSubview:_holder];
 }
 - (void)draw {
     CGRect P = _pill; CGFloat d = MAX(0, _d);
-    CGFloat top = CGRectGetMinY(P) + 1;
-    CGFloat r = MIN(P.size.height * 0.46, 5 + d * 0.32);                       // the drop grows as it rises
+    CGFloat top = CGRectGetMinY(P) + 0.5;
+    CGFloat r = MIN(P.size.height * 0.5, 6 + d * 0.3);                        // the drop grows as it rises
     CGFloat cx = MAX(CGRectGetMinX(P) + P.size.height * 0.5 + r, MIN(CGRectGetMaxX(P) - P.size.height * 0.5 - r, _x));
-    CGFloat by = top - d;                                                      // drop center
-    CGFloat base = r * 1.7 + 6;                                                // where the neck leaves the pill
-    CGFloat neck = MAX(0.6, r * 0.75 - d * 0.09);                              // thins as you pull
-    UIBezierPath *p = [UIBezierPath bezierPath];
-    [p moveToPoint:CGPointMake(cx - base, top + 1.5)];
-    [p addCurveToPoint:CGPointMake(cx - r * 0.96, by + r * 0.28)
-         controlPoint1:CGPointMake(cx - base * 0.45, top - 1)
-         controlPoint2:CGPointMake(cx - neck, by + r + (top - by - r) * 0.45)];
-    [p addArcWithCenter:CGPointMake(cx, by) radius:r startAngle:M_PI - 0.29 endAngle:0.29 clockwise:YES];
-    [p addCurveToPoint:CGPointMake(cx + base, top + 1.5)
-         controlPoint1:CGPointMake(cx + neck, by + r + (top - by - r) * 0.45)
-         controlPoint2:CGPointMake(cx + base * 0.45, top - 1)];
-    [p closePath];
+    CGFloat by = top - d;
+    CGFloat base = r * 1.6 + 8;
+    CGFloat neck = MAX(0.8, r * 0.72 - d * 0.07);
+    CGPoint L0 = CGPointMake(cx - base, top + 1.5), R0 = CGPointMake(cx + base, top + 1.5);
+    UIBezierPath *edge = [UIBezierPath bezierPath];
+    [edge moveToPoint:L0];
+    [edge addCurveToPoint:CGPointMake(cx - r * 0.96, by + r * 0.28)
+            controlPoint1:CGPointMake(cx - base * 0.45, top - 1)
+            controlPoint2:CGPointMake(cx - neck, by + r + (top - by - r) * 0.45)];
+    [edge addArcWithCenter:CGPointMake(cx, by) radius:r startAngle:M_PI - 0.29 endAngle:0.29 clockwise:YES];
+    [edge addCurveToPoint:R0
+            controlPoint1:CGPointMake(cx + neck, by + r + (top - by - r) * 0.45)
+            controlPoint2:CGPointMake(cx + base * 0.45, top - 1)];
+    UIBezierPath *fill = [edge copy]; [fill closePath];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
-    _shape.path = p.CGPath; _shape.shadowPath = p.CGPath;
-    _rim.path = [UIBezierPath bezierPathWithArcCenter:CGPointMake(cx, by) radius:r startAngle:M_PI * 1.1 endAngle:M_PI * 1.9 clockwise:YES].CGPath;
-    _rim.opacity = MIN(1, d / 30);
+    _shape.path = fill.CGPath;
+    _rim.path = edge.CGPath;                       // the rim follows the outline but not across the pill
+    _shine.path = [UIBezierPath bezierPathWithArcCenter:CGPointMake(cx, by) radius:MAX(1, r - 1.5) startAngle:M_PI * 1.18 endAngle:M_PI * 1.62 clockwise:YES].CGPath;
+    _rim.opacity = MIN(1, d / 14); _shine.opacity = MIN(1, d / 30);
     [CATransaction commit];
 }
 // let go early: it's pulled back into the pill on a spring
@@ -1129,14 +1140,14 @@ static UIView *XVisualPill(UIView *touched) {
         // the drop of liquid follows your finger up
         if (!gGoo) gGoo = [MPGoo new];
         CGFloat raw = MAX(0, -t.y);
-        CGFloat d = raw < 70 ? raw : 70 + (raw - 70) * 0.25;
+        CGFloat d = raw < 90 ? raw : 90 + (raw - 90) * 0.3;
         if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
             [gGoo attachTo:v.window];
             gGoo.pill = [v convertRect:v.bounds toView:v.window];
             gGoo.x = [g locationInView:v.window].x; gGoo.d = d;
             [gGoo draw];
             SetDrag(v, 0, XRubber(MIN(0, t.y), 10));   // the pill leans up a touch with it
-            if (raw > 78) {
+            if (raw > 96) {
                 // far enough: it snaps loose and opens
                 _opened = YES;
                 [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
@@ -1146,7 +1157,8 @@ static UIView *XVisualPill(UIView *touched) {
             }
             return;
         }
-        BOOL fling = g.state == UIGestureRecognizerStateEnded && (vel.y < -420 || raw > 40);
+        // let go: it opens (unless you pulled back down into the pill first)
+        BOOL fling = g.state == UIGestureRecognizerStateEnded && (raw > 14 || vel.y < -250) && vel.y < 300;
         if (fling) { _opened = YES; [gGoo pop]; [MPIsland expandFrom:v]; return; }
         [gGoo retract];
         XBounce(v, 0, XRubber(MIN(0, t.y), 10), NO);
