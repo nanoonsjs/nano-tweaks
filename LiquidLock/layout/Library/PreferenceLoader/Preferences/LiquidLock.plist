@@ -31,15 +31,15 @@
 			<key>nanoName</key>
 			<string>LiquidLock</string>
 			<key>nanoSub</key>
-			<string>Liquid glass Face ID for notched iPhones</string>
+			<string>Animated Face ID for notched iPhones</string>
 			<key>nanoVersion</key>
-			<string>0.3</string>
+			<string>0.4</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>When Face ID starts looking, a Face ID face made of liquid glass appears where the lock is and looks around. When it recognizes you, it curls into a glass ring that spins and wobbles like liquid, then pops. If it doesn't, it shakes like jelly. For iPhones with a notch (X to 14).</string>
+			<string>When Face ID starts looking (and on the passcode screen), the lock turns into an animated Face ID face that looks around and blinks. When it recognizes you, it curls into a glowing blue ring that spins, wobbles and bursts into blue sparks. If it doesn't, it shakes like jelly. For iPhones with a notch (X to 14).</string>
 			<key>label</key>
 			<string>General</string>
 		</dict>
