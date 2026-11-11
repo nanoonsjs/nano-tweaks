@@ -33,7 +33,7 @@
 			<key>nanoSub</key>
 			<string>Photos, iOS 26 style</string>
 			<key>nanoVersion</key>
-			<string>3.2</string>
+			<string>3.3</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -61,7 +61,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Framed Photos: while the buttons are showing, the photo sits between them, a little smaller with round corners. Tap the photo to hide the buttons and it goes full screen. iOS 26 Delete: the trash button grows into a glass card to confirm. iOS 26 Info: the info button (or swiping up) brings up a glass sheet with the camera, lens, settings, file and map; More Info opens the full panel. In Camera Too: the same look when you open your photos from the Camera app, including the camera on the lock screen.</string>
+			<string>Framed Photos: while the buttons are showing, the photo sits between them, a little smaller with round corners. Tap the photo to hide the buttons and it goes full screen. iOS 26 Delete: the trash button grows into a glass card to confirm. In Camera Too: the same look when you open your photos from the Camera app, including the camera on the lock screen.</string>
 			<key>label</key>
 			<string>Photo &amp; Video Viewer</string>
 		</dict>
@@ -92,20 +92,6 @@
 			<string>deletecard</string>
 			<key>label</key>
 			<string>iOS 26 Delete</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.user.photos26/prefschanged</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.user.photos26</string>
-			<key>key</key>
-			<string>infosheet</string>
-			<key>label</key>
-			<string>iOS 26 Info</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
