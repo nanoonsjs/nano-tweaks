@@ -646,6 +646,7 @@ static CGFloat XStep(CGFloat a, CGFloat b, CGFloat x) { x = MAX(0, MIN(1, (x - a
 @interface MPIsland : UIView <UIGestureRecognizerDelegate>
 + (void)expandFrom:(UIView *)pill;
 + (void)expandFrom:(UIView *)pill circle:(CGRect)circle;
++ (void)expandFrom:(UIView *)pill preview:(UIView *)card;
 - (void)collapse;
 @end
 @implementation MPIsland {
@@ -681,6 +682,13 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     return r.size.width > 20 ? r : [pill convertRect:pill.bounds toView:in];
 }
 + (void)expandFrom:(UIView *)pill { [self expandFrom:pill circle:CGRectNull]; }
+// 1.5.7: from the preview card (the peek you pulled up): the card itself grows into the island
+static __weak UIView *gPreviewCard;
++ (void)expandFrom:(UIView *)pill preview:(UIView *)card {
+    gPreviewCard = card;
+    [self expandFrom:pill circle:[card convertRect:card.bounds toView:nil]];
+    gPreviewCard = nil;
+}
 // circle: 1.4.11, the island grows out of the liquid drop you pulled up (window coords), not the pill
 + (void)expandFrom:(UIView *)pill circle:(CGRect)circle {
     UIWindow *w = pill.window;
@@ -706,6 +714,7 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
         seen = CGRectMake(CGRectGetMidX(rest) - rest.size.width * sx / 2 + dx, CGRectGetMidY(rest) - rest.size.height * sy / 2 + dy, rest.size.width * sx, rest.size.height * sy);
     }
     BOOL fromDrop = !CGRectIsNull(circle) && circle.size.width > 2;
+    BOOL fromCard = fromDrop && gPreviewCard != nil;
     if (fromDrop) seen = circle;
     for (NSString *k in @[@"mp.bounce", @"mp.release", @"mp.touchdown", @"mp.jelly", @"mp.absorb"]) [pill.layer removeAnimationForKey:k];
     v->_from = rest;
@@ -717,7 +726,7 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
 
     // the shape: starts exactly as the pill, the pill's picture inside it, then it grows
     UIView *shape = [[UIView alloc] initWithFrame:seen];
-    shape.clipsToBounds = YES; shape.layer.cornerCurve = kCACornerCurveContinuous; shape.layer.cornerRadius = seen.size.height / 2;
+    shape.clipsToBounds = YES; shape.layer.cornerCurve = kCACornerCurveContinuous; shape.layer.cornerRadius = fromCard ? gPreviewCard.layer.cornerRadius : seen.size.height / 2;
     shape.layer.borderWidth = 0.8; shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
     UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
     blur.frame = shape.bounds; blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -732,6 +741,12 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     UIView *content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, v->_to.size.width, v->_to.size.height)];
     content.center = CGPointMake(seen.size.width / 2, seen.size.height / 2);
     content.alpha = 0; content.transform = fromDrop ? CGAffineTransformMakeScale(0.7, 0.7) : CGAffineTransformMakeScale(0.94, 0.94);
+    if (fromCard) {
+        // exactly as the preview shows it: scaled down, its top in view
+        CGFloat ps = seen.size.width / v->_to.size.width;
+        content.alpha = 1; content.transform = CGAffineTransformMakeScale(ps, ps);
+        content.center = CGPointMake(seen.size.width / 2, v->_to.size.height * ps / 2);
+    }
     [shape addSubview:content];
     [MPInsightsCtl buildIn:content size:content.bounds.size closeTarget:v action:@selector(collapse)];
     // Sleep Timer sits in the header next to close
@@ -778,6 +793,17 @@ static CGRect XPillRect(UIView *pill, UIView *in) {
     });
     // one spring, straight out of the pill (the same curve every time)
     // one spring out of the pill: quick, a touch of overshoot, settles like the Dynamic Island
+    if (fromCard) {
+        // the preview opens up into the island with a liquid wobble
+        [gPreviewCard removeFromSuperview];
+        [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.6 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+            shape.frame = v->_to; shape.layer.cornerRadius = 44;
+            content.center = CGPointMake(v->_to.size.width / 2, v->_to.size.height / 2);
+            content.transform = CGAffineTransformIdentity;
+            v.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3];
+        } completion:nil];
+        return;
+    }
     if (fromDrop) {
         // 1.5.1: liquid: the drop swells and stretches up like it's being poured upward, then spreads out
         // into the island with a wobble
@@ -1267,7 +1293,69 @@ static void XGooAbsorb(UIView *pill, CGRect circleWin) {
     [gGoo absorbInto:pill circle:circleWin];
 }
 
-@implementation MPPillPan { int _axis; BOOL _opened; }   // 1 = sideways, 2 = up
+@implementation MPPillPan { int _axis; BOOL _opened; UIView *_peek, *_peekC; BOOL _peekOn; }   // 1 = sideways, 2 = up
+// 1.5.7: pulled all the way up, the drop swells into a preview of Insights floating on top of it. Let go and
+// the preview opens into the Dynamic Pill; pull back down and it sinks back into the drop.
+- (void)peekShow:(UIView *)v {
+    if (_peekOn) return;
+    _peekOn = YES;
+    UIWindow *w = v.window;
+    CGRect drop = [gGoo dropRectInWindow];
+    CGFloat W = w.bounds.size.width;
+    CGFloat cw = MIN(240, W * 0.58), ch = 168;
+    CGFloat toW = W - 16, toH = w.bounds.size.height - w.safeAreaInsets.top - 20 - 80;
+    if (!_peek) {
+        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cw, ch)];
+        card.userInteractionEnabled = NO; card.clipsToBounds = YES;
+        card.layer.cornerRadius = 30; card.layer.cornerCurve = kCACornerCurveContinuous;
+        card.layer.borderWidth = 0.8; card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+        UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+        blur.frame = card.bounds; [card addSubview:blur];
+        UIView *ink = [[UIView alloc] initWithFrame:card.bounds]; ink.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; [card addSubview:ink];
+        // the real Insights, scaled down to the card's width, top part showing
+        UIView *c = [[UIView alloc] initWithFrame:CGRectMake(0, 0, toW, toH)];
+        [MPInsightsCtl buildIn:c size:c.bounds.size closeTarget:self action:@selector(peekHide)];
+        CGFloat ps = cw / toW;
+        c.transform = CGAffineTransformMakeScale(ps, ps);
+        c.center = CGPointMake(cw / 2, toH * ps / 2);
+        c.userInteractionEnabled = NO;
+        c.layer.shouldRasterize = YES; c.layer.rasterizationScale = UIScreen.mainScreen.scale;
+        [card addSubview:c];
+        _peek = card; _peekC = c;
+    }
+    UIView *card = _peek;
+    [w addSubview:card];
+    CGRect to = [self peekRectFor:drop in:w];
+    card.frame = drop; card.layer.cornerRadius = drop.size.height / 2;
+    _peekC.alpha = 0;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.74 initialSpringVelocity:0.5 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{
+        card.frame = to; card.layer.cornerRadius = 30;
+    } completion:nil];
+    [UIView animateWithDuration:0.2 delay:0.08 options:UIViewAnimationOptionAllowUserInteraction animations:^{ self->_peekC.alpha = 1; } completion:nil];
+}
+- (CGRect)peekRectFor:(CGRect)drop in:(UIWindow *)w {
+    CGFloat W = w.bounds.size.width, cw = MIN(240, W * 0.58), ch = 168;
+    CGFloat x = MAX(12, MIN(W - 12 - cw, CGRectGetMidX(drop) - cw / 2));
+    CGFloat y = MAX(w.safeAreaInsets.top + 8, CGRectGetMinY(drop) - ch + drop.size.height * 0.5);
+    return CGRectMake(x, y, cw, ch);
+}
+- (void)peekFollow {
+    if (!_peekOn || !_peek.superview) return;
+    CALayer *pl = _peek.layer.animationKeys.count ? nil : _peek.layer;
+    if (!pl) return;   // still growing
+    _peek.frame = [self peekRectFor:[gGoo dropRectInWindow] in:_peek.window];
+}
+- (void)peekHide {
+    if (!_peekOn) return;
+    _peekOn = NO;
+    UIView *card = _peek;
+    CGRect drop = [gGoo dropRectInWindow];
+    [UIView animateWithDuration:0.12 animations:^{ self->_peekC.alpha = 0; }];
+    [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+        card.frame = drop; card.layer.cornerRadius = drop.size.height / 2; card.alpha = 0;
+    } completion:^(__unused BOOL f) { if (!self->_peekOn) { [card removeFromSuperview]; card.alpha = 1; } }];
+}
 // the drop lets go of the pill and becomes the Dynamic Pill: it grows out of the drop, the neck snaps back
 - (void)openFrom:(UIView *)v {
     CGRect c = [gGoo dropRectInWindow];
@@ -1337,16 +1425,32 @@ static UIView *XVisualPill(UIView *touched) {
         if (!gGoo) gGoo = [MPGoo new];
         CGFloat raw = MAX(0, -t.y);
         CGFloat d = raw < 100 ? raw : 100 + (raw - 100) * 0.3;
-        if (g.state == UIGestureRecognizerStateBegan) { [v.layer removeAnimationForKey:@"mp.release"]; SetDrag(v, 0, 0); [gGoo beginOn:v touchX:[g locationInView:v.superview].x]; }
+        if (g.state == UIGestureRecognizerStateBegan) { [v.layer removeAnimationForKey:@"mp.release"]; SetDrag(v, 0, 0); [gGoo beginOn:v touchX:[g locationInView:v.superview].x]; [_peek removeFromSuperview]; _peek = nil; _peekC = nil; _peekOn = NO; }
         if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) {
             [gGoo followX:[g locationInView:v.window].x d:d];
-            if (raw > 88) { _opened = YES; [self openFrom:v]; }   // the drop is full size: it snaps loose and opens
+            // pulled all the way up: a preview of Insights; back down: it sinks back into the drop
+            if (raw > 84) [self peekShow:v];
+            else if (raw < 70) [self peekHide];
+            [self peekFollow];
             return;
         }
         // let go: it opens (unless you barely moved, or pulled back down into the pill)
         // 1.5.6: let go early and it goes back in; it only opens once the drop is big (or with a real flick up)
         BOOL open = g.state == UIGestureRecognizerStateEnded && (raw > 62 || (vel.y < -900 && raw > 20)) && vel.y < 300;
-        if (open) { _opened = YES; [self openFrom:v]; return; }
+        if (open && _peekOn && _peek.superview) {
+            // the preview opens up into the Dynamic Pill
+            _opened = YES; _peekOn = NO;
+            CGRect c = [gGoo dropRectInWindow]; gDropX = CGRectGetMidX(c);
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+            XTouchLight(v, CGPointZero, NO);
+            [_peek.layer removeAllAnimations];
+            [MPIsland expandFrom:v preview:_peek];
+            _peek = nil; _peekC = nil;
+            [gGoo detach];
+            return;
+        }
+        if (open) { _opened = YES; [self peekHide]; [self openFrom:v]; return; }
+        [self peekHide];
         [gGoo retract];
         XBounce(v, 0, -4, NO);
         return;
