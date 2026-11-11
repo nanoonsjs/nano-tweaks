@@ -1,4 +1,5 @@
-// MusicPill 1.4.6 - made by nano
+// MusicPill 1.4.7 - made by nano
+// 1.4.7: player close lands on the pill's real spot (no small/high pill for half a second); Dynamic Pill closes normally, then fades into the real pill with a bounce
 // 1.4.6: player close rebuilt (no jump up after), Dynamic Pill fades out as it closes, Song Change Splash shows right away + new look when the pill is minimized, settings demo shows the splash
 // 1.4.5: the pill no longer shows behind the Dynamic Pill
 // 1.4.4: the pill's spot is locked (no more resizing by itself, no grow while scrolling); Dynamic Pill closes on one real spring every frame; smoother player close
@@ -1472,7 +1473,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.4.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2491,10 +2492,13 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
     MPMiniPill *pill = nil;
     for (UIView *v in host.subviews) if ([v isKindOfClass:[MPMiniPill class]]) pill = (MPMiniPill *)v;
+    CGRect lockedTo = CGRectNull;
     {   // straight onto its locked spot, whatever Music's bar is doing this instant
         UIView *mn = objc_getAssociatedObject(tb, kMini);
         if (pill && mn && host && !gCollapsed) {
             CGRect r = LockedPillRect(PillWantRect(mn, host), host, mn);
+            lockedTo = [host convertRect:r toView:win];
+            if (pill.hidden) { pill.hidden = NO; [pill performSelector:@selector(rebuildGlass)]; [pill refresh]; }
             for (NSString *k in pill.layer.animationKeys) if ([k hasPrefix:@"mp."]) [pill.layer removeAnimationForKey:k];
             [pill.layer removeAnimationForKey:@"position"]; [pill.layer removeAnimationForKey:@"bounds"];
             [UIView performWithoutAnimation:^{ pill.frame = r; [pill layoutIfNeeded]; }];
@@ -2508,7 +2512,8 @@ static void PlayerClosedOurWay(UIWindow *win, UIView *snap, CGRect from) {
     UIView *target = nil;
     CGRect to = CGRectZero;
     UIView *mini = objc_getAssociatedObject(tb, kMini);
-    if (pill && !pill.hidden && pill.alpha > 0.05 && pill.window && ok([pill convertRect:pill.bounds toView:win])) { target = pill; to = [pill convertRect:pill.bounds toView:win]; }
+    if (pill && pill.window && !CGRectIsNull(lockedTo) && ok(lockedTo)) { target = pill; to = lockedTo; }
+    else if (pill && !pill.hidden && pill.alpha > 0.05 && pill.window && ok([pill convertRect:pill.bounds toView:win])) { target = pill; to = [pill convertRect:pill.bounds toView:win]; }
     else if (mini.window && ok([mini convertRect:mini.bounds toView:win])) { target = mini; to = [mini convertRect:mini.bounds toView:win]; }
     else {
         CGRect tr = tb.window ? [tb convertRect:tb.bounds toView:win] : CGRectMake(0, WH - 100, WW, 100);

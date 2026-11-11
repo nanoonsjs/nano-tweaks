@@ -841,12 +841,6 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     double h = dt / n;
     for (int i = 0; i < n; i++) { double a = -k * (_prog - _goal) - c * _vel; _vel += a * h; _prog += _vel * h; }
     [self show:_prog];
-    if (_goal >= 1) {
-        // 1.4.6: closing: the real pill is back underneath once the island covers just its spot, and the
-        // island fades away as it lands on it
-        if (_prog > 0.5 && _pill.alpha < 0.99) [UIView performWithoutAnimation:^{ self->_pill.alpha = 1; }];
-        self.alpha = 1 - XStep(0.55, 0.97, _prog);
-    }
     if (fabs(_prog - _goal) < 0.0015 && fabs(_vel) < 0.02) {
         [_link invalidate]; _link = nil;
         _prog = _goal; [self show:_goal];
@@ -932,14 +926,31 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     [self runSpring];
     // safety: always gone, pill always there
     __weak UIView *wp = _pill;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ UIView *p = wp; if (p && p.alpha < 0.01) p.alpha = 1; if (self.superview) [self landed]; });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ UIView *p = wp; if (p && p.alpha < 0.01) p.alpha = 1; if (self.superview && self.tag != 0x4D51) [self landed]; });
+}
+// 1.4.7: landed on the pill: the real pill is back underneath, both give the same squishy bounce together,
+// and the island fades away smoothly during it, so what's left is the real pill bouncing into place.
+static void XLandBounce(CALayer *L) {
+    CASpringAnimation *sx = [CASpringAnimation animationWithKeyPath:@"transform.scale.x"];
+    sx.fromValue = @1.07; sx.toValue = @1;
+    CASpringAnimation *sy = [CASpringAnimation animationWithKeyPath:@"transform.scale.y"];
+    sy.fromValue = @0.86; sy.toValue = @1;
+    CASpringAnimation *ty = [CASpringAnimation animationWithKeyPath:@"transform.translation.y"];
+    ty.fromValue = @3; ty.toValue = @0;
+    for (CASpringAnimation *a in @[sx, sy, ty]) { a.mass = 1; a.stiffness = 300; a.damping = 10; a.initialVelocity = 2; a.duration = a.settlingDuration; a.additive = NO; }
+    [L addAnimation:sx forKey:@"mp.landx"]; [L addAnimation:sy forKey:@"mp.landy"]; [L addAnimation:ty forKey:@"mp.landt"];
 }
 - (void)landed {
-    if (!self.superview) return;
+    if (!self.superview || self.tag == 0x4D51) return;
+    self.tag = 0x4D51;
     [_link invalidate]; _link = nil;
     UIView *pill = _pill;
     if (pill.alpha < 0.99) [UIView performWithoutAnimation:^{ pill.alpha = 1; }];
-    [self removeFromSuperview];
+    if (pill.window) XLandBounce(pill.layer);
+    XLandBounce(_shape.layer);
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    [UIView animateWithDuration:0.26 delay:0.02 options:UIViewAnimationOptionCurveEaseInOut animations:^{ self.alpha = 0; } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (self.superview) [self removeFromSuperview]; });
 }
 @end
 
