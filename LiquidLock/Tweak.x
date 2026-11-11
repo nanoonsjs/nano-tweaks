@@ -1,4 +1,5 @@
-// LiquidLock 0.4 - made by nano
+// LiquidLock 0.5 - made by nano
+// 0.5: unlocking is Apple-like (white ring spins, then a check), and the face has two animations that take turns.
 // 0.4: lock-sized, plain (no glass), the face also replaces the lock on the passcode screen, and unlocking turns
 //      it into a glowing blue ring that spins, wobbles and bursts into blue sparks.
 // 0.3: no island: the Face ID face itself, in liquid glass, where the lock is. It curls into a glass ring
@@ -78,10 +79,8 @@ static CASpringAnimation *Spring(NSString *kp, id from, id to, CGFloat stiff, CG
 @end
 @implementation LLIsland {
     UIView *_box;
-    CAShapeLayer *_corners, *_face;
-    CALayer *_ringHolder;            // the blue ring (a spinning color wheel seen through a ring)
-    CAGradientLayer *_ringColors;
-    CAShapeLayer *_ringMask;
+    CAShapeLayer *_corners, *_face, *_eyeL, *_eyeR, *_check;
+    int _variant;                    // which of the two face animations plays this time
     BOOL _out, _closing;
     CFTimeInterval _openedAt;
     CGFloat _g;
@@ -95,34 +94,26 @@ static CASpringAnimation *Spring(NSString *kp, id from, id to, CGFloat stiff, CG
     _box.alpha = 0;
     [self addSubview:_box];
     _tint = UIColor.whiteColor;
-    _corners = [self stroke:2.5]; _face = [self stroke:2.1];
+    _corners = [self stroke:2.5]; _face = [self stroke:2.1]; _eyeL = [self stroke:2.1]; _eyeR = [self stroke:2.1]; _check = [self stroke:2.6];
+    CGFloat e = g;
     _corners.path = [self cornersPath].CGPath; _face.path = [self facePath].CGPath;
-    [_box.layer addSublayer:_corners]; [_box.layer addSublayer:_face];
-    // the blue ring
-    CGFloat rs = g + 14;
-    _ringHolder = [CALayer layer];
-    _ringHolder.frame = CGRectMake((g - rs) / 2, (g - rs) / 2, rs, rs);
-    _ringHolder.shadowColor = [UIColor colorWithRed:0.25 green:0.55 blue:1 alpha:1].CGColor; _ringHolder.shadowOpacity = 0.9; _ringHolder.shadowRadius = 6; _ringHolder.shadowOffset = CGSizeZero;
-    _ringHolder.opacity = 0;
-    _ringColors = [CAGradientLayer layer];
-    _ringColors.type = kCAGradientLayerConic; _ringColors.startPoint = CGPointMake(0.5, 0.5); _ringColors.endPoint = CGPointMake(0.5, 0);
-    _ringColors.frame = _ringHolder.bounds;
-    _ringColors.colors = @[(id)[UIColor colorWithRed:0.12 green:0.45 blue:1 alpha:1].CGColor, (id)[UIColor colorWithRed:0.25 green:0.85 blue:1 alpha:1].CGColor,
-                           (id)[UIColor colorWithRed:0.55 green:0.4 blue:1 alpha:1].CGColor, (id)[UIColor colorWithRed:0.2 green:0.6 blue:1 alpha:1].CGColor,
-                           (id)[UIColor colorWithRed:0.12 green:0.45 blue:1 alpha:1].CGColor];
-    _ringMask = [CAShapeLayer layer]; _ringMask.frame = _ringHolder.bounds;
-    _ringMask.fillColor = UIColor.clearColor.CGColor; _ringMask.strokeColor = UIColor.blackColor.CGColor; _ringMask.lineWidth = 3.2; _ringMask.lineCap = kCALineCapRound;
-    _ringMask.path = [self ringPath:g * 0.42 center:CGPointMake(rs / 2, rs / 2)].CGPath;
-    _ringColors.mask = _ringMask;
-    [_ringHolder addSublayer:_ringColors];
-    [_box.layer addSublayer:_ringHolder];
+    UIBezierPath *el = [UIBezierPath bezierPath]; [el moveToPoint:CGPointMake(e * 0.33, e * 0.34)]; [el addLineToPoint:CGPointMake(e * 0.33, e * 0.43)];
+    UIBezierPath *er = [UIBezierPath bezierPath]; [er moveToPoint:CGPointMake(e * 0.67, e * 0.34)]; [er addLineToPoint:CGPointMake(e * 0.67, e * 0.43)];
+    _eyeL.path = el.CGPath; _eyeR.path = er.CGPath;
+    // eyes blink around their own middle
+    _eyeL.anchorPoint = CGPointMake(0.33, 0.385); _eyeR.anchorPoint = CGPointMake(0.67, 0.385);
+    _eyeL.frame = CGRectMake(0, 0, g, g); _eyeR.frame = CGRectMake(0, 0, g, g);
+    UIBezierPath *ck = [UIBezierPath bezierPath];
+    [ck moveToPoint:CGPointMake(e * 0.3, e * 0.52)]; [ck addLineToPoint:CGPointMake(e * 0.45, e * 0.67)]; [ck addLineToPoint:CGPointMake(e * 0.72, e * 0.36)];
+    _check.path = ck.CGPath; _check.strokeEnd = 0;
+    for (CALayer *l in @[_corners, _face, _eyeL, _eyeR, _check]) [_box.layer addSublayer:l];
     return self;
 }
 - (void)setTint:(UIColor *)t {
     if (!t || [t isEqual:_tint]) return;
     _tint = t;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
-    _corners.strokeColor = t.CGColor; _face.strokeColor = t.CGColor;
+    for (CAShapeLayer *l in @[_corners, _face, _eyeL, _eyeR, _check]) l.strokeColor = t.CGColor;
     [CATransaction commit];
 }
 - (CAShapeLayer *)stroke:(CGFloat)w {
@@ -156,24 +147,24 @@ static CASpringAnimation *Spring(NSString *kp, id from, id to, CGFloat stiff, CG
 - (UIBezierPath *)facePath {
     CGFloat g = _g;
     UIBezierPath *p = [UIBezierPath bezierPath];
-    [p moveToPoint:CGPointMake(g * 0.33, g * 0.34)]; [p addLineToPoint:CGPointMake(g * 0.33, g * 0.43)];
-    [p moveToPoint:CGPointMake(g * 0.67, g * 0.34)]; [p addLineToPoint:CGPointMake(g * 0.67, g * 0.43)];
     [p moveToPoint:CGPointMake(g * 0.5, g * 0.34)]; [p addLineToPoint:CGPointMake(g * 0.5, g * 0.57)]; [p addLineToPoint:CGPointMake(g * 0.44, g * 0.57)];
     [p moveToPoint:CGPointMake(g * 0.33, g * 0.69)]; [p addQuadCurveToPoint:CGPointMake(g * 0.67, g * 0.69) controlPoint:CGPointMake(g * 0.5, g * 0.81)];
     return p;
 }
 - (void)reset {
     [_box.layer removeAllAnimations]; _box.transform = CGAffineTransformIdentity;
-    for (CALayer *l in @[_corners, _face, _ringHolder, _ringColors, _ringMask]) [l removeAllAnimations];
+    for (CALayer *l in @[_corners, _face, _eyeL, _eyeR, _check]) [l removeAllAnimations];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
-    _corners.path = [self cornersPath].CGPath; _corners.opacity = 1; _face.opacity = 1; _ringHolder.opacity = 0;
-    _ringMask.strokeEnd = 1; _ringHolder.transform = CATransform3DIdentity;
+    _corners.path = [self cornersPath].CGPath; _corners.strokeEnd = 1; _corners.strokeStart = 0;
+    for (CALayer *l in @[_corners, _face, _eyeL, _eyeR]) l.opacity = 1;
+    _check.strokeEnd = 0; _check.opacity = 1;
     [CATransaction commit];
 }
 - (void)openAt:(CGPoint)c {
     _box.center = CGPointMake(round(c.x), round(c.y));
     if (_out && !_closing) return;
     _out = YES; _closing = NO; _openedAt = CACurrentMediaTime();
+    _variant = 1 - _variant;   // the two face animations take turns
     [self reset];
     // the lock turns into the face: it pops in with a little overshoot
     _box.alpha = 1;
@@ -190,20 +181,37 @@ static CASpringAnimation *Spring(NSString *kp, id from, id to, CGFloat stiff, CG
     br.fromValue = @1; br.toValue = @1.1; br.duration = 0.55; br.autoreverses = YES; br.repeatCount = HUGE_VALF;
     br.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
     [_corners addAnimation:br forKey:@"breathe"];
-    CAKeyframeAnimation *look = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
-    look.values = @[@0, @1.6, @1.6, @0, @-1.6, @-1.6, @0]; look.keyTimes = @[@0, @0.15, @0.35, @0.5, @0.65, @0.85, @1]; look.duration = 1.6; look.repeatCount = HUGE_VALF;
-    CAKeyframeAnimation *nod = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
-    nod.values = @[@0, @-0.8, @0, @0.9, @0]; nod.duration = 2.1; nod.repeatCount = HUGE_VALF;
-    // and it blinks now and then
-    CAKeyframeAnimation *blink = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
-    blink.values = @[@1, @1, @0.25, @1, @1]; blink.keyTimes = @[@0, @0.86, @0.9, @0.94, @1]; blink.duration = 2.6; blink.repeatCount = HUGE_VALF;
-    [_face addAnimation:look forKey:@"look"]; [_face addAnimation:nod forKey:@"nod"]; [_face addAnimation:blink forKey:@"blink"];
+    NSArray *faceParts = @[_face, _eyeL, _eyeR];
+    if (_variant == 0) {
+        // 1. looking around: the face glances left and right, nods a little, and blinks
+        CAKeyframeAnimation *look = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+        look.values = @[@0, @1.6, @1.6, @0, @-1.6, @-1.6, @0]; look.keyTimes = @[@0, @0.15, @0.35, @0.5, @0.65, @0.85, @1]; look.duration = 1.6; look.repeatCount = HUGE_VALF;
+        CAKeyframeAnimation *nod = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
+        nod.values = @[@0, @-0.8, @0, @0.9, @0]; nod.duration = 2.1; nod.repeatCount = HUGE_VALF;
+        for (CALayer *l in faceParts) { [l addAnimation:look forKey:@"look"]; [l addAnimation:nod forKey:@"nod"]; }
+        CAKeyframeAnimation *blink = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
+        blink.values = @[@1, @1, @0.15, @1, @1]; blink.keyTimes = @[@0, @0.84, @0.89, @0.94, @1]; blink.duration = 2.4; blink.repeatCount = HUGE_VALF;
+        [_eyeL addAnimation:blink forKey:@"blink"]; [_eyeR addAnimation:blink forKey:@"blink"];
+    } else {
+        // 2. playful: the head tilts side to side, it winks, and the smile grows
+        CAKeyframeAnimation *tilt = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"];
+        tilt.values = @[@0, @0.2, @0.2, @0, @-0.2, @-0.2, @0]; tilt.keyTimes = @[@0, @0.18, @0.35, @0.5, @0.68, @0.85, @1]; tilt.duration = 1.9; tilt.repeatCount = HUGE_VALF;
+        tilt.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [_box.layer addAnimation:tilt forKey:@"tilt"];   // the whole face tilts around its middle
+        CAKeyframeAnimation *wink = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
+        wink.values = @[@1, @1, @0.12, @0.12, @1, @1]; wink.keyTimes = @[@0, @0.3, @0.36, @0.5, @0.56, @1]; wink.duration = 1.9; wink.repeatCount = HUGE_VALF;
+        [_eyeR addAnimation:wink forKey:@"blink"];
+        CAKeyframeAnimation *smile = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+        smile.values = @[@1, @1.12, @1, @1, @1.1, @1]; smile.keyTimes = @[@0, @0.3, @0.5, @0.7, @0.85, @1]; smile.duration = 1.9; smile.repeatCount = HUGE_VALF;
+        [_face addAnimation:smile forKey:@"smile"];
+    }
 }
 - (void)stopScan {
-    [_corners removeAnimationForKey:@"breathe"];
-    for (NSString *k in @[@"look", @"nod", @"blink"]) [_face removeAnimationForKey:k];
+    for (CALayer *l in @[_corners, _face, _eyeL, _eyeR]) for (NSString *k in @[@"breathe", @"look", @"nod", @"blink", @"tilt", @"smile"]) [l removeAnimationForKey:k];
+    [_box.layer removeAnimationForKey:@"tilt"];
 }
-// recognized
+// recognized, like Apple's but smoother: the face fades, the brackets curl into a ring that spins as an arc,
+// the ring closes, a check draws itself inside with a pop, then it all shrinks away into the open lock
 - (void)success:(void (^)(void))done {
     __weak LLIsland *ws = self;
     CGFloat wait = MAX(0, 0.2 - (CACurrentMediaTime() - _openedAt));
@@ -212,50 +220,35 @@ static CASpringAnimation *Spring(NSString *kp, id from, id to, CGFloat stiff, CG
         s->_closing = YES;
         [s stopScan];
         CGFloat g = s->_g;
-        // 1. the face melts away, the brackets curl into a ring
         CABasicAnimation *ff = [CABasicAnimation animationWithKeyPath:@"opacity"]; ff.fromValue = @1; ff.toValue = @0; ff.duration = 0.14;
-        [s->_face addAnimation:ff forKey:@"out"]; s->_face.opacity = 0;
-        UIBezierPath *ring = [s ringPath:g * 0.42 center:CGPointMake(g / 2, g / 2)];
-        CASpringAnimation *curl = Spring(@"path", (id)s->_corners.path, (id)ring.CGPath, 330, 16);
+        CABasicAnimation *fs = [CABasicAnimation animationWithKeyPath:@"transform.scale"]; fs.fromValue = @1; fs.toValue = @0.7; fs.duration = 0.16;
+        for (CALayer *l in @[s->_face, s->_eyeL, s->_eyeR]) { [l addAnimation:ff forKey:@"out"]; [l addAnimation:fs forKey:@"shrink"]; l.opacity = 0; }
+        // curl into a ring
+        UIBezierPath *ring = [s ringPath:g * 0.44 center:CGPointMake(g / 2, g / 2)];
+        CASpringAnimation *curl = Spring(@"path", (id)s->_corners.path, (id)ring.CGPath, 330, 18);
         [s->_corners addAnimation:curl forKey:@"curl"]; s->_corners.path = ring.CGPath;
-        Haptic(3);
-        // 2. it lights up blue: the colors sweep around the ring, the white fades under them
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.16 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            LLIsland *s2 = ws; if (!s2) return;
-            s2->_ringHolder.opacity = 1;
-            CABasicAnimation *sweep = [CABasicAnimation animationWithKeyPath:@"strokeEnd"]; sweep.fromValue = @0; sweep.toValue = @1; sweep.duration = 0.32;
-            sweep.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.3 :0 :0.2 :1];
-            [s2->_ringMask addAnimation:sweep forKey:@"sweep"];
-            CABasicAnimation *wf = [CABasicAnimation animationWithKeyPath:@"opacity"]; wf.fromValue = @1; wf.toValue = @0; wf.duration = 0.3; wf.beginTime = CACurrentMediaTime() + 0.12; wf.fillMode = kCAFillModeBackwards;
-            [s2->_corners addAnimation:wf forKey:@"fade"]; s2->_corners.opacity = 0;
-            CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"]; spin.fromValue = @0; spin.toValue = @(M_PI * 2); spin.duration = 0.7; spin.repeatCount = HUGE_VALF;
-            [s2->_ringColors addAnimation:spin forKey:@"spin"];
-            // glow breathes, the ring wobbles like liquid
-            CAKeyframeAnimation *glow = [CAKeyframeAnimation animationWithKeyPath:@"shadowRadius"]; glow.values = @[@2, @9, @5, @8]; glow.duration = 0.75; glow.fillMode = kCAFillModeForwards; glow.removedOnCompletion = NO;
-            [s2->_ringHolder addAnimation:glow forKey:@"glow"];
-            CAKeyframeAnimation *wx = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"]; wx.values = @[@1, @1.14, @0.9, @1.07, @0.97, @1];
-            CAKeyframeAnimation *wy = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"]; wy.values = @[@1, @0.88, @1.1, @0.95, @1.03, @1];
-            CAKeyframeAnimation *wr = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"]; wr.values = @[@0, @0.5, @1.1, @1.6, @2.0, @2.2];
-            CAAnimationGroup *wob = [CAAnimationGroup animation]; wob.animations = @[wx, wy, wr]; wob.duration = 0.7;
-            wob.fillMode = kCAFillModeForwards; wob.removedOnCompletion = NO;
-            [s2->_ringHolder addAnimation:wob forKey:@"wobble"];
-        });
-        // 3. it squeezes into a drop and bursts into blue sparks
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.9 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            LLIsland *s3 = ws; if (!s3) { if (done) done(); return; }
-            CAKeyframeAnimation *sq = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-            sq.values = @[@1, @0.25, @0.32]; sq.keyTimes = @[@0, @0.75, @1]; sq.duration = 0.2;
-            sq.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn];
-            sq.fillMode = kCAFillModeForwards; sq.removedOnCompletion = NO;
-            [s3->_box.layer addAnimation:sq forKey:@"squeeze"];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                LLIsland *s4 = ws; if (!s4) { if (done) done(); return; }
-                [s4 burstAt:s4->_box.center];
-                s4->_box.alpha = 0; [s4->_box.layer removeAllAnimations];
-                Haptic(0);
-                s4->_out = NO; s4->_closing = NO;
+        // spins as an arc, like the Face ID spinner
+        CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"]; spin.fromValue = @0; spin.toValue = @(M_PI * 2.5); spin.duration = 0.5;
+        spin.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.35 :0 :0.25 :1];
+        CAKeyframeAnimation *arc = [CAKeyframeAnimation animationWithKeyPath:@"strokeEnd"]; arc.values = @[@1, @0.7, @0.75, @1]; arc.keyTimes = @[@0, @0.3, @0.7, @1]; arc.duration = 0.5;
+        [s->_corners addAnimation:spin forKey:@"spin"]; [s->_corners addAnimation:arc forKey:@"arc"];
+        // the check draws itself and pops
+        CABasicAnimation *draw = [CABasicAnimation animationWithKeyPath:@"strokeEnd"]; draw.fromValue = @0; draw.toValue = @1; draw.duration = 0.26;
+        draw.beginTime = CACurrentMediaTime() + 0.42; draw.fillMode = kCAFillModeBackwards;
+        draw.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.3 :0 :0.2 :1];
+        [s->_check addAnimation:draw forKey:@"draw"]; s->_check.strokeEnd = 1;
+        CASpringAnimation *pop = Spring(@"transform.scale", @1.18, @1, 360, 12); pop.beginTime = CACurrentMediaTime() + 0.6; pop.fillMode = kCAFillModeBackwards;
+        [s->_box.layer addAnimation:pop forKey:@"pop"];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ Haptic(3); });
+        // then it shrinks away and the open lock comes back
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            LLIsland *s2 = ws; if (!s2) { if (done) done(); return; }
+            [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+                s2->_box.alpha = 0; s2->_box.transform = CGAffineTransformMakeScale(0.5, 0.5);
+            } completion:^(__unused BOOL f) {
+                LLIsland *s3 = ws; if (s3) { s3->_box.transform = CGAffineTransformIdentity; [s3 reset]; s3->_out = NO; s3->_closing = NO; }
                 if (done) done();
-            });
+            }];
         });
     });
 }
