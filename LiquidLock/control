@@ -1,0 +1,10 @@
+Package: com.nano.liquidlock
+Name: LiquidLock
+Version: 0.1
+Architecture: iphoneos-arm
+Description: A liquid Face ID unlock animation on the Lock Screen: the padlock melts into a glass drop while scanning, bursts open when you unlock, and shakes like jelly when it doesn't recognize you. Made by nano.
+Maintainer: nano
+Author: nano
+Section: Tweaks
+Depends: mobilesubstrate, preferenceloader
+Icon: file:///var/jb/usr/share/LiquidLock/icon.png
