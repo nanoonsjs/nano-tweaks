@@ -4,7 +4,7 @@
 // Sleep Timer, tap outside and it shrinks back. Like Control26's Control Center card.
 // The cells are made at runtime as subclasses of PSTableCell, so Music never needs Preferences.framework.
 
-#define MP_VERSION @"1.6.3"
+#define MP_VERSION @"1.6.4"
 
 @interface NSObject (MPPS)
 - (id)propertyForKey:(NSString *)k;
@@ -480,7 +480,7 @@ static void MPGlassDemoLayout(UITableViewCell *self, SEL _cmd) {
     NSNumber *was = objc_getAssociatedObject(g, kGlassPrev);
     if (!was || was.boolValue != light) {
         objc_setAssociatedObject(g, kGlassPrev, @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        UIViewPropertyAnimator *an = objc_getAssociatedObject(g, kGlassAnim); [an stopAnimation:YES]; objc_setAssociatedObject(g, kGlassAnim, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
         objc_setAssociatedObject(g, kGlassFx, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         g.effect = [UIBlurEffect effectWithStyle:light ? UIBlurEffectStyleSystemUltraThinMaterialLight : UIBlurEffectStyleSystemThinMaterialDark];
         UIView *frost = [g.contentView viewWithTag:0x4D50574C];
