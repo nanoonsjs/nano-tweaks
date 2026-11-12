@@ -1,4 +1,5 @@
-// MusicPill 1.6 - made by nano
+// MusicPill 1.6.1 - made by nano
+// 1.6.1: Pill Glass slider in Settings, from really clear glass to tinted glass
 // 1.5.10: the drop can be pulled up anywhere along the pill's top edge, right out to the ends
 // 1.5.9: pulling past the drop's height limit opens it right away (letting go still opens it too)
 // 1.5.8: no preview; the drop follows your finger up to a height limit and opens when you let go
@@ -552,6 +553,7 @@ static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
 }
 
 static int gPlayerStyle = 0;   // 0 = follow Increase Contrast, 1 = pink accents, 2 = standard (white)
+static CGFloat gPillGlass = 0.5;   // 1.6.1: the pill's glass: 0 = really clear, 0.5 = as it was, 1 = tinted
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSString *src = nil;
@@ -560,6 +562,11 @@ static void LoadPrefs(void) {
     gRename = PrefBool(file, @"rename", YES);
     gLGCompatOn = PrefBool(file, @"lgcompat", YES);
     gRound  = PrefBool(file, @"round", YES);
+    {
+        id gv = file[@"pillglass"];
+        if (!gv) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("pillglass"), DOM); if (cf) gv = (__bridge_transfer id)cf; }
+        gPillGlass = [gv respondsToSelector:@selector(doubleValue)] ? MAX(0, MIN(1, [gv doubleValue])) : 0.5;
+    }
     gDebug  = PrefBool(file, @"debug", NO);
     gSwipe  = PrefBool(file, @"swipe", YES);
     gPillHoldPref = PrefBool(file, @"pillhold", NO);
@@ -654,6 +661,9 @@ static void ReloadAndApply(void) {
     LoadPrefs();
     UITabBar *tb = gLastTabBar;
     if (tb) { @try { Update(tb); } @catch (__unused id e) {} }
+    // the pill's glass level may have changed
+    UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
+    for (UIView *v in host.subviews) if ([v respondsToSelector:@selector(applyLook)]) { [v setNeedsLayout]; [v performSelector:@selector(applyLook)]; }
 }
 
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
@@ -1485,7 +1495,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1949,7 +1959,7 @@ static UIControl *MusicBarButton(NSArray *syms) {
 }
 // Light mode: frosted white glass with a soft grey rim and shadow (iOS 26), not the
 // tab bar's dark glass. Dark mode keeps the dark glass.
-- (void)applyLook { FrostGlass((UIVisualEffectView *)_glass, self); ApplyGlow((UIVisualEffectView *)_glass, NO); }
+- (void)applyLook { FrostGlass((UIVisualEffectView *)_glass, self); ApplyGlow((UIVisualEffectView *)_glass, NO); PillGlassLevel((UIVisualEffectView *)_glass); }
 - (void)traitCollectionDidChange:(UITraitCollection *)prev {
     [super traitCollectionDidChange:prev];
     [self setNeedsLayout];
@@ -2417,6 +2427,58 @@ static CGRect LockedPillRect(CGRect live, UIView *host, UIView *mini) {
     if (CACurrentMediaTime() - candAt < 0.5) return live;
     gPillLocks[key] = [NSValue valueWithCGRect:CGRectMake(rl.origin.x, HH - CGRectGetMaxY(rl), rl.size.width, rl.size.height)];
     return rl;
+}
+
+// 1.6.1: how clear or tinted the pill's glass is (Settings > Pill Glass).
+// Clearer: the blur is turned down (a paused animation of the effect, the standard way to get a lighter
+// blur) and the frosting fades, with a brighter rim so the glass edge still shows. Tinted: a darker
+// (dark mode) or whiter (light mode) layer over the glass. The middle is the look it always had.
+static const void *kGlassAnim = &kGlassAnim, *kGlassFx = &kGlassFx, *kGlassLight = &kGlassLight;
+static void PillGlassLevel(UIVisualEffectView *g) {
+    if (![g isKindOfClass:[UIVisualEffectView class]]) return;
+    CGFloat t = gPillGlass;
+    CGFloat clear = MAX(0, (0.5 - t) / 0.5), tint = MAX(0, (t - 0.5) / 0.5);
+    BOOL light = g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+    UIViewPropertyAnimator *an = objc_getAssociatedObject(g, kGlassAnim);
+    NSNumber *wasLight = objc_getAssociatedObject(g, kGlassLight);
+    // the look changed (light/dark): start the blur control over from the new effect
+    if (an && wasLight && wasLight.boolValue != light) {
+        [an stopAnimation:YES]; objc_setAssociatedObject(g, kGlassAnim, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); an = nil;
+        UIVisualEffect *fx = objc_getAssociatedObject(g, kGlassFx); if (fx && !g.effect) g.effect = fx;
+    }
+    objc_setAssociatedObject(g, kGlassLight, @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (clear > 0.01) {
+        if (!an) {
+            UIVisualEffect *fx = g.effect ?: objc_getAssociatedObject(g, kGlassFx);
+            if (fx) {
+                objc_setAssociatedObject(g, kGlassFx, fx, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                g.effect = nil;
+                an = [[UIViewPropertyAnimator alloc] initWithDuration:1 curve:UIViewAnimationCurveLinear animations:^{ g.effect = fx; }];
+                an.pausesOnCompletion = YES;
+                objc_setAssociatedObject(g, kGlassAnim, an, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+        }
+        an.fractionComplete = MAX(0.08, 1 - clear * 0.9);
+    } else if (an) {
+        [an stopAnimation:YES];
+        objc_setAssociatedObject(g, kGlassAnim, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIVisualEffect *fx = objc_getAssociatedObject(g, kGlassFx); if (fx) g.effect = fx;
+    }
+    // the frosting (light mode) fades as it gets clearer
+    UIView *frost = [g.contentView viewWithTag:0x4D50574C];
+    if (frost) frost.alpha = 1 - clear * 0.85;
+    // tint on top
+    UIView *tv = [g.contentView viewWithTag:0x4D50544E];
+    if (tint > 0.01) {
+        if (!tv) {
+            tv = [[UIView alloc] initWithFrame:g.contentView.bounds]; tv.tag = 0x4D50544E; tv.userInteractionEnabled = NO;
+            tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [g.contentView addSubview:tv];
+        }
+        tv.backgroundColor = light ? [UIColor colorWithWhite:1 alpha:0.32 * tint] : [UIColor colorWithWhite:0 alpha:0.5 * tint];
+    } else [tv removeFromSuperview];
+    // a brighter rim on clear glass, so its edge still reads
+    if (clear > 0.01) g.layer.borderColor = [UIColor colorWithWhite:light ? 0 : 1 alpha:light ? 0.08 + 0.1 * clear : 0.2 + 0.25 * clear].CGColor;
 }
 
 // Our pill stands in for Music's bar in both states. Expanded, it sits exactly
