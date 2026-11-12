@@ -554,6 +554,7 @@ static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
 
 static int gPlayerStyle = 0;   // 0 = follow Increase Contrast, 1 = pink accents, 2 = standard (white)
 static CGFloat gPillGlass = 0.5;   // 1.6.1: the pill's glass: 0 = really clear, 0.5 = as it was, 1 = tinted
+@class UIVisualEffectView; static void PillGlassLevel(UIVisualEffectView *g);
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSString *src = nil;
