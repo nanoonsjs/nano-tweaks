@@ -669,9 +669,9 @@ static CGRect XDropAbove(CGRect pillWin) {
     CGFloat d = 60, t = MIN(1, d / 80); t = 1 - (1 - t) * (1 - t);
     CGFloat r = MIN(pillWin.size.height * 0.5, 6 + 22 * t);
     CGFloat f = MAX(0, MIN(1, (d - 4) / 56)); f = f * f * (3 - 2 * f);
-    CGFloat R = pillWin.size.height / 2, base = r * 1.9 + 12;
     CGFloat x = gDropX >= 0 ? gDropX : CGRectGetMidX(pillWin);
-    x = MAX(CGRectGetMinX(pillWin) + R + base, MIN(CGRectGetMaxX(pillWin) - R - base, x));
+    CGFloat m = pillWin.size.height / 2 + r * 0.5;
+    x = MAX(CGRectGetMinX(pillWin) + m, MIN(CGRectGetMaxX(pillWin) - m, x));
     CGFloat cy = CGRectGetMinY(pillWin) + 0.5 - d + r * 0.8 * (1 - f);
     return CGRectMake(x - r, cy - r, r * 2, r * 2);
 }
@@ -1207,7 +1207,7 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
 - (CGRect)dropRectInWindow {
     UIView *pill = _pill; CGRect P = pill.frame;
     CGFloat r = [self radiusFor:_d P:P];
-    CGFloat cx = [self clampX:_x r:r P:P], by = [self dropY:_d r:r P:P];
+    CGFloat cx = [self dropX:_x r:r P:P], by = [self dropY:_d r:r P:P];
     return [pill.superview convertRect:CGRectMake(cx - r, by - r, r * 2, r * 2) toView:pill.window];
 }
 // 1.5.6: the drop grows quickly at first and slows as it gets big
@@ -1219,6 +1219,12 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
 static CGFloat GooForm(CGFloat d) { CGFloat x = MAX(0, MIN(1, (d - 4) / 56)); return x * x * (3 - 2 * x); }
 // the drop's middle: at first it sits mostly inside the pill (just a bump), then it rises out
 - (CGFloat)dropY:(CGFloat)d r:(CGFloat)r P:(CGRect)P { return CGRectGetMinY(P) + 0.5 - MAX(0, d) + r * 0.8 * (1 - GooForm(d)); }
+// 1.5.10: the drop itself can rise anywhere along the top edge, all the way to the round ends; only its foot
+// stays on the flat part, so near the ends the neck leans out toward the drop
+- (CGFloat)dropX:(CGFloat)x r:(CGFloat)r P:(CGRect)P {
+    CGFloat m = P.size.height / 2 + r * 0.5;   // stops just short of the round ends
+    return MAX(CGRectGetMinX(P) + m, MIN(CGRectGetMaxX(P) - m, x));
+}
 - (CGFloat)clampX:(CGFloat)x r:(CGFloat)r P:(CGRect)P {
     CGFloat R = P.size.height / 2, base = r * 1.9 + 12;
     return MAX(CGRectGetMinX(P) + R + base, MIN(CGRectGetMaxX(P) - R - base, x));
@@ -1232,7 +1238,7 @@ static CGFloat GooForm(CGFloat d) { CGFloat x = MAX(0, MIN(1, (d - 4) / 56)); re
     CGFloat stretch = MIN(0.22, fabs(_vd) / 2600);
     CGFloat r0 = [self radiusFor:d P:P] * _rScale;
     CGFloat rx = r0 * (1 - stretch * 0.5), ry = r0 * (1 + stretch);
-    CGFloat cx = [self clampX:_x r:r0 P:P], fx = [self clampX:_bx r:r0 P:P];
+    CGFloat cx = [self dropX:_x r:r0 P:P], fx = [self clampX:_bx r:r0 P:P];
     CGFloat form = GooForm(d);
     // surface tension: while you hold it, it quivers a tiny bit
     if (_mode == 0) { CGFloat q = sin(CACurrentMediaTime() * 9) * 0.025 * (1 - form * 0.5); ry *= 1 + q; rx *= 1 - q * 0.6; }
