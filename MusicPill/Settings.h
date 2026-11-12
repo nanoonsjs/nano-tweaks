@@ -4,7 +4,7 @@
 // Sleep Timer, tap outside and it shrinks back. Like Control26's Control Center card.
 // The cells are made at runtime as subclasses of PSTableCell, so Music never needs Preferences.framework.
 
-#define MP_VERSION @"1.6.1"
+#define MP_VERSION @"1.6.2"
 
 @interface NSObject (MPPS)
 - (id)propertyForKey:(NSString *)k;
@@ -390,6 +390,117 @@ static Class MPCellClass(const char *name, IMP layout) {
     return c;
 }
 
+#pragma mark - Pill Glass preview
+
+// 1.6.2: a little Music screen with the pill on it, using the real glass code. It follows the Pill Glass slider
+// live while you drag it, so you see clear vs tinted before you let go.
+@interface MPGlassPreview : NSObject
+@property (nonatomic, weak) UIView *panel;
+@property (nonatomic, weak) UIVisualEffectView *glass;
+@property (nonatomic, strong) CADisplayLink *link;
+@property (nonatomic) CGFloat shown;
+@end
+@implementation MPGlassPreview
+- (UISlider *)findSlider {
+    UIView *tv = self.panel; while (tv && ![tv isKindOfClass:[UITableView class]]) tv = tv.superview;
+    for (UITableViewCell *cell in ((UITableView *)tv).visibleCells) {
+        id spec = nil; @try { spec = [cell valueForKey:@"specifier"]; } @catch (__unused id e) {}
+        if (![[spec propertyForKey:@"key"] isEqual:@"pillglass"]) continue;
+        NSMutableArray *q = [NSMutableArray arrayWithObject:cell]; int n = 0;
+        while (q.count && n++ < 60) { UIView *v = q.firstObject; [q removeObjectAtIndex:0]; if ([v isKindOfClass:[UISlider class]]) return (UISlider *)v; [q addObjectsFromArray:v.subviews]; }
+    }
+    return nil;
+}
+- (void)tick {
+    UIView *p = self.panel;
+    if (!p.window) { [self.link invalidate]; self.link = nil; return; }
+    UISlider *sl = [self findSlider];
+    CGFloat v = sl ? sl.value : self.shown;
+    if (self.shown < 0 || fabs(v - self.shown) > 0.002) {
+        self.shown = v;
+        GlassLook(self.glass, v, p.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark);
+    }
+}
+@end
+static const void *kGlassPrev = &kGlassPrev;
+static void MPGlassDemoLayout(UITableViewCell *self, SEL _cmd) {
+    struct objc_super sup = { self, class_getSuperclass(object_getClass(self)) };
+    ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
+    self.textLabel.hidden = YES; self.detailTextLabel.hidden = YES; self.selectionStyle = UITableViewCellSelectionStyleNone;
+    UIView *cv = self.contentView;
+    CGFloat W = cv.bounds.size.width, H = cv.bounds.size.height;
+    UIView *panel = [cv viewWithTag:0x4D504750];
+    BOOL light = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+    if (!panel) {
+        panel = [UIView new]; panel.tag = 0x4D504750; panel.clipsToBounds = YES;
+        panel.layer.cornerRadius = 20; panel.layer.cornerCurve = kCACornerCurveContinuous;
+        [cv addSubview:panel];
+        // a bit of Music behind the pill: covers and text, so you can see through the glass
+        NSArray *cols = @[@[[UIColor colorWithRed:0.98 green:0.36 blue:0.42 alpha:1], [UIColor colorWithRed:0.99 green:0.66 blue:0.3 alpha:1]],
+                          @[[UIColor colorWithRed:0.35 green:0.3 blue:0.95 alpha:1], [UIColor colorWithRed:0.25 green:0.75 blue:1 alpha:1]],
+                          @[[UIColor colorWithRed:0.2 green:0.8 blue:0.55 alpha:1], [UIColor colorWithRed:0.95 green:0.9 blue:0.3 alpha:1]],
+                          @[[UIColor colorWithRed:0.75 green:0.3 blue:0.9 alpha:1], [UIColor colorWithRed:1 green:0.45 blue:0.75 alpha:1]]];
+        for (int i = 0; i < 4; i++) {
+            CAGradientLayer *c = [CAGradientLayer layer]; c.name = [NSString stringWithFormat:@"cover%d", i];
+            c.colors = @[(id)[cols[i][0] CGColor], (id)[cols[i][1] CGColor]]; c.startPoint = CGPointZero; c.endPoint = CGPointMake(1, 1);
+            c.cornerRadius = 10; [panel.layer addSublayer:c];
+        }
+        UILabel *h = [UILabel new]; h.tag = 11; h.text = @"Top Picks for You"; h.font = [UIFont systemFontOfSize:17 weight:UIFontWeightBold]; [panel addSubview:h];
+        // the pill
+        UIVisualEffectView *g = [[UIVisualEffectView alloc] initWithEffect:nil]; g.tag = 12; g.clipsToBounds = YES;
+        g.layer.cornerCurve = kCACornerCurveContinuous; g.layer.borderWidth = 0.75;
+        [panel addSubview:g];
+        UIView *art = [UIView new]; art.tag = 13; art.layer.cornerRadius = 6; art.clipsToBounds = YES;
+        CAGradientLayer *ag = [CAGradientLayer layer]; ag.colors = @[(id)[cols[3][0] CGColor], (id)[cols[0][1] CGColor]]; ag.frame = CGRectMake(0, 0, 32, 32); [art.layer addSublayer:ag];
+        [g.contentView addSubview:art];
+        UILabel *t = [UILabel new]; t.tag = 14; t.text = @"Song Title"; t.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]; [g.contentView addSubview:t];
+        UILabel *a = [UILabel new]; a.tag = 15; a.text = @"Artist"; a.font = [UIFont systemFontOfSize:12]; [g.contentView addSubview:a];
+        for (int i = 0; i < 2; i++) {
+            UIImageView *b = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:i ? @"forward.fill" : @"pause.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightBold]]];
+            b.tag = 16 + i; b.contentMode = UIViewContentModeCenter; [g.contentView addSubview:b];
+        }
+        MPGlassPreview *pv = [MPGlassPreview new]; pv.panel = panel; pv.glass = g; pv.shown = -1;
+        objc_setAssociatedObject(self, kGlassPrev, pv, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    panel.frame = CGRectMake(16, 8, W - 32, H - 16);
+    CGFloat pw = panel.bounds.size.width, ph = panel.bounds.size.height;
+    panel.backgroundColor = light ? [UIColor colorWithWhite:0.97 alpha:1] : UIColor.blackColor;
+    UILabel *h = (UILabel *)[panel viewWithTag:11]; h.frame = CGRectMake(14, 10, pw - 28, 20); h.textColor = UIColor.labelColor;
+    CGFloat cs = (pw - 28 - 3 * 10) / 4;
+    for (CALayer *l in panel.layer.sublayers) if ([l.name hasPrefix:@"cover"]) {
+        int i = [[l.name substringFromIndex:5] intValue];
+        l.frame = CGRectMake(14 + i * (cs + 10), 38, cs, MIN(cs, ph - 50));
+    }
+    UIVisualEffectView *g = (UIVisualEffectView *)[panel viewWithTag:12];
+    CGFloat gh = 54;
+    g.frame = CGRectMake(10, ph - gh - 10, pw - 20, gh); g.layer.cornerRadius = gh / 2;
+    // the same glass as the pill: dark glass, or frosted white in light mode
+    NSNumber *was = objc_getAssociatedObject(g, kGlassPrev);
+    if (!was || was.boolValue != light) {
+        objc_setAssociatedObject(g, kGlassPrev, @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIViewPropertyAnimator *an = objc_getAssociatedObject(g, kGlassAnim); [an stopAnimation:YES]; objc_setAssociatedObject(g, kGlassAnim, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(g, kGlassFx, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        g.effect = [UIBlurEffect effectWithStyle:light ? UIBlurEffectStyleSystemUltraThinMaterialLight : UIBlurEffectStyleSystemThinMaterialDark];
+        UIView *frost = [g.contentView viewWithTag:0x4D50574C];
+        if (light && !frost) { frost = [[UIView alloc] initWithFrame:g.contentView.bounds]; frost.tag = 0x4D50574C; frost.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; frost.backgroundColor = [UIColor colorWithWhite:1 alpha:0.62]; [g.contentView insertSubview:frost atIndex:0]; }
+        if (!light) [frost removeFromSuperview];
+        MPGlassPreview *pv = objc_getAssociatedObject(self, kGlassPrev); pv.shown = -1;
+    }
+    CGFloat a = 36;
+    [g.contentView viewWithTag:13].frame = CGRectMake(10, (gh - a) / 2, a, a);
+    ((CALayer *)[g.contentView viewWithTag:13].layer.sublayers.firstObject).frame = CGRectMake(0, 0, a, a);
+    UILabel *t = (UILabel *)[g.contentView viewWithTag:14], *ar = (UILabel *)[g.contentView viewWithTag:15];
+    t.frame = CGRectMake(56, 9, pw - 160, 18); ar.frame = CGRectMake(56, 27, pw - 160, 16);
+    t.textColor = UIColor.labelColor; ar.textColor = UIColor.secondaryLabelColor;
+    for (int i = 0; i < 2; i++) { UIImageView *b = (UIImageView *)[g.contentView viewWithTag:16 + i]; b.frame = CGRectMake(pw - 20 - (2 - i) * 42 - 6, 0, 42, gh); b.tintColor = UIColor.labelColor; }
+    MPGlassPreview *pv = objc_getAssociatedObject(self, kGlassPrev);
+    if (panel.window && !pv.link) {
+        pv.link = [CADisplayLink displayLinkWithTarget:pv selector:@selector(tick)];
+        [pv.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    }
+    pv.shown = -1;
+}
+
 #pragma mark - the page
 
 static BOOL MPIsOurPage(NSArray *arr) {
@@ -411,7 +522,9 @@ static NSArray *MPSpecs(id self, SEL _cmd) {
     NSArray *a = origMPSpecs(self, _cmd);
     @try {
         if (![a isKindOfClass:[NSArray class]] || !MPIsOurPage(a)) return a;
-        id head = MPFind(a, @"MP_HEADER"), demo = MPFind(a, @"MP_DEMO"), sw = MPFind(a, @"MP_DYNAMIC");
+        id head = MPFind(a, @"MP_HEADER"), demo = MPFind(a, @"MP_DEMO"), sw = MPFind(a, @"MP_DYNAMIC"), gdemo = MPFind(a, @"MP_GLASSDEMO");
+        Class gc = MPCellClass("MPGlassDemoCell", (IMP)MPGlassDemoLayout);
+        if (gdemo && gc && [gdemo propertyForKey:@"cellClass"] != gc) MPSP(gdemo, gc, @"cellClass");
         Class hc = MPCellClass("MPHeaderCell", (IMP)MPHeaderLayout), dc = MPCellClass("MPDemoCell", (IMP)MPDemoLayout);
         if (head && hc && [head propertyForKey:@"cellClass"] != hc) MPSP(head, hc, @"cellClass");
         if (demo && dc && [demo propertyForKey:@"cellClass"] != dc) MPSP(demo, dc, @"cellClass");

@@ -1,4 +1,5 @@
-// MusicPill 1.6.1 - made by nano
+// MusicPill 1.6.2 - made by nano
+// 1.6.2: Pill Glass redone: clear liquid glass like the tab bar (lens + bright edge), live preview in Settings, minimized pill too
 // 1.6.1: Pill Glass slider in Settings, from really clear glass to tinted glass
 // 1.5.10: the drop can be pulled up anywhere along the pill's top edge, right out to the ends
 // 1.5.9: pulling past the drop's height limit opens it right away (letting go still opens it too)
@@ -553,7 +554,7 @@ static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
 }
 
 static int gPlayerStyle = 0;   // 0 = follow Increase Contrast, 1 = pink accents, 2 = standard (white)
-static CGFloat gPillGlass = 0.5;   // 1.6.1: the pill's glass: 0 = really clear, 0.5 = as it was, 1 = tinted
+static CGFloat gPillGlass = 0.65;   // 1.6.1: the pill's glass: 0 = really clear, 0.5 = as it was, 1 = tinted
 @class UIVisualEffectView; static void PillGlassLevel(UIVisualEffectView *g);
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
@@ -566,7 +567,7 @@ static void LoadPrefs(void) {
     {
         id gv = file[@"pillglass"];
         if (!gv) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("pillglass"), DOM); if (cf) gv = (__bridge_transfer id)cf; }
-        gPillGlass = [gv respondsToSelector:@selector(doubleValue)] ? MAX(0, MIN(1, [gv doubleValue])) : 0.5;
+        gPillGlass = [gv respondsToSelector:@selector(doubleValue)] ? MAX(0, MIN(1, [gv doubleValue])) : 0.65;
     }
     gDebug  = PrefBool(file, @"debug", NO);
     gSwipe  = PrefBool(file, @"swipe", YES);
@@ -665,6 +666,7 @@ static void ReloadAndApply(void) {
     // the pill's glass level may have changed
     UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
     for (UIView *v in host.subviews) if ([v respondsToSelector:@selector(applyLook)]) { [v setNeedsLayout]; [v performSelector:@selector(applyLook)]; }
+    for (UIView *v in host.subviews) { UIView *cg = [v viewWithTag:1]; if ([cg isKindOfClass:[UIVisualEffectView class]] && v.accessibilityIdentifier.length) PillGlassLevel((UIVisualEffectView *)cg); }
 }
 
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
@@ -1496,7 +1498,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -1756,6 +1758,7 @@ static void RebuildCircleGlass(UIView *c) {
     [c insertSubview:g atIndex:0];
     [old removeFromSuperview];
     FrostGlass(g, c);
+    PillGlassLevel(g);
 }
 static void LayoutCircle(UIView *c, CGRect f) {
     c.bounds = CGRectMake(0, 0, f.size.width, f.size.height);
@@ -1766,6 +1769,7 @@ static void LayoutCircle(UIView *c, CGRect f) {
     [c viewWithTag:2].frame = c.bounds;
     FrostGlass((UIVisualEffectView *)g, c);
     ApplyGlow((UIVisualEffectView *)g, YES);
+    PillGlassLevel((UIVisualEffectView *)g);
 }
 
 @interface MPPassHost : UIView @end
@@ -2430,56 +2434,88 @@ static CGRect LockedPillRect(CGRect live, UIView *host, UIView *mini) {
     return rl;
 }
 
-// 1.6.1: how clear or tinted the pill's glass is (Settings > Pill Glass).
-// Clearer: the blur is turned down (a paused animation of the effect, the standard way to get a lighter
-// blur) and the frosting fades, with a brighter rim so the glass edge still shows. Tinted: a darker
-// (dark mode) or whiter (light mode) layer over the glass. The middle is the look it always had.
+// 1.6.2: the pill's glass, from clear liquid glass (like the tab bar's) to tinted (Settings > Pill Glass).
+// Clear: the blur is turned down (never off), a soft lens of light sits on the glass and a bright edge
+// catches the light at the top-left and bottom-right, so it reads as a piece of glass, not a hole.
+// Tinted: a smoky layer on top. Around 0.65 is the look the pill always had.
 static const void *kGlassAnim = &kGlassAnim, *kGlassFx = &kGlassFx, *kGlassLight = &kGlassLight;
-static void PillGlassLevel(UIVisualEffectView *g) {
-    if (![g isKindOfClass:[UIVisualEffectView class]]) return;
-    CGFloat t = gPillGlass;
-    CGFloat clear = MAX(0, (0.5 - t) / 0.5), tint = MAX(0, (t - 0.5) / 0.5);
-    BOOL light = g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+static void GlassBlur(UIVisualEffectView *g, CGFloat fraction, BOOL light) {
     UIViewPropertyAnimator *an = objc_getAssociatedObject(g, kGlassAnim);
     NSNumber *wasLight = objc_getAssociatedObject(g, kGlassLight);
-    // the look changed (light/dark): start the blur control over from the new effect
     if (an && wasLight && wasLight.boolValue != light) {
         [an stopAnimation:YES]; objc_setAssociatedObject(g, kGlassAnim, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); an = nil;
         UIVisualEffect *fx = objc_getAssociatedObject(g, kGlassFx); if (fx && !g.effect) g.effect = fx;
     }
     objc_setAssociatedObject(g, kGlassLight, @(light), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (clear > 0.01) {
-        if (!an) {
+    if (fraction < 0.995) {
+        if (!an || an.state == UIViewAnimatingStateInactive) {
             UIVisualEffect *fx = g.effect ?: objc_getAssociatedObject(g, kGlassFx);
-            if (fx) {
-                objc_setAssociatedObject(g, kGlassFx, fx, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                g.effect = nil;
-                an = [[UIViewPropertyAnimator alloc] initWithDuration:1 curve:UIViewAnimationCurveLinear animations:^{ g.effect = fx; }];
-                an.pausesOnCompletion = YES;
-                objc_setAssociatedObject(g, kGlassAnim, an, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            }
+            if (!fx) return;
+            objc_setAssociatedObject(g, kGlassFx, fx, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            g.effect = nil;
+            an = [[UIViewPropertyAnimator alloc] initWithDuration:1 curve:UIViewAnimationCurveLinear animations:^{ g.effect = fx; }];
+            an.pausesOnCompletion = YES;
+            objc_setAssociatedObject(g, kGlassAnim, an, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
-        an.fractionComplete = MAX(0.08, 1 - clear * 0.9);
+        an.fractionComplete = fraction;
     } else if (an) {
         [an stopAnimation:YES];
         objc_setAssociatedObject(g, kGlassAnim, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIVisualEffect *fx = objc_getAssociatedObject(g, kGlassFx); if (fx) g.effect = fx;
     }
-    // the frosting (light mode) fades as it gets clearer
+}
+static void GlassLook(UIVisualEffectView *g, CGFloat t, BOOL light) {
+    if (![g isKindOfClass:[UIVisualEffectView class]]) return;
+    t = MAX(0, MIN(1, t));
+    CGFloat clear = MAX(0, MIN(1, (0.65 - t) / 0.65)), tint = MAX(0, MIN(1, (t - 0.65) / 0.35));
+    GlassBlur(g, 1 - 0.62 * clear, light);
+    CGRect B = g.bounds;
+    CGFloat R = g.layer.cornerRadius > 0 ? g.layer.cornerRadius : B.size.height / 2;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    // a lens of light across the glass
+    CAGradientLayer *lens = nil;
+    for (CALayer *l in g.contentView.layer.sublayers) if ([l.name isEqualToString:@"mp.lens"]) lens = (CAGradientLayer *)l;
+    if (!lens) { lens = [CAGradientLayer layer]; lens.name = @"mp.lens"; [g.contentView.layer addSublayer:lens]; }
+    lens.frame = g.contentView.bounds;
+    lens.colors = @[(id)[UIColor colorWithWhite:1 alpha:(light ? 0.22 : 0.13) * clear].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.02 * clear].CGColor,
+                    (id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:(light ? 0.1 : 0.06) * clear].CGColor];
+    lens.locations = @[@0, @0.45, @0.6, @1];
+    // the frosting in light mode thins out as it clears
     UIView *frost = [g.contentView viewWithTag:0x4D50574C];
-    if (frost) frost.alpha = 1 - clear * 0.85;
-    // tint on top
+    if (frost) frost.alpha = 1 - 0.78 * clear;
+    // smoky tint
     UIView *tv = [g.contentView viewWithTag:0x4D50544E];
     if (tint > 0.01) {
         if (!tv) {
             tv = [[UIView alloc] initWithFrame:g.contentView.bounds]; tv.tag = 0x4D50544E; tv.userInteractionEnabled = NO;
             tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            [g.contentView addSubview:tv];
+            [g.contentView insertSubview:tv atIndex:0];
         }
-        tv.backgroundColor = light ? [UIColor colorWithWhite:1 alpha:0.32 * tint] : [UIColor colorWithWhite:0 alpha:0.5 * tint];
+        tv.backgroundColor = light ? [UIColor colorWithWhite:0.92 alpha:0.5 * tint] : [UIColor colorWithWhite:0 alpha:0.45 * tint];
     } else [tv removeFromSuperview];
-    // a brighter rim on clear glass, so its edge still reads
-    if (clear > 0.01) g.layer.borderColor = [UIColor colorWithWhite:light ? 0 : 1 alpha:light ? 0.08 + 0.1 * clear : 0.2 + 0.25 * clear].CGColor;
+    // the bright glass edge: light catching the top-left and the bottom-right
+    CAGradientLayer *rim = nil;
+    for (CALayer *l in g.layer.sublayers) if ([l.name isEqualToString:@"mp.rim"]) rim = (CAGradientLayer *)l;
+    if (!rim) {
+        rim = [CAGradientLayer layer]; rim.name = @"mp.rim"; rim.startPoint = CGPointMake(0, 0); rim.endPoint = CGPointMake(1, 1);
+        CAShapeLayer *m = [CAShapeLayer layer]; m.fillColor = UIColor.clearColor.CGColor; m.strokeColor = UIColor.blackColor.CGColor; rim.mask = m;
+        [g.layer addSublayer:rim];
+    }
+    rim.frame = B;
+    rim.colors = light ? @[(id)[UIColor colorWithWhite:1 alpha:1].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.35].CGColor, (id)[UIColor colorWithWhite:0.75 alpha:0.35].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.9].CGColor]
+                       : @[(id)[UIColor colorWithWhite:1 alpha:0.8].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.12].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.06].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.45].CGColor];
+    rim.locations = @[@0, @0.35, @0.65, @1];
+    CAShapeLayer *m = (CAShapeLayer *)rim.mask; m.frame = rim.bounds; m.lineWidth = 1.3;
+    m.path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(B, 0.65, 0.65) cornerRadius:MAX(0, R - 0.65)].CGPath;
+    rim.opacity = clear;
+    [CATransaction commit];
+    // the plain border steps aside where the bright edge is
+    if (!light) g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2 * (1 - clear)].CGColor;
+    else g.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.08 * (1 - 0.5 * clear)].CGColor;
+}
+static void PillGlassLevel(UIVisualEffectView *g) {
+    if (![g isKindOfClass:[UIVisualEffectView class]]) return;
+    GlassLook(g, gPillGlass, g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark);
 }
 
 // Our pill stands in for Music's bar in both states. Expanded, it sits exactly

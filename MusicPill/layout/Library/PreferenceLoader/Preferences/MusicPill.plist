@@ -137,9 +137,19 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Slide left for really clear glass, right for tinted glass. The middle is the usual look.</string>
+			<string>Slide left for clear liquid glass like the tab bar, right for tinted glass. The preview follows the slider.</string>
 			<key>label</key>
 			<string>Pill Glass</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>height</key>
+			<integer>176</integer>
+			<key>id</key>
+			<string>MP_GLASSDEMO</string>
+			<key>label</key>
+			<string></string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -147,7 +157,7 @@
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>default</key>
-			<real>0.5</real>
+			<real>0.65</real>
 			<key>defaults</key>
 			<string>com.user.musicpill</string>
 			<key>key</key>
