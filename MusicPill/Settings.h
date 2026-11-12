@@ -390,6 +390,8 @@ static Class MPCellClass(const char *name, IMP layout) {
     return c;
 }
 
+static NSString *MPIdent(id s) { return [s respondsToSelector:@selector(identifier)] ? ((NSString *(*)(id, SEL))objc_msgSend)(s, @selector(identifier)) : nil; }
+
 #pragma mark - Pill Glass preview
 
 // 1.6.2: a little Music screen with the pill on it, using the real glass code. It follows the Pill Glass slider
@@ -504,11 +506,11 @@ static void MPGlassDemoLayout(UITableViewCell *self, SEL _cmd) {
 #pragma mark - the page
 
 static BOOL MPIsOurPage(NSArray *arr) {
-    for (id s in arr) if ([s respondsToSelector:@selector(identifier)] && [[s identifier] isEqualToString:@"MP_HEADER"]) return YES;
+    for (id s in arr) if ([s respondsToSelector:@selector(identifier)] && [MPIdent(s) isEqualToString:@"MP_HEADER"]) return YES;
     return NO;
 }
 static id MPFind(NSArray *arr, NSString *ident) {
-    for (id s in arr) if ([s respondsToSelector:@selector(identifier)] && [[s identifier] isEqualToString:ident]) return s;
+    for (id s in arr) if ([s respondsToSelector:@selector(identifier)] && [MPIdent(s) isEqualToString:ident]) return s;
     return nil;
 }
 static const void *kMPDemoSpec = &kMPDemoSpec;
@@ -543,7 +545,7 @@ static void (*origMPSetPref)(id, SEL, id, id);
 static void MPSetPref(id self, SEL _cmd, id value, id spec) {
     origMPSetPref(self, _cmd, value, spec);
     @try {
-        if (![[spec identifier] isEqualToString:@"MP_DYNAMIC"]) return;
+        if (![MPIdent(spec) isEqualToString:@"MP_DYNAMIC"]) return;
         id demo = objc_getAssociatedObject(self, kMPDemoSpec);
         if (!demo) return;
         Ivar iv = class_getInstanceVariable(NSClassFromString(@"PSListController"), "_specifiers");
