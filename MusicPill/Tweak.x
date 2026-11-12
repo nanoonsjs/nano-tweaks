@@ -1,4 +1,5 @@
-// MusicPill 1.6.2 - made by nano
+// MusicPill 1.6.3 - made by nano
+// 1.6.3: real-looking glass (tilt reflections, vivid colors through it, thickness) and the pill sits lower
 // 1.6.2: Pill Glass redone: clear liquid glass like the tab bar (lens + bright edge), live preview in Settings, minimized pill too
 // 1.6.1: Pill Glass slider in Settings, from really clear glass to tinted glass
 // 1.5.10: the drop can be pulled up anywhere along the pill's top edge, right out to the ends
@@ -383,6 +384,7 @@
 // the switches did nothing in 0.3.0. We now read the plist file directly
 // (Dopamine keeps tweak prefs under /var/jb) and fall back to cfprefsd.
 #import <UIKit/UIKit.h>
+#import <CoreMotion/CoreMotion.h>
 #include "../shared/LGCompat.h"
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
@@ -1215,7 +1217,7 @@ static CGAffineTransform PillTransform(UIView *m) {
     if (OnLibraryTab()) s *= 0.86;   // Library: a smaller pill
     // Scaling shrinks around the center; shift down a bit so a smaller pill
     // keeps the same small gap above the tab bar instead of floating up.
-    CGFloat ty = -1.5 + H * (1 - s) / 2;   // 1.2.80: 4.5pt lower (was -6)
+    CGFloat ty = 4.5 + H * (1 - s) / 2;   // 1.6.3: 6pt lower again, closer to the tab bar
     return CGAffineTransformScale(CGAffineTransformMakeTranslation(0, ty), s, s);
 }
 
@@ -1498,7 +1500,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2464,6 +2466,8 @@ static void GlassBlur(UIVisualEffectView *g, CGFloat fraction, BOOL light) {
         UIVisualEffect *fx = objc_getAssociatedObject(g, kGlassFx); if (fx) g.effect = fx;
     }
 }
+static void GlassReal(UIVisualEffectView *g, CGFloat t);
+static void GlassRealFwd(UIVisualEffectView *g, CGFloat t) { GlassReal(g, t); }
 static void GlassLook(UIVisualEffectView *g, CGFloat t, BOOL light) {
     if (![g isKindOfClass:[UIVisualEffectView class]]) return;
     t = MAX(0, MIN(1, t));
@@ -2512,6 +2516,110 @@ static void GlassLook(UIVisualEffectView *g, CGFloat t, BOOL light) {
     // the plain border steps aside where the bright edge is
     if (!light) g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2 * (1 - clear)].CGColor;
     else g.layer.borderColor = [UIColor colorWithWhite:0 alpha:0.08 * (1 - 0.5 * clear)].CGColor;
+    // the edge is always there a little (real glass has an edge), strongest when clear
+    rim.opacity = 0.35 + 0.65 * clear;
+    GlassRealFwd(g, t);
+}
+// 1.6.3: what makes it look like real glass:
+//  - the colors behind it are pushed a little more vivid (real glass seems to gather color)
+//  - a soft reflection band slides across it and the bright edge turns as you tilt the phone
+//  - thickness: a bright inner edge on top, a soft shade along the bottom inside
+static NSHashTable *gShinyGlass;
+static CMMotionManager *gMotion;
+static CGFloat gTiltX, gTiltY;
+static void GlassShine(UIVisualEffectView *g, CGFloat strength);
+static void StartGlassMotion(void) {
+    if (gMotion) return;
+    gMotion = [CMMotionManager new];
+    if (!gMotion.deviceMotionAvailable) return;
+    gMotion.deviceMotionUpdateInterval = 1.0 / 30;
+    [gMotion startDeviceMotionUpdatesToQueue:[NSOperationQueue mainQueue] withHandler:^(CMDeviceMotion *dm, NSError *e) {
+        if (!dm) return;
+        // gravity: how the phone is tilted; eased so the light glides
+        CGFloat tx = MAX(-1, MIN(1, dm.gravity.x * 1.6)), ty = MAX(-1, MIN(1, (dm.gravity.y + 0.6) * 1.6));
+        gTiltX += (tx - gTiltX) * 0.18; gTiltY += (ty - gTiltY) * 0.18;
+        BOOL any = NO;
+        for (UIVisualEffectView *g in [gShinyGlass allObjects]) {
+            if (!g.window) continue;
+            any = YES;
+            NSNumber *st = objc_getAssociatedObject(g, &gTiltX);
+            GlassShine(g, st ? st.doubleValue : 1);
+        }
+        static int idle; idle = any ? 0 : idle + 1;
+        if (idle > 90) { [gMotion stopDeviceMotionUpdates]; gMotion = nil; }   // nothing on screen: stop listening
+    }];
+}
+static void GlassShine(UIVisualEffectView *g, CGFloat strength) {
+    CGRect B = g.bounds;
+    if (B.size.width < 4) return;
+    BOOL light = g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+    CGFloat R = g.layer.cornerRadius > 0 ? g.layer.cornerRadius : B.size.height / 2;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    // the reflection: a soft diagonal band of light that drifts with the tilt
+    CAGradientLayer *glare = nil;
+    for (CALayer *l in g.contentView.layer.sublayers) if ([l.name isEqualToString:@"mp.glare"]) glare = (CAGradientLayer *)l;
+    if (!glare) { glare = [CAGradientLayer layer]; glare.name = @"mp.glare"; [g.contentView.layer addSublayer:glare]; }
+    glare.frame = g.contentView.bounds;
+    CGFloat c = 0.5 + gTiltX * 0.45;   // where the band crosses
+    glare.startPoint = CGPointMake(0, 0.1 + gTiltY * 0.2); glare.endPoint = CGPointMake(1, 0.9 - gTiltY * 0.2);
+    CGFloat a = (light ? 0.42 : 0.2) * strength;
+    glare.colors = @[(id)[UIColor colorWithWhite:1 alpha:0].CGColor, (id)[UIColor colorWithWhite:1 alpha:a * 0.5].CGColor, (id)[UIColor colorWithWhite:1 alpha:a].CGColor, (id)[UIColor colorWithWhite:1 alpha:a * 0.35].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+    glare.locations = @[@(MAX(0, c - 0.32)), @(MAX(0, c - 0.1)), @(c), @(MIN(1, c + 0.06)), @(MIN(1, c + 0.22))];
+    // thickness: inner light along the top, inner shade along the bottom
+    CAShapeLayer *inTop = nil, *inBot = nil;
+    for (CALayer *l in g.contentView.layer.sublayers) { if ([l.name isEqualToString:@"mp.inTop"]) inTop = (CAShapeLayer *)l; if ([l.name isEqualToString:@"mp.inBot"]) inBot = (CAShapeLayer *)l; }
+    if (!inTop) {
+        inTop = [CAShapeLayer layer]; inTop.name = @"mp.inTop"; inBot = [CAShapeLayer layer]; inBot.name = @"mp.inBot";
+        for (CAShapeLayer *l in @[inTop, inBot]) { l.fillRule = kCAFillRuleEvenOdd; l.fillColor = UIColor.blackColor.CGColor; [g.contentView.layer addSublayer:l]; }
+    }
+    UIBezierPath *ring = [UIBezierPath bezierPathWithRect:CGRectInset(B, -40, -40)];
+    [ring appendPath:[UIBezierPath bezierPathWithRoundedRect:B cornerRadius:R]];
+    for (CAShapeLayer *l in @[inTop, inBot]) {
+        l.frame = B; l.path = ring.CGPath; l.shadowPath = ring.CGPath;
+        CAShapeLayer *mk = (CAShapeLayer *)l.mask; if (!mk) { mk = [CAShapeLayer layer]; l.mask = mk; }
+        mk.frame = B; mk.path = [UIBezierPath bezierPathWithRoundedRect:B cornerRadius:R].CGPath;
+        l.fillColor = UIColor.clearColor.CGColor;
+    }
+    inTop.shadowColor = UIColor.whiteColor.CGColor; inTop.shadowOpacity = (light ? 0.9 : 0.55) * strength; inTop.shadowRadius = 2.5;
+    inTop.shadowOffset = CGSizeMake(gTiltX * 1.2, 1.6 + gTiltY * 0.6);
+    inBot.shadowColor = UIColor.blackColor.CGColor; inBot.shadowOpacity = (light ? 0.14 : 0.4) * strength; inBot.shadowRadius = 4;
+    inBot.shadowOffset = CGSizeMake(-gTiltX * 1.2, -2.2);
+    // the bright edge turns toward the light
+    for (CALayer *l in g.layer.sublayers) if ([l.name isEqualToString:@"mp.rim"]) {
+        CAGradientLayer *rim = (CAGradientLayer *)l;
+        rim.startPoint = CGPointMake(0.5 - 0.5 * (1 - gTiltX * 0.6), 0); rim.endPoint = CGPointMake(0.5 + 0.5 * (1 - gTiltX * 0.6), 1);
+    }
+    [CATransaction commit];
+}
+// more vivid colors through the glass (the backdrop's own saturation)
+static void GlassVivid(UIVisualEffectView *g, CGFloat amount) {
+    Class F = NSClassFromString(@"CAFilter");
+    if (!F) return;
+    for (UIView *v in g.subviews) {
+        if (![NSStringFromClass(v.class) containsString:@"Backdrop"]) continue;
+        CALayer *bl = v.layer;
+        NSMutableArray *fs = [bl.filters mutableCopy] ?: [NSMutableArray array];
+        id mine = nil;
+        for (id f in fs) if ([[f valueForKey:@"name"] isEqual:@"mp.vivid"]) mine = f;
+        if (!mine) {
+            mine = ((id (*)(id, SEL, NSString *))objc_msgSend)(F, NSSelectorFromString(@"filterWithType:"), @"colorSaturate");
+            if (!mine) return;
+            [mine setValue:@"mp.vivid" forKey:@"name"];
+            [fs addObject:mine];
+        }
+        [mine setValue:@(amount) forKey:@"inputAmount"];
+        bl.filters = fs;
+    }
+}
+static void GlassReal(UIVisualEffectView *g, CGFloat t) {
+    CGFloat clear = MAX(0, MIN(1, (0.65 - t) / 0.65));
+    CGFloat strength = 0.6 + 0.4 * clear;
+    objc_setAssociatedObject(g, &gTiltX, @(strength), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!gShinyGlass) gShinyGlass = [NSHashTable weakObjectsHashTable];
+    [gShinyGlass addObject:g];
+    @try { GlassVivid(g, 1.25 + 0.55 * clear); } @catch (__unused id e) {}
+    GlassShine(g, strength);
+    StartGlassMotion();
 }
 static void PillGlassLevel(UIVisualEffectView *g) {
     if (![g isKindOfClass:[UIVisualEffectView class]]) return;
