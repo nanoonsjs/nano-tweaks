@@ -2459,8 +2459,8 @@ static CALayer *TabBackdrop(void) {
         CALayer *l = q.lastObject; [q removeLastObject];
         if (BD && [l isKindOfClass:BD] && !l.hidden && l.opacity > 0.05 && ![l.name hasPrefix:@"mp."]) {
             CGRect r = [l convertRect:l.bounds toLayer:nil];
-            CGRect I = CGRectIntersection(r, T);
-            if (!CGRectIsNull(I) && I.size.height > T.size.height * 0.4 && r.size.width > T.size.width * 0.5 && r.size.height < T.size.height * 2.5 && r.size.width > bestW) { best = l; bestW = r.size.width; }
+            CGRect ix = CGRectIntersection(r, T);
+            if (!CGRectIsNull(ix) && ix.size.height > T.size.height * 0.4 && r.size.width > T.size.width * 0.5 && r.size.height < T.size.height * 2.5 && r.size.width > bestW) { best = l; bestW = r.size.width; }
         }
         [q addObjectsFromArray:l.sublayers ?: @[]];
     }
