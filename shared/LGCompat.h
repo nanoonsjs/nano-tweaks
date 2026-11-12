@@ -13,6 +13,7 @@
 static BOOL gLGCompatOn = YES;
 static NSHashTable *gLGOurs;      // our glass views (weak)
 static NSHashTable *gLGHidden;    // LiquidAss views we hid (weak), so they come back if compat is turned off
+static NSHashTable *gLGKeepHidden; // LiquidAss views that must stay hidden (our own glass chosen there)
 static dispatch_source_t gLGTimer;   // a plain timer, so no class names clash between our tweaks
 
 static BOOL LGPresent(void) {
@@ -101,7 +102,7 @@ static void LGCompatPass(void) {
             for (UIView *v in theirs) LGSetHidden(v, YES);
         }
     }
-    if (gLGCompatOn) for (UIView *v in [gLGHidden allObjects]) LGSetHidden(v, NO);   // give theirs back
+    if (gLGCompatOn) for (UIView *v in [gLGHidden allObjects]) if (![gLGKeepHidden containsObject:v]) LGSetHidden(v, NO);   // give theirs back
 }
 static void LGCompatRegister(UIView *v) {
     if (!v || !LGPresent()) return;

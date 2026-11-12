@@ -1,4 +1,5 @@
-// MusicPill 1.6.4 - made by nano
+// MusicPill 1.6.5 - made by nano
+// 1.6.5: Pill Glass uses real liquid glass (Metal, ported from LiquidGlassKit); the real pill no longer hands its glass to LiquidAss
 // 1.6.4: Pill Glass: clear = the tab bar's own glass (copied live), tinted = the usual pill
 // 1.6.3: real-looking glass (tilt reflections, vivid colors through it, thickness) and the pill sits lower
 // 1.6.2: Pill Glass redone: clear liquid glass like the tab bar (lens + bright edge), live preview in Settings, minimized pill too
@@ -387,6 +388,7 @@
 #import <UIKit/UIKit.h>
 #import <CoreMotion/CoreMotion.h>
 #include "../shared/LGCompat.h"
+#include "LiquidGlass.h"
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
@@ -1501,7 +1503,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.4 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2482,15 +2484,38 @@ static void GlassLook(UIVisualEffectView *g, CGFloat t, BOOL light) {
     if (normal) {
         // the usual pill
         [mine removeFromSuperlayer];
+        for (UIView *v in [g.contentView.subviews copy]) if ([v isKindOfClass:[MPLiquidGlassView class]]) [v removeFromSuperview];
+        [gLGKeepHidden removeAllObjects];
+        g.layer.borderWidth = 0.75;
         UIVisualEffect *fx = objc_getAssociatedObject(g, kGlassFx); if (fx && !g.effect) g.effect = fx;
         objc_setAssociatedObject(g, kGlassFx, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         frost.hidden = NO; frost.alpha = 1;
         [tv removeFromSuperview];
         return;
     }
-    // the tab bar's glass
+    // our own glass from here on: LiquidAss compatibility mustn't hide it, and their glass on the pill steps aside
+    if (gLGOurs) [gLGOurs removeObject:g];
+    LGOursHidden(g, NO);
+    if (LGPresent()) for (UIView *v in LGTheirsOn(g)) { if (!gLGKeepHidden) gLGKeepHidden = [NSHashTable weakObjectsHashTable]; [gLGKeepHidden addObject:v]; LGSetHidden(v, YES); }
     if (g.effect) { objc_setAssociatedObject(g, kGlassFx, g.effect, OBJC_ASSOCIATION_RETAIN_NONATOMIC); g.effect = nil; }
     frost.hidden = YES;
+    // 1.6.5: real liquid glass (refraction, color split at the edges, glare), rendered with Metal
+    MPLiquidGlassView *lg = nil;
+    for (UIView *v in g.contentView.subviews) if ([v isKindOfClass:[MPLiquidGlassView class]]) lg = (MPLiquidGlassView *)v;
+    if (!lg) {
+        lg = [[MPLiquidGlassView alloc] initWithFrame:g.contentView.bounds];
+        if (lg) { lg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [g.contentView insertSubview:lg atIndex:0]; }
+    }
+    if (lg) {
+        lg.frame = g.contentView.bounds;
+        lg.layer.cornerRadius = g.layer.cornerRadius > 0 ? g.layer.cornerRadius : g.bounds.size.height / 2;
+        CGFloat a = 0.1 + 0.7 * (t / 0.9);
+        lg.glassTint = light ? [UIColor colorWithRed:0.9 green:0.95 blue:1 alpha:a] : [UIColor colorWithRed:0 green:0.05 blue:0.1 alpha:a];
+        for (CALayer *l in [g.layer.sublayers copy]) if ([l.name isEqualToString:@"mp.clear"]) [l removeFromSuperlayer];
+        [tv removeFromSuperview];
+        g.layer.borderWidth = 0;
+        return;
+    }
     CALayer *src = TabBackdrop();
     Class BD = NSClassFromString(@"CABackdropLayer");
     if (!mine && BD) { mine = [BD layer]; mine.name = @"mp.clear"; [g.layer insertSublayer:mine atIndex:0]; }
