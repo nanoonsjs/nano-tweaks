@@ -1,4 +1,5 @@
-// LiquidLock 0.6 - made by nano
+// LiquidLock 1.0 - made by nano
+// 1.0: new icon, live demo in Settings
 // 0.6: one face animation: he's waiting on you.
 // 0.5: unlocking is Apple-like (white ring spins, then a check), and the face has two animations that take turns.
 // 0.4: lock-sized, plain (no glass), the face also replaces the lock on the passcode screen, and unlocking turns
@@ -445,9 +446,110 @@ static void PrefsChanged(CFNotificationCenterRef c, void *o, CFStringRef n, cons
 
 #include "../shared/NanoSettings.h"
 
+#pragma mark - settings: a live demo
+
+// A little Lock Screen in Settings where the face waits, unlocks (ring + check) and, every third time,
+// doesn't recognize you first (jelly shake). Runs the real animation code.
+static const void *kDemoTimer = &kDemoTimer;
+static void DemoCycle(UIView *panel, LLIsland *isl, CGPoint at, int n) {
+    if (!panel.window) { objc_setAssociatedObject(panel, kDemoTimer, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); return; }
+    objc_setAssociatedObject(panel, kDemoTimer, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [isl openAt:at];
+    __weak UIView *wp = panel; __weak LLIsland *wi = isl;
+    BOOL miss = n % 3 == 2;
+    if (miss) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.9 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [wi fail]; });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((miss ? 3.3 : 2.6) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        LLIsland *i = wi; if (!i) return;
+        [i success:^{
+            // the open lock shows for a moment, then it locks again and the face comes back
+            UIView *lock = [wp viewWithTag:0x4C4B];
+            lock.alpha = 1; lock.transform = CGAffineTransformMakeScale(0.6, 0.6);
+            [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.6 initialSpringVelocity:0 options:0 animations:^{ lock.transform = CGAffineTransformIdentity; } completion:nil];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                UIView *p2 = wp; LLIsland *i2 = wi; if (!p2 || !i2) return;
+                [UIView animateWithDuration:0.15 animations:^{ [p2 viewWithTag:0x4C4B].alpha = 0; }];
+                DemoCycle(p2, i2, at, n + 1);
+            });
+        }];
+    });
+}
+static void LLDemoLayout(UITableViewCell *self, SEL _cmd) {
+    struct objc_super sup = { self, class_getSuperclass(object_getClass(self)) };
+    ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
+    self.textLabel.hidden = YES; self.detailTextLabel.hidden = YES; self.imageView.hidden = YES;
+    self.selectionStyle = UITableViewCellSelectionStyleNone; self.backgroundColor = UIColor.clearColor;
+    UIView *cv = self.contentView;
+    UIView *panel = [cv viewWithTag:0x4C4C44];
+    CGFloat W = cv.bounds.size.width, H = cv.bounds.size.height;
+    CGRect pf = CGRectMake(14, 10, W - 28, H - 20);
+    if (!panel) {
+        panel = [[UIView alloc] initWithFrame:pf]; panel.tag = 0x4C4C44;
+        panel.layer.cornerRadius = 26; panel.layer.cornerCurve = kCACornerCurveContinuous; panel.clipsToBounds = YES;
+        CAGradientLayer *bg = [CAGradientLayer layer]; bg.name = @"bg";
+        bg.colors = @[(id)[UIColor colorWithRed:0.07 green:0.04 blue:0.16 alpha:1].CGColor, (id)[UIColor colorWithRed:0.32 green:0.18 blue:0.62 alpha:1].CGColor, (id)[UIColor colorWithRed:0.12 green:0.36 blue:0.85 alpha:1].CGColor];
+        bg.startPoint = CGPointMake(0, 0); bg.endPoint = CGPointMake(1, 1);
+        [panel.layer addSublayer:bg];
+        // the top of a phone: the notch
+        UIView *notch = [UIView new]; notch.tag = 0x4E4F; notch.backgroundColor = UIColor.blackColor; notch.layer.cornerRadius = 11; [panel addSubview:notch];
+        UILabel *date = [UILabel new]; date.tag = 0x4441; date.text = @"Wednesday, November 12"; date.textColor = [UIColor colorWithWhite:1 alpha:0.85];
+        date.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]; date.textAlignment = NSTextAlignmentCenter; [panel addSubview:date];
+        UILabel *time = [UILabel new]; time.tag = 0x5449; time.text = @"9:41"; time.textColor = UIColor.whiteColor;
+        time.font = [UIFont systemFontOfSize:64 weight:UIFontWeightSemibold]; time.textAlignment = NSTextAlignmentCenter; [panel addSubview:time];
+        UIImageView *lock = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"lock.open.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightSemibold]]];
+        lock.tag = 0x4C4B; lock.tintColor = UIColor.whiteColor; lock.alpha = 0; [panel addSubview:lock];
+        LLIsland *isl = [[LLIsland alloc] initWithFrame:CGRectMake(0, 0, pf.size.width, pf.size.height)]; isl.tag = 0x4953;
+        [panel addSubview:isl];
+        [cv addSubview:panel];
+    }
+    panel.frame = pf;
+    for (CALayer *l in panel.layer.sublayers) if ([l.name isEqualToString:@"bg"]) l.frame = panel.bounds;
+    CGFloat pw = pf.size.width;
+    [panel viewWithTag:0x4E4F].frame = CGRectMake(pw / 2 - 62, -11, 124, 30);
+    CGPoint faceAt = CGPointMake(pw / 2, 46);
+    [panel viewWithTag:0x4C4B].center = faceAt;
+    [panel viewWithTag:0x4441].frame = CGRectMake(0, 70, pw, 18);
+    [panel viewWithTag:0x5449].frame = CGRectMake(0, 86, pw, 74);
+    LLIsland *isl = (LLIsland *)[panel viewWithTag:0x4953];
+    // the face drawn a bit bigger here so you can see it
+    isl.transform = CGAffineTransformIdentity; isl.frame = panel.bounds;
+    CGFloat k = 1.5; CGPoint mid = CGPointMake(pw / 2, pf.size.height / 2);
+    isl.transform = CGAffineTransformMakeScale(k, k);
+    CGPoint at = CGPointMake(mid.x + (faceAt.x - mid.x) / k, mid.y + (faceAt.y - mid.y) / k);
+    if (panel.window && !objc_getAssociatedObject(panel, kDemoTimer)) {
+        __weak UIView *wp = panel; __weak LLIsland *wi = isl;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (wp && wi) DemoCycle(wp, wi, at, 0); });
+        objc_setAssociatedObject(panel, kDemoTimer, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+static Class LLDemoClass(void) {
+    Class sup = NSClassFromString(@"PSTableCell"); if (!sup) return nil;
+    Class c = objc_getClass("LLDemoCell");
+    if (!c) { c = objc_allocateClassPair(sup, "LLDemoCell", 0); class_addMethod(c, @selector(layoutSubviews), (IMP)LLDemoLayout, "v@:"); objc_registerClassPair(c); }
+    return c;
+}
+static NSArray *(*origLLSpecs)(id, SEL);
+static NSArray *LLSpecs(id self, SEL _cmd) {
+    NSArray *a = origLLSpecs(self, _cmd);
+    @try {
+        for (id sp in a) {
+            if (![sp respondsToSelector:@selector(identifier)] || ![[sp identifier] isEqualToString:@"LL_DEMO"]) continue;
+            Class dc = LLDemoClass();
+            if (dc && [sp propertyForKey:@"cellClass"] != dc) ((void (*)(id, SEL, id, id))objc_msgSend)(sp, @selector(setProperty:forKey:), dc, @"cellClass");
+        }
+    } @catch (__unused id e) {}
+    return a;
+}
+static void StartDemo(void) {
+    static BOOL done; if (done) return;
+    Class PS = NSClassFromString(@"PSListController");
+    if (!PS) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ StartDemo(); }); return; }
+    done = YES;
+    MSHookMessageEx(PS, @selector(specifiers), (IMP)LLSpecs, (IMP *)&origLLSpecs);
+}
+
 %ctor {
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
-    if ([bid isEqualToString:@"com.apple.Preferences"]) { StartNanoSettings(); return; }
+    if ([bid isEqualToString:@"com.apple.Preferences"]) { gHaptics = NO; StartNanoSettings(); StartDemo(); return; }
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, CFSTR("com.nano.liquidlock/prefschanged"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     if (objc_getClass("SBUIProudLockIconView")) { InitHooks(); return; }

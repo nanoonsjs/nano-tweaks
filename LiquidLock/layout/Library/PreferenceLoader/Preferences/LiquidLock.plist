@@ -33,13 +33,29 @@
 			<key>nanoSub</key>
 			<string>Animated Face ID for notched iPhones</string>
 			<key>nanoVersion</key>
-			<string>0.6</string>
+			<string>1.0</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Preview</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>height</key>
+			<integer>250</integer>
+			<key>id</key>
+			<string>LL_DEMO</string>
+			<key>label</key>
+			<string></string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>When Face ID starts looking (and on the passcode screen), the lock turns into a Face ID face that waits for you: it looks at you, blinks, and glances around. When it recognizes you, it curls into a spinning ring and a check draws itself, then the open lock comes back. If it doesn't, it shakes like jelly. For iPhones with a notch (X to 14).</string>
+			<string>When Face ID starts looking (and on the passcode screen), the lock turns into a Face ID face that waits for you: it looks at you, blinks and glances around. When it recognizes you, it curls into a spinning ring and a check draws itself, then the open lock comes back. If it doesn't, it shakes like jelly. For iPhones with a notch (X to 14).</string>
 			<key>label</key>
 			<string>General</string>
 		</dict>
