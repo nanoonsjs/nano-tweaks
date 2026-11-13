@@ -1,4 +1,5 @@
-// MusicPill 1.7.18 - made by nano
+// MusicPill 1.8 - made by nano
+// 1.8: the liquid drop is real liquid glass melting out of the pill; slower Dynamic Pill close with an instant bounce
 // 1.7.18: the Dynamic Pill closes slower; the pill bounces the moment the drop lands in it, no delay
 // 1.7.17: the liquid drop's neck flows into the pill (no more pill rim line under the neck)
 // 1.7.16: back to the 1.7.6 liquid drop (the pill keeps its own glass while you pull, no white border)
@@ -1513,7 +1514,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.7.18 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.8 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
