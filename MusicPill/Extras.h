@@ -1129,13 +1129,14 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     BOOL _light, _absorbing;
     BOOL _clear;                   // 1.6.6: Pill Glass set toward clear: the drop is clear glass too
     UIView *_cBase, *_cPill, *_cDrop; CAShapeLayer *_cMask, *_cTint;
-    CAGradientLayer *_hi, *_caustic; CAShapeLayer *_hiMask;   // 1.6.7: one shiny rim for the whole shape, light caught in the drop
+    CAGradientLayer *_hi, *_caustic; CAShapeLayer *_hiMask;
+    BOOL _broken; CGFloat _nk; CFTimeInterval _popT;   // 1.6.8: pulled far, the neck snaps (_nk 1 joined -> 0 apart) and the drop is its own ball   // 1.6.7: one shiny rim for the whole shape, light caught in the drop
 }
 - (void)beginOn:(UIView *)pill touchX:(CGFloat)x {
     UIView *host = pill.superview;
     if (!host) return;
     [self cleanup];
-    _pill = pill; _mode = 0; _rScale = 1; _absorbing = NO;
+    _pill = pill; _mode = 0; _rScale = 1; _absorbing = NO; _broken = NO; _nk = 1; _popT = 0;
     CGRect P = pill.frame;
     _tx = _x = _bx = MAX(CGRectGetMinX(P), MIN(CGRectGetMaxX(P), x)); _td = _d = 0; _vx = _vd = _vbx = 0;
     _light = pill.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
@@ -1246,6 +1247,12 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
         double ab = -wB * wB * (_bx - _x) - 2 * zB * wB * _vbx; _vbx += ab * h; _bx += _vbx * h;
     }
     if (_mode == 2) { _rScale = MAX(0, _rScale - dt * 12); }
+    // 1.6.8: far enough and the liquid breaks off; let it fall back near the pill and it joins again
+    if (_mode == 0 && !_broken && _d > 70) {
+        _broken = YES; _popT = now;
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    } else if (_broken && _d < 40) _broken = NO;
+    _nk += ((_broken ? 0 : 1) - _nk) * MIN(1, dt * (_broken ? 16 : 10));
     if (_mode != 0 && _d < 0.5 && fabs(_vd) < 8) { [self cleanup]; return; }
     [self draw];
 }
@@ -1274,6 +1281,15 @@ static CGFloat GooForm(CGFloat d) { CGFloat x = MAX(0, MIN(1, (d - 4) / 56)); re
     CGFloat R = P.size.height / 2, base = r * 1.9 + 12;
     return MAX(CGRectGetMinX(P) + R + base, MIN(CGRectGetMaxX(P) - R - base, x));
 }
+// from a neck's left foot, up over the drop's top, down to its right foot
+static void GooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, CGFloat cx, CGFloat rx, CGFloat ry, CGFloat by, CGFloat neck, CGFloat lean) {
+    CGPoint lt = CGPointMake(cx - rx * 0.95, MIN(top - 0.3, by + ry * 0.3)), rt = CGPointMake(cx + rx * 0.95, MIN(top - 0.3, by + ry * 0.3));
+    [q addCurveToPoint:lt controlPoint1:CGPointMake(fx - base * 0.42, top) controlPoint2:CGPointMake(cx - neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5))];
+    int segs = 18; double a0 = M_PI - 0.31, a1 = 2 * M_PI + 0.31;
+    for (int i = 1; i <= segs; i++) { double a = a0 + (a1 - a0) * i / segs; [q addLineToPoint:CGPointMake(cx + rx * cos(a), MIN(top - 0.3, by + ry * sin(a)))]; }
+    [q addLineToPoint:rt];
+    [q addCurveToPoint:CGPointMake(fx + base, top) controlPoint1:CGPointMake(cx + neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5)) controlPoint2:CGPointMake(fx + base * 0.42, top)];
+}
 - (void)draw {
     UIView *pill = _pill; if (!pill.superview) return;
     CGRect P = pill.frame;
@@ -1293,42 +1309,52 @@ static CGFloat GooForm(CGFloat d) { CGFloat x = MAX(0, MIN(1, (d - 4) / 56)); re
     CGFloat neck = r0 * (1.05 - 0.75 * form) + 0.9 * form;
     CGFloat lean = (cx - fx) * 0.5;
     BOOL hasDrop = r0 > 0.5 && d > 0.5;
-    CGPoint lt = CGPointMake(cx - rx * 0.95, MIN(top - 0.3, by + ry * 0.3)), rt = CGPointMake(cx + rx * 0.95, MIN(top - 0.3, by + ry * 0.3));
-    // from the neck's left foot, up over the drop, down to its right foot
-    void (^bump)(UIBezierPath *) = ^(UIBezierPath *q) {
-        [q addCurveToPoint:lt controlPoint1:CGPointMake(fx - base * 0.42, top) controlPoint2:CGPointMake(cx - neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5))];
-        // the drop: an ellipse top from left to right
-        int segs = 18; double a0 = M_PI - 0.31, a1 = 2 * M_PI + 0.31;
-        for (int i = 1; i <= segs; i++) { double a = a0 + (a1 - a0) * i / segs; [q addLineToPoint:CGPointMake(cx + rx * cos(a), MIN(top - 0.3, by + ry * sin(a)))]; }
-        [q addLineToPoint:rt];
-        [q addCurveToPoint:CGPointMake(fx + base, top) controlPoint1:CGPointMake(cx + neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5)) controlPoint2:CGPointMake(fx + base * 0.42, top)];
-    };
+    // snapping: the neck pinches thin, then the drop is a ball of its own and a little bump sinks back into the pill
+    CGFloat nkv = MAX(0, MIN(1, _nk));
+    BOOL apart = hasDrop && nkv < 0.25;
+    CGFloat kj = apart ? 0 : (nkv - 0.25) / 0.75;
+    neck = neck * kj + 0.6 * (1 - kj); base = base * (0.55 + 0.45 * kj);
+    if (_popT > 0) { CGFloat pt = CACurrentMediaTime() - _popT, w = exp(-pt * 7) * sin(pt * 34) * 0.13; rx *= 1 + w; ry *= 1 - w; }
+    CGFloat lb = apart ? nkv / 0.25 : 0;   // the leftover bump, 1 -> 0
     UIBezierPath *p = [UIBezierPath bezierPath];
     // the pill (a capsule) with the drop rising out of its top edge, as one outline
     [p moveToPoint:CGPointMake(CGRectGetMinX(P) + R, top)];
-    if (hasDrop) {
+    if (hasDrop && !apart) {
         [p addLineToPoint:CGPointMake(fx - base, top)];
-        bump(p);
+        GooBump(p, top, fx, base, cx, rx, ry, by, neck, lean);
+    } else if (apart && lb > 0.05) {
+        CGFloat br = 7 * lb, bb = 6 + 12 * lb;
+        [p addLineToPoint:CGPointMake(fx - bb, top)];
+        GooBump(p, top, fx, bb, fx, br, br, top + 3 - 5 * lb, br, 0);
     }
     [p addLineToPoint:CGPointMake(CGRectGetMaxX(P) - R, top)];
     [p addArcWithCenter:CGPointMake(CGRectGetMaxX(P) - R, top + R) radius:R startAngle:-M_PI_2 endAngle:M_PI_2 clockwise:YES];
     [p addLineToPoint:CGPointMake(CGRectGetMinX(P) + R, bottom)];
     [p addArcWithCenter:CGPointMake(CGRectGetMinX(P) + R, top + R) radius:R startAngle:M_PI_2 endAngle:M_PI_2 * 3 clockwise:YES];
     [p closePath];
+    UIBezierPath *ball = apart && r0 > 0.5 ? [UIBezierPath bezierPathWithOvalInRect:CGRectMake(cx - rx, by - ry, rx * 2, ry * 2)] : nil;
+    if (ball) [p appendPath:ball];
     // ink only on the drop and neck
     UIBezierPath *inkP = [UIBezierPath bezierPathWithRect:CGRectMake(CGRectGetMinX(P), by - ry - 4, P.size.width, MAX(0, top - (by - ry - 4)) + 2)];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _shape.path = p.CGPath; _rim.path = p.CGPath;
     if (_clear) {
-        // the neck alone (the pill and the ball have their own glass)
+        // joined: the neck AND the drop are one piece of plain glass (no circle inside it); the pill has its own.
+        // apart: the drop becomes a real glass ball, fading in over the plain glass
         UIBezierPath *nk = nil;
-        if (_cPill && hasDrop) { nk = [UIBezierPath bezierPath]; [nk moveToPoint:CGPointMake(fx - base, top + 1.5)]; [nk addLineToPoint:CGPointMake(fx - base, top)]; bump(nk); [nk addLineToPoint:CGPointMake(fx + base, top + 1.5)]; [nk closePath]; }
+        CGFloat ballA = apart ? MAX(0, MIN(1, 1 - lb)) : 0;
+        if (_cPill) {
+            nk = [UIBezierPath bezierPath];
+            if (hasDrop && !apart) { [nk moveToPoint:CGPointMake(fx - base, top + 1.5)]; [nk addLineToPoint:CGPointMake(fx - base, top)]; GooBump(nk, top, fx, base, cx, rx, ry, by, neck, lean); [nk addLineToPoint:CGPointMake(fx + base, top + 1.5)]; [nk closePath]; }
+            else if (apart && lb > 0.05) { CGFloat br = 7 * lb, bb = 6 + 12 * lb; [nk moveToPoint:CGPointMake(fx - bb, top + 1.5)]; [nk addLineToPoint:CGPointMake(fx - bb, top)]; GooBump(nk, top, fx, bb, fx, br, br, top + 3 - 5 * lb, br, 0); [nk addLineToPoint:CGPointMake(fx + bb, top + 1.5)]; [nk closePath]; }
+            if (ball && ballA < 0.99) [nk appendPath:ball];
+        }
         _cMask.path = _cPill ? nk.CGPath : p.CGPath;
         _cTint.path = _cPill ? nk.CGPath : p.CGPath;   // the pill and the ball tint themselves
         MPLGFit(_cPill, P, R);
         CGFloat bw = MAX(1, rx * 2), bh = MAX(1, ry * 2);
         MPLGFit(_cDrop, CGRectMake(cx - bw / 2, by - bh / 2, bw, bh), MIN(bw, bh) / 2);
-        _cDrop.alpha = hasDrop ? MAX(0, MIN(1, (d - 8) / 22)) : 0;
+        _cDrop.alpha = ballA;
         MPLGStyle(_cPill, gPillGlass, _light); MPLGStyle(_cDrop, gPillGlass, _light);
         MPLGBare(_cPill); MPLGBare(_cDrop);   // no seams: one rim (_hi) runs round the whole shape
         CGRect sb = p.bounds; CGFloat H = MAX(1, _holder.bounds.size.height);
