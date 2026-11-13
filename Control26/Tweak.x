@@ -1,4 +1,5 @@
-// Control26 1.2.8 - made by nano
+// Control26 1.2.9 - made by nano
+// 1.2.9: fixed the AirPlay card crashing SpringBoard (safe mode)
 // 1.2.8: new AirPlay card (song on top, speakers as rounded rows, the playing one white with a check), opened by every AirPlay button on the Lock Screen and in Control Center; grows out of the button
 // 1.2.6: fixed SpringBoard freezing (then respringing) on an incoming call: Apple's views we replace are hidden with a mask instead of fighting every setAlpha in SpringBoard
 // 1.2.5: the glass always follows LiquidAss (NanoGlass isn't needed)
@@ -4829,7 +4830,7 @@ static void InitGlyphs(void) { %init(Glyphs); }
 - (void)routingControllerAvailableRoutesDidChange:(id)rc;
 @end
 @implementation C26AirCard {
-    UIWindow *_win; UIView *_dim, *_card; UIVisualEffectView *_glass; UIImageView *_art; UILabel *_title, *_artist;
+    UIView *_win; UIView *_dim, *_card; UIVisualEffectView *_glass; UIImageView *_art; UILabel *_title, *_artist;
     NSMutableArray *_rows; NSArray *_routes; id _rc; NSTimer *_poll; CGPoint _from; BOOL _closing;
 }
 + (instancetype)shared { static C26AirCard *c; static dispatch_once_t o; dispatch_once(&o, ^{ c = [C26AirCard new]; }); return c; }
@@ -4842,7 +4843,7 @@ static void InitGlyphs(void) { %init(Glyphs); }
         id rc = [C alloc];
         SEL init = NSSelectorFromString(@"initWithName:");
         rc = [rc respondsToSelector:init] ? ((id (*)(id, SEL, id))objc_msgSend)(rc, init, @"Control26") : [rc init];
-        if ([rc respondsToSelector:NSSelectorFromString(@"setDelegate:")]) ((void (*)(id, SEL, id))objc_msgSend)(rc, NSSelectorFromString(@"setDelegate:"), self);
+        // 1.2.9: no delegate (iOS calls methods on it that we don't have: that crashed SpringBoard); the card polls instead
         _rc = rc;
     } @catch (__unused id e) { _rc = nil; }
     return _rc;
@@ -4946,18 +4947,16 @@ static NSString *C26RouteIcon(id r) {
 }
 - (void)showFrom:(UIView *)src {
     if (_win || !src.window) return;
-    UIWindowScene *scene = src.window.windowScene; if (!scene) return;
     FetchNowPlaying();
     id rc = [self routing];
     @try { if ([rc respondsToSelector:NSSelectorFromString(@"setDiscoveryMode:")]) ((void (*)(id, SEL, long long))objc_msgSend)(rc, NSSelectorFromString(@"setDiscoveryMode:"), 2); } @catch (__unused id e) {}
     _closing = NO;
-    _win = [[UIWindow alloc] initWithWindowScene:scene];
-    _win.windowLevel = src.window.windowLevel + 20;
-    _win.backgroundColor = UIColor.clearColor;
-    _win.rootViewController = [UIViewController new];
-    _win.rootViewController.view.backgroundColor = UIColor.clearColor;
-    _win.hidden = NO;
-    UIView *root = _win.rootViewController.view;
+    // 1.2.9: in the window that's already up (Control Center / Lock Screen), not a new window of our own
+    UIView *root = [[UIView alloc] initWithFrame:src.window.bounds];
+    root.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    root.backgroundColor = UIColor.clearColor;
+    [src.window addSubview:root];
+    _win = root;
     CGRect sr = [src convertRect:src.bounds toView:nil];
     _from = CGPointMake(CGRectGetMidX(sr), CGRectGetMidY(sr));
     UIVisualEffectView *dim = [[UIVisualEffectView alloc] initWithEffect:nil];
@@ -5018,14 +5017,14 @@ static NSString *C26RouteIcon(id r) {
     _closing = YES;
     [_poll invalidate]; _poll = nil;
     @try { if ([_rc respondsToSelector:NSSelectorFromString(@"setDiscoveryMode:")]) ((void (*)(id, SEL, long long))objc_msgSend)(_rc, NSSelectorFromString(@"setDiscoveryMode:"), 0); } @catch (__unused id e) {}
-    UIWindow *w = _win; UIView *card = _card; UIVisualEffectView *dim = (UIVisualEffectView *)_dim;
+    UIView *w = _win; UIView *card = _card; UIVisualEffectView *dim = (UIVisualEffectView *)_dim;
     CGPoint c = card.center;
     [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.95 initialSpringVelocity:0 options:0 animations:^{
         card.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(self->_from.x - c.x, self->_from.y - c.y), 0.12, 0.12);
         card.alpha = 0;
         dim.effect = nil;
     } completion:^(BOOL f) {
-        w.hidden = YES;
+        [w removeFromSuperview];
         if (self->_win == w) { self->_win = nil; self->_card = nil; self->_dim = nil; self->_rows = nil; }
     }];
 }
