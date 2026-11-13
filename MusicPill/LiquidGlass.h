@@ -795,6 +795,7 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
         u.glareIntensity = 0.12 * MPLANum(@"TabBar.SpecularOpacity", 1.0);
         u.glassThickness = 10 * MAX(0.3, MPLANum(@"TabBar.RefractionScale", 2.2) / 2.2);
         u.materialTint = light ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
+        u.materialTint.w *= 0.3;   // 1.7.5: this shader lays the tint on much heavier than LiquidAss does (it came out nearly black)
         CGFloat b = MPLANum(@"TabBar.Blur", 3.0);
         if (fabs(b - _laBlur) > 0.01) { _laBlur = b; _blur = b * _scaleCo * 0.9; _blurK = nil; }
     }
