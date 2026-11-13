@@ -1,5 +1,5 @@
-// Control26 1.2.7 - made by nano
-// 1.2.7: AirPlay opens as a card like the Lock Screen's (the panel shrinks to just the song and the speakers, the list pops in)
+// Control26 1.2.8 - made by nano
+// 1.2.8: new AirPlay card (song on top, speakers as rounded rows, the playing one white with a check), opened by every AirPlay button on the Lock Screen and in Control Center; grows out of the button
 // 1.2.6: fixed SpringBoard freezing (then respringing) on an incoming call: Apple's views we replace are hidden with a mask instead of fighting every setAlpha in SpringBoard
 // 1.2.5: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.2.4: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
@@ -4818,80 +4818,259 @@ static void InitCC(void)     { %init(SlidersCC); }
 static void InitMRU(void)    { %init(SlidersMRU); }
 static void InitGlyphs(void) { %init(Glyphs); }
 
-#pragma mark - AirPlay card (1.2.7)
+#pragma mark - AirPlay card (1.2.8, iOS 26 style)
 
-// Tapping AirPlay used to fill the whole tall media panel with the speaker list. Now the panel shrinks to just
-// the speakers (song on top, then the rows), like the card on the Lock Screen, and the list pops in.
-static __weak UIViewController *gCCMediaVC;   // MRUControlCenterViewController
-static UIView *C26RoutingView(UIViewController *cc) {
-    id np = nil, rvc = nil;
-    @try { np = [cc valueForKey:@"nowPlayingViewController"]; rvc = np ? [np valueForKey:@"_routingViewController"] : nil; } @catch (__unused id e) { return nil; }
-    UIView *rv = [rvc isKindOfClass:[UIViewController class]] ? ((UIViewController *)rvc).viewIfLoaded : nil;
-    if (!rv.window || rv.hidden || rv.alpha < 0.5) return nil;
-    for (UIView *p = rv.superview; p; p = p.superview) if (p.hidden || p.alpha < 0.05) return nil;
-    return rv;
+// Every AirPlay button (our music module, the big player, Apple's Lock Screen / Control Center ones) opens this
+// card instead of Apple's sheet: the song on top, then each speaker as a rounded row; the one playing is white
+// with a check. It grows out of the button that was tapped and shrinks back into it.
+@interface C26AirCard : NSObject
++ (instancetype)shared;
+- (void)showFrom:(UIView *)src;
+- (void)routingControllerAvailableRoutesDidChange:(id)rc;
+@end
+@implementation C26AirCard {
+    UIWindow *_win; UIView *_dim, *_card; UIVisualEffectView *_glass; UIImageView *_art; UILabel *_title, *_artist;
+    NSMutableArray *_rows; NSArray *_routes; id _rc; NSTimer *_poll; CGPoint _from; BOOL _closing;
 }
-static double (*origPrefH)(id, SEL);
-static double C26PrefH(UIViewController *self, SEL _cmd) {
-    double h = origPrefH(self, _cmd);
-    gCCMediaVC = self;
-    if (!gEnabled || !gMusic) return h;
++ (instancetype)shared { static C26AirCard *c; static dispatch_once_t o; dispatch_once(&o, ^{ c = [C26AirCard new]; }); return c; }
+- (id)routing {
+    if (_rc) return _rc;
+    dlopen("/System/Library/Frameworks/MediaPlayer.framework/MediaPlayer", RTLD_LAZY);
+    Class C = NSClassFromString(@"MPAVRoutingController");
+    if (!C) return nil;
     @try {
-        UIView *rv = C26RoutingView(self);
-        UITableView *tv = rv ? [rv valueForKey:@"tableView"] : nil;
-        if (![tv isKindOfClass:[UITableView class]]) return h;
-        [tv layoutIfNeeded];
-        CGFloat ch = tv.contentSize.height;
-        if (ch < 20) return h;
-        UIEdgeInsets in = tv.contentInset;
-        CGRect tvInRv = [tv convertRect:tv.bounds toView:self.viewIfLoaded];
-        CGFloat top = MAX(0, CGRectGetMinY(tvInRv)) + in.top;   // the song header above the list
-        double fit = top + ch + in.bottom + 14;
-        return MAX(150, MIN(h, fit));
+        id rc = [C alloc];
+        SEL init = NSSelectorFromString(@"initWithName:");
+        rc = [rc respondsToSelector:init] ? ((id (*)(id, SEL, id))objc_msgSend)(rc, init, @"Control26") : [rc init];
+        if ([rc respondsToSelector:NSSelectorFromString(@"setDelegate:")]) ((void (*)(id, SEL, id))objc_msgSend)(rc, NSSelectorFromString(@"setDelegate:"), self);
+        _rc = rc;
+    } @catch (__unused id e) { _rc = nil; }
+    return _rc;
+}
+static BOOL C26RouteBool(id r, NSString *sel) {
+    SEL s = NSSelectorFromString(sel);
+    return [r respondsToSelector:s] ? ((BOOL (*)(id, SEL))objc_msgSend)(r, s) : NO;
+}
+static NSString *C26RouteName(id r) {
+    NSString *n = nil; @try { n = [r valueForKey:@"routeName"]; } @catch (__unused id e) {}
+    if (C26RouteBool(r, @"isDeviceRoute")) return [NSString stringWithFormat:@"%@ Speaker", UIDevice.currentDevice.model ?: @"iPhone"];
+    return [n isKindOfClass:[NSString class]] && n.length ? n : @"Speaker";
+}
+static NSString *C26RouteIcon(id r) {
+    if (C26RouteBool(r, @"isDeviceRoute")) return @"iphone";
+    NSString *n = C26RouteName(r).lowercaseString;
+    if ([n containsString:@"airpods max"]) return @"airpodsmax";
+    if ([n containsString:@"airpods pro"]) return @"airpodspro";
+    if ([n containsString:@"airpods"]) return @"airpods";
+    if ([n containsString:@"homepod mini"]) return @"homepodmini";
+    if ([n containsString:@"homepod"]) return @"homepod";
+    if ([n containsString:@"beats"]) return @"beats.headphones";
+    if ([n containsString:@"car"]) return @"car";
+    if ([n containsString:@"mac"]) return @"laptopcomputer";
+    if ([n containsString:@"ipad"]) return @"ipad";
+    if (C26RouteBool(r, @"isHeadphonesRoute") || [n containsString:@"headphone"] || [n containsString:@"buds"]) return @"headphones";
+    if (C26RouteBool(r, @"isSpeakerRoute") || [n containsString:@"speaker"]) return @"hifispeaker";
+    return @"tv";
+}
+- (NSArray *)currentRoutes {
+    id rc = [self routing]; NSArray *a = nil;
+    @try { a = [rc valueForKey:@"availableRoutes"]; } @catch (__unused id e) {}
+    if (![a isKindOfClass:[NSArray class]]) return @[];
+    NSMutableArray *m = [NSMutableArray array];
+    for (id r in a) if (!C26RouteBool(r, @"isDeviceRoute")) [m addObject:r];
+    [m sortUsingComparator:^NSComparisonResult(id x, id y) { return [C26RouteName(x) localizedCaseInsensitiveCompare:C26RouteName(y)]; }];
+    for (id r in a) if (C26RouteBool(r, @"isDeviceRoute")) { [m insertObject:r atIndex:0]; break; }
+    return m;
+}
+- (void)routingControllerAvailableRoutesDidChange:(id)rc { dispatch_async(dispatch_get_main_queue(), ^{ [self reload:YES]; }); }
+- (void)routingController:(id)rc pickedRouteDidChange:(id)r { dispatch_async(dispatch_get_main_queue(), ^{ [self reload:YES]; }); }
+- (CGFloat)heightFor:(NSUInteger)n { return 84 + MAX(1, n) * 58 + 8; }
+- (void)reload:(BOOL)animated {
+    if (!_card || _closing) return;
+    NSArray *routes = [self currentRoutes];
+    _routes = routes;
+    CGFloat W = _card.bounds.size.width;
+    while (_rows.count < routes.count) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+        b.layer.cornerRadius = 25; b.layer.cornerCurve = kCACornerCurveContinuous; b.clipsToBounds = YES;
+        UIImageView *ic = [UIImageView new]; ic.tag = 1; ic.contentMode = UIViewContentModeCenter; [b addSubview:ic];
+        UILabel *l = [UILabel new]; l.tag = 2; l.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold]; [b addSubview:l];
+        UIImageView *ck = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]]];
+        ck.tag = 3; ck.contentMode = UIViewContentModeCenter; [b addSubview:ck];
+        UIView *seg = [UIView new]; seg.tag = 4; seg.userInteractionEnabled = NO; [b insertSubview:seg atIndex:0];
+        [b addTarget:self action:@selector(pick:) forControlEvents:UIControlEventTouchUpInside];
+        [b addTarget:self action:@selector(press:) forControlEvents:UIControlEventTouchDown];
+        [b addTarget:self action:@selector(unpress:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+        [_card addSubview:b]; [_rows addObject:b];
+        b.alpha = 0;
+    }
+    void (^lay)(void) = ^{
+        for (NSUInteger i = 0; i < self->_rows.count; i++) {
+            UIButton *b = self->_rows[i];
+            if (i >= routes.count) { b.alpha = 0; continue; }
+            id r = routes[i]; BOOL on = C26RouteBool(r, @"isPicked");
+            b.tag = (NSInteger)i; b.alpha = 1;
+            b.frame = CGRectMake(14, 84 + i * 58, W - 28, 50);
+            b.backgroundColor = on ? [UIColor colorWithWhite:1 alpha:0.94] : [UIColor colorWithWhite:1 alpha:0.12];
+            UIColor *ink = on ? [UIColor colorWithWhite:0.08 alpha:1] : UIColor.whiteColor;
+            UIImageView *ic = (UIImageView *)[b viewWithTag:1];
+            ic.image = [UIImage systemImageNamed:C26RouteIcon(r) withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightMedium]] ?: [UIImage systemImageNamed:@"speaker.wave.2.fill"];
+            ic.tintColor = ink; ic.frame = CGRectMake(14, 0, 28, 50);
+            UILabel *l = (UILabel *)[b viewWithTag:2]; l.text = C26RouteName(r); l.textColor = ink; l.frame = CGRectMake(50, 0, W - 28 - 50 - 58, 50);
+            UIView *seg = [b viewWithTag:4]; seg.hidden = !on; seg.frame = CGRectMake(W - 28 - 52, 0, 52, 50);
+            seg.backgroundColor = [UIColor colorWithWhite:0.75 alpha:0.55];
+            UIImageView *ck = (UIImageView *)[b viewWithTag:3]; ck.hidden = !on; ck.tintColor = ink; ck.frame = seg.frame;
+        }
+        CGRect f = self->_card.frame; f.size.height = [self heightFor:routes.count];
+        CGFloat H = self->_win.bounds.size.height;
+        if (CGRectGetMaxY(f) > H - 30) f.origin.y = MAX(60, H - 30 - f.size.height);
+        self->_card.bounds = CGRectMake(0, 0, f.size.width, f.size.height);
+        self->_card.center = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
+        self->_glass.frame = self->_card.bounds;
+    };
+    if (animated) [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:lay completion:nil];
+    else lay();
+}
+- (void)press:(UIButton *)b { [UIView animateWithDuration:0.15 animations:^{ b.transform = CGAffineTransformMakeScale(0.96, 0.96); }]; }
+- (void)unpress:(UIButton *)b { [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.5 initialSpringVelocity:0 options:0 animations:^{ b.transform = CGAffineTransformIdentity; } completion:nil]; }
+- (void)pick:(UIButton *)b {
+    [self unpress:b];
+    if (b.tag < 0 || b.tag >= (NSInteger)_routes.count) return;
+    id r = _routes[b.tag];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    @try {
+        SEL pk = NSSelectorFromString(@"pickRoute:");
+        if ([_rc respondsToSelector:pk]) ((BOOL (*)(id, SEL, id))objc_msgSend)(_rc, pk, r);
     } @catch (__unused id e) {}
-    return h;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [self reload:YES]; });
 }
-// ask Control Center to resize the expanded panel to the new preferred height
-static void C26ResizeMedia(void) {
-    UIViewController *cc = gCCMediaVC; if (!cc) return;
-    id np = nil; @try { np = [cc valueForKey:@"nowPlayingViewController"]; } @catch (__unused id e) {}
-    SEL s = NSSelectorFromString(@"nowPlayingViewController:didChangeSizeWithAnimations:completion:");
-    if (!np || ![cc respondsToSelector:s]) return;
-    @try { ((void (*)(id, SEL, id, id, id))objc_msgSend)(cc, s, np, ^{}, ^(BOOL f) {}); } @catch (__unused id e) {}
+- (void)showFrom:(UIView *)src {
+    if (_win || !src.window) return;
+    UIWindowScene *scene = src.window.windowScene; if (!scene) return;
+    FetchNowPlaying();
+    id rc = [self routing];
+    @try { if ([rc respondsToSelector:NSSelectorFromString(@"setDiscoveryMode:")]) ((void (*)(id, SEL, long long))objc_msgSend)(rc, NSSelectorFromString(@"setDiscoveryMode:"), 2); } @catch (__unused id e) {}
+    _closing = NO;
+    _win = [[UIWindow alloc] initWithWindowScene:scene];
+    _win.windowLevel = src.window.windowLevel + 20;
+    _win.backgroundColor = UIColor.clearColor;
+    _win.rootViewController = [UIViewController new];
+    _win.rootViewController.view.backgroundColor = UIColor.clearColor;
+    _win.hidden = NO;
+    UIView *root = _win.rootViewController.view;
+    CGRect sr = [src convertRect:src.bounds toView:nil];
+    _from = CGPointMake(CGRectGetMidX(sr), CGRectGetMidY(sr));
+    UIVisualEffectView *dim = [[UIVisualEffectView alloc] initWithEffect:nil];
+    dim.frame = root.bounds; dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(close)]];
+    [root addSubview:dim]; _dim = dim;
+    CGFloat W = MIN(root.bounds.size.width - 40, 360);
+    NSArray *routes = [self currentRoutes];
+    CGFloat H = [self heightFor:routes.count];
+    CGFloat top = MAX(root.safeAreaInsets.top + 60, MIN(_from.y - 70, root.bounds.size.height - H - 40));
+    _card = [[UIView alloc] initWithFrame:CGRectMake((root.bounds.size.width - W) / 2, top, W, H)];
+    _card.layer.cornerRadius = 34; _card.layer.cornerCurve = kCACornerCurveContinuous;
+    _card.layer.shadowColor = UIColor.blackColor.CGColor; _card.layer.shadowOpacity = 0.3; _card.layer.shadowRadius = 30; _card.layer.shadowOffset = CGSizeMake(0, 12);
+    _glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    _glass.frame = _card.bounds; _glass.layer.cornerRadius = 34; _glass.layer.cornerCurve = kCACornerCurveContinuous; _glass.clipsToBounds = YES;
+    _glass.contentView.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.12];
+    _glass.layer.borderWidth = 0.6; _glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
+    [_card addSubview:_glass];
+    _art = [[UIImageView alloc] initWithFrame:CGRectMake(16, 16, 52, 52)];
+    _art.layer.cornerRadius = 10; _art.layer.cornerCurve = kCACornerCurveContinuous; _art.clipsToBounds = YES; _art.contentMode = UIViewContentModeScaleAspectFill;
+    _art.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    _art.image = gArtwork;
+    [_card addSubview:_art];
+    _title = [[UILabel alloc] initWithFrame:CGRectMake(80, 22, W - 96, 20)];
+    _title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightBold]; _title.textColor = UIColor.whiteColor;
+    _title.text = (gNPTitle ?: @"Not Playing").uppercaseString;
+    [_card addSubview:_title];
+    _artist = [[UILabel alloc] initWithFrame:CGRectMake(80, 42, W - 96, 18)];
+    _artist.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium]; _artist.textColor = [UIColor colorWithWhite:1 alpha:0.6];
+    _artist.text = (gNPArtist ?: @"").uppercaseString;
+    [_card addSubview:_artist];
+    [root addSubview:_card];
+    _rows = [NSMutableArray array];
+    [self reload:NO];
+    // grow out of the button
+    CGPoint c = _card.center;
+    _card.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(_from.x - c.x, _from.y - c.y), 0.12, 0.12);
+    _card.alpha = 0;
+    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction animations:^{
+        self->_card.transform = CGAffineTransformIdentity; self->_card.alpha = 1;
+    } completion:nil];
+    [UIView animateWithDuration:0.3 animations:^{ dim.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]; }];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    __weak C26AirCard *w = self;
+    _poll = [NSTimer scheduledTimerWithTimeInterval:0.6 repeats:YES block:^(NSTimer *t) {
+        C26AirCard *s = w; if (!s || !s->_card) { [t invalidate]; return; }
+        if (!s->_art.image && gArtwork) s->_art.image = gArtwork;
+        if (gNPTitle) s->_title.text = gNPTitle.uppercaseString;
+        if (gNPArtist) s->_artist.text = gNPArtist.uppercaseString;
+        NSArray *now = [s currentRoutes];
+        BOOL changed = now.count != s->_routes.count;
+        for (NSUInteger i = 0; !changed && i < now.count; i++) changed = C26RouteBool(now[i], @"isPicked") != C26RouteBool(s->_routes[i], @"isPicked") || ![C26RouteName(now[i]) isEqualToString:C26RouteName(s->_routes[i])];
+        if (changed) [s reload:YES];
+    }];
 }
-static void (*origRVDidAppear)(id, SEL, BOOL);
-static void C26RVDidAppear(UIViewController *self, SEL _cmd, BOOL a) {
-    origRVDidAppear(self, _cmd, a);
-    if (!gEnabled || !gMusic || !gCCMediaVC) return;
-    UIView *v = self.viewIfLoaded;
-    BOOL inCC = NO; for (UIView *p = v; p; p = p.superview) if (p == gCCMediaVC.viewIfLoaded) { inCC = YES; break; }
-    if (!inCC) return;
-    // the Lock Screen card's pop: in from a touch smaller, quickly settling
-    v.transform = CGAffineTransformMakeScale(0.9, 0.9); v.alpha = 0;
-    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{ v.transform = CGAffineTransformIdentity; v.alpha = 1; } completion:nil];
-    dispatch_async(dispatch_get_main_queue(), ^{ C26ResizeMedia(); });
+- (void)close {
+    if (!_win || _closing) return;
+    _closing = YES;
+    [_poll invalidate]; _poll = nil;
+    @try { if ([_rc respondsToSelector:NSSelectorFromString(@"setDiscoveryMode:")]) ((void (*)(id, SEL, long long))objc_msgSend)(_rc, NSSelectorFromString(@"setDiscoveryMode:"), 0); } @catch (__unused id e) {}
+    UIWindow *w = _win; UIView *card = _card; UIVisualEffectView *dim = (UIVisualEffectView *)_dim;
+    CGPoint c = card.center;
+    [UIView animateWithDuration:0.32 delay:0 usingSpringWithDamping:0.95 initialSpringVelocity:0 options:0 animations:^{
+        card.transform = CGAffineTransformScale(CGAffineTransformMakeTranslation(self->_from.x - c.x, self->_from.y - c.y), 0.12, 0.12);
+        card.alpha = 0;
+        dim.effect = nil;
+    } completion:^(BOOL f) {
+        w.hidden = YES;
+        if (self->_win == w) { self->_win = nil; self->_card = nil; self->_dim = nil; self->_rows = nil; }
+    }];
 }
-static void (*origRVDidDisappear)(id, SEL, BOOL);
-static void C26RVDidDisappear(UIViewController *self, SEL _cmd, BOOL a) {
-    origRVDidDisappear(self, _cmd, a);
-    if (gEnabled && gMusic && gCCMediaVC) dispatch_async(dispatch_get_main_queue(), ^{ C26ResizeMedia(); });
+@end
+
+static void C26ShowAirPlay(UIView *src) { @try { [[C26AirCard shared] showFrom:src]; } @catch (__unused id e) {} }
+
+// Our AirPlay capsules use Apple's route picker button: its tap opens our card instead of Apple's sheet.
+static void (*origSendAction)(id, SEL, SEL, id, id);
+static void C26SendAction(UIControl *self, SEL _cmd, SEL action, id target, id event) {
+    if (gEnabled && gMusic) {
+        Class RP = NSClassFromString(@"AVRoutePickerView");
+        UIView *picker = [target isKindOfClass:RP] ? target : nil;
+        for (UIView *v = self.superview; !picker && v && v != self.window; v = v.superview) if ([v isKindOfClass:RP]) picker = v;
+        if (picker && picker.window) { C26ShowAirPlay(picker); return; }
+    }
+    origSendAction(self, _cmd, action, target, event);
 }
-static void (*origRVUpdated)(id, SEL, id);
-static void C26RVUpdated(id self, SEL _cmd, id rvc) {
-    origRVUpdated(self, _cmd, rvc);
-    if (gEnabled && gMusic && gCCMediaVC) dispatch_async(dispatch_get_main_queue(), ^{ if (C26RoutingView(gCCMediaVC)) C26ResizeMedia(); });   // speakers came or went
+// Apple's own AirPlay buttons (Lock Screen player, Control Center's player and its corner button)
+static void (*origNPRoute)(id, SEL, id);
+static void C26NPRoute(id self, SEL _cmd, id btn) {
+    if (gEnabled && gMusic && [btn isKindOfClass:[UIView class]] && ((UIView *)btn).window) { C26ShowAirPlay(btn); return; }
+    origNPRoute(self, _cmd, btn);
 }
-static BOOL gAirHooked;
-static void TryAirPlayHooks(void) {
-    if (gAirHooked) return;
-    Class cc = NSClassFromString(@"MRUControlCenterViewController"), rv = NSClassFromString(@"MRURoutingViewController"), np = NSClassFromString(@"MRUNowPlayingViewController");
-    if (!cc || !rv || !np) return;
-    gAirHooked = YES;
-    if ([cc instancesRespondToSelector:@selector(preferredExpandedContentHeight)]) MSHookMessageEx(cc, @selector(preferredExpandedContentHeight), (IMP)C26PrefH, (IMP *)&origPrefH);
-    MSHookMessageEx(rv, @selector(viewDidAppear:), (IMP)C26RVDidAppear, (IMP *)&origRVDidAppear);
-    MSHookMessageEx(rv, @selector(viewDidDisappear:), (IMP)C26RVDidDisappear, (IMP *)&origRVDidDisappear);
-    SEL up = NSSelectorFromString(@"routingViewControllerDidUpdateItems:");
-    if ([np instancesRespondToSelector:up]) MSHookMessageEx(np, up, (IMP)C26RVUpdated, (IMP *)&origRVUpdated);
+static void (*origNPTRoute)(id, SEL, id, id);
+static void C26NPTRoute(id self, SEL _cmd, id tc, id btn) {
+    if (gEnabled && gMusic && [btn isKindOfClass:[UIView class]] && ((UIView *)btn).window) { C26ShowAirPlay(btn); return; }
+    origNPTRoute(self, _cmd, tc, btn);
+}
+static void (*origCCRoute)(id, SEL, id);
+static void C26CCRoute(id self, SEL _cmd, id btn) {
+    if (gEnabled && gMusic && [btn isKindOfClass:[UIView class]] && ((UIView *)btn).window) { C26ShowAirPlay(btn); return; }
+    origCCRoute(self, _cmd, btn);
+}
+static BOOL gAirCardHooked;
+static void TryAirCardHooks(void) {
+    if (gAirCardHooked) return;
+    Class np = NSClassFromString(@"MRUNowPlayingViewController"), cc = NSClassFromString(@"MRUControlCenterViewController");
+    if (!np || !cc) return;
+    gAirCardHooked = YES;
+    MSHookMessageEx([UIControl class], @selector(sendAction:to:forEvent:), (IMP)C26SendAction, (IMP *)&origSendAction);
+    SEL a = NSSelectorFromString(@"didSelectRoutingButton:"), b = NSSelectorFromString(@"transportControlsView:didSelectRoutingButton:");
+    if (class_getInstanceMethod(np, a)) MSHookMessageEx(np, a, (IMP)C26NPRoute, (IMP *)&origNPRoute);
+    if (class_getInstanceMethod(np, b)) MSHookMessageEx(np, b, (IMP)C26NPTRoute, (IMP *)&origNPTRoute);
+    if (class_getInstanceMethod(cc, a)) MSHookMessageEx(cc, a, (IMP)C26CCRoute, (IMP *)&origCCRoute);
 }
 
 static void TryLateHooks(void) {
@@ -4903,7 +5082,7 @@ static void TryLateHooks(void) {
     if (!gJ2Hooked && NSClassFromString(@"CCUIButtonModuleView"))      { gJ2Hooked = YES; InitJ2(); }
     if (!gConnHooked && NSClassFromString(@"CCUILabeledRoundButton"))  { gConnHooked = YES; InitConn(); }
     @try { TryEditHooks(); } @catch (__unused id e) {}
-    @try { TryAirPlayHooks(); } @catch (__unused id e) {}
+    @try { TryAirCardHooks(); } @catch (__unused id e) {}
 }
 
 static void StartLateHooks(void) {
@@ -4911,7 +5090,7 @@ static void StartLateHooks(void) {
     __block int tries = 0;
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         TryLateHooks();
-        if ((gMediaHooked && gCCHooked && gMRUHooked && gGlyphHooked && gJ1Hooked && gJ2Hooked && gConnHooked && gEditHooked && gSettingsHooked && gAirHooked) || ++tries > 120) [t invalidate];
+        if ((gMediaHooked && gCCHooked && gMRUHooked && gGlyphHooked && gJ1Hooked && gJ2Hooked && gConnHooked && gEditHooked && gSettingsHooked && gAirCardHooked) || ++tries > 120) [t invalidate];
     }];
 }
 
