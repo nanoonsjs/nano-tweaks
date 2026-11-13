@@ -45,9 +45,9 @@ jobs:
             if [ $? -ne 0 ]; then cat "build-$p-rootful.log"; grep -E "error" "build-$p-rootful.log" | head -15 | sed 's/^/::error::/'; exit 2; fi
             cp "$p"/packages/*_iphoneos-arm.deb out/ || { echo "::error::no rootful deb for $p"; ls "$p/packages"; exit 3; }
           done
-          # Messages26 also for RootHide (Bootstrap on iOS 15-17, arm64e). Experimental: a failure here doesn't stop the release.
+          # Messages26 and Control26 also for RootHide (Bootstrap on iOS 15-17, arm64e). Experimental: a failure here doesn't stop the release.
           git clone --recursive --depth=1 https://github.com/roothide/theos.git "$HOME/theos-roothide" > roothide-clone.log 2>&1 || { tail -5 roothide-clone.log | sed 's/^/::warning::/'; }
-          for p in Messages26; do
+          for p in Messages26 Control26; do
             rm -rf "$p/packages"
             (cd "$p" && THEOS="$HOME/theos-roothide" gmake clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide) > "build-$p-roothide.log" 2>&1
             if [ $? -ne 0 ]; then cat "build-$p-roothide.log"; grep -E "error" "build-$p-roothide.log" | head -10 | sed 's/^/::warning::roothide /'; continue; fi
