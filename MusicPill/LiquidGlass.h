@@ -62,6 +62,7 @@ static NSString *const kMPLiquidGlassShader = @
     "    int rectangleCount;              // Number of active rectangles\n"
     "    float4 rectangles[maxRectangles]; // Array of rectangles (x, y, width, height) in points, upper-left origin\n"
     "    int excludeFirst;                // MusicPill: leave the first shape (the pill) empty, its own glass shows there\n"
+    "    float footX, footY, footW, footH; // ...except an oval around the neck's base (pixels), so neck and pill connect\n"
     "};\n"
     "\n"
     "// Constant linear sampler for texture lookups (bilinear filtering, no wrap)\n"
@@ -552,7 +553,12 @@ static NSString *const kMPLiquidGlassShader = @
     "    if (uniforms.excludeFirst != 0 && uniforms.rectangleCount > 0) {\n"
     "        float4 r0 = uniforms.rectangles[0];\n"
     "        float d0 = roundedRectangleSDF(fragmentPixelCoord, r0, min(uniforms.cornerRadius, 0.5f * min(r0.z, r0.w)), uniforms.cornerRoundnessExponent, uniforms);\n"
-    "        outputColor *= half(smoothstep(-1.5f, 0.5f, d0));\n"
+    "        float keep = smoothstep(-1.5f, 0.5f, d0);\n"
+    "        if (uniforms.footW > 0.5f) {\n"
+    "            float2 q = (fragmentPixelCoord - float2(uniforms.footX, uniforms.footY)) / float2(uniforms.footW, uniforms.footH);\n"
+    "            keep = max(keep, 1.0f - smoothstep(0.55f, 1.0f, length(q)));\n"
+    "        }\n"
+    "        outputColor *= half(keep);\n"
     "    }\n"
     "\n"
     "    return outputColor;\n"
@@ -607,6 +613,7 @@ typedef struct {
     int32_t rectangleCount;
     simd_float4 rectangles[16];
     int32_t excludeFirst;
+    float footX, footY, footW, footH;
 } MPLGUniforms;
 
 // one Metal pipeline for every glass view
@@ -686,6 +693,7 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
 @property (nonatomic, copy) NSArray<NSValue *> *shapes;
 @property (nonatomic) CGFloat shapeRadius, mergePts;
 // 1.7.4: look exactly like LiquidAss's tab bar glass (its blur, tint, refraction ...); captureScale: sharper refraction
+@property (nonatomic) CGRect footOval;   // 1.7.17: our points; inside it the drop's glass covers the pill (fading out to the edge)
 @property (nonatomic) BOOL matchLiquidAss, excludeFirst;   // excludeFirst: draw nothing inside the first shape
 @property (nonatomic) CGFloat captureScale;
 @end
@@ -796,6 +804,11 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
     [self.glassTint getRed:&r green:&g blue:&b alpha:&a];
     u.materialTint = simd_make_float4(r, g, b, a);
     u.excludeFirst = self.excludeFirst ? 1 : 0;
+    if (self.footOval.size.width > 0.5) {
+        CGRect fo = self.footOval;
+        u.footX = CGRectGetMidX(fo) * sc; u.footY = (self.bounds.size.height - CGRectGetMidY(fo)) * sc;   // flipped, like the shapes
+        u.footW = fo.size.width / 2 * sc; u.footH = fo.size.height / 2 * sc;
+    }
     if (self.matchLiquidAss) {
         BOOL light = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
         u.refractiveIndex = MPLANum(@"TabBar.RefractiveIndex", 1.8);

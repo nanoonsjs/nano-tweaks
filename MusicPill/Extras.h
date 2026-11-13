@@ -1405,6 +1405,15 @@ static void GooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, CGFl
             }
             if (hasDrop && r0 > 0.5) [sh addObject:[NSValue valueWithCGRect:CGRectMake(cx - rx - o.x, by - ry - o.y, rx * 2, ry * 2)]];
             _mg.shapes = sh; _mg.shapeRadius = R; _mg.mergePts = 12;
+            // 1.7.17: around the neck's base the drop's glass covers the pill's top edge (fading out), so the
+            // neck flows into the pill instead of standing on the pill's rim
+            if (hasDrop && !apart) {
+                CGFloat ow = MAX(R * 1.6, base * 2.6) * MIN(1, d / 12), oh = R * 1.3 * MIN(1, d / 12);
+                _mg.footOval = CGRectMake(fx - ow / 2 - o.x, top + R * 0.15 - oh / 2 - o.y, ow, oh);
+            } else if (apart && lb > 0.05) {
+                CGFloat ow = 44 * lb, oh = R * 1.1 * lb;
+                _mg.footOval = CGRectMake(fx - ow / 2 - o.x, top + R * 0.1 - oh / 2 - o.y, ow, oh);
+            } else _mg.footOval = CGRectZero;
             // the Metal glass takes over from the pill's own glass over the first bit of the pull
             _mg.alpha = 1;
             _cPill.alpha = 1; _cDrop.alpha = 0;   // the pill stays LiquidAss's glass, exactly as set in its settings
