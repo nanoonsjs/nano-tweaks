@@ -31,9 +31,9 @@
 			<key>nanoName</key>
 			<string>NanoGlass</string>
 			<key>nanoSub</key>
-			<string>One glass for all of nano's tweaks</string>
+			<string>Liquid glass in all of nano's tweaks</string>
 			<key>nanoVersion</key>
-			<string>1.0</string>
+			<string>1.1</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -55,7 +55,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
-			<string>Slide left for clear liquid glass, like the LiquidAss tab bar, right for frosted. Applies right away to Messages26, Photos26, InstaGlass and Control26. MusicPill keeps its own Pill Glass slider. Needs LiquidAss: without it every tweak keeps its own glass.</string>
+			<string>Turns LiquidAss's liquid glass on or off in all of nano's tweaks at once: MusicPill, Messages26, Photos26, InstaGlass and Control26. How blurry the glass is comes from LiquidAss's own settings. Needs LiquidAss: without it (or switched off) every tweak keeps its own glass.</string>
 			<key>label</key>
 			<string>Glass</string>
 		</dict>
@@ -72,26 +72,6 @@
 			<string>enabled</string>
 			<key>label</key>
 			<string>Liquid Glass</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.nano.glass/changed</string>
-			<key>cell</key>
-			<string>PSSliderCell</string>
-			<key>default</key>
-			<real>0.5</real>
-			<key>defaults</key>
-			<string>com.nano.glass</string>
-			<key>isSegmented</key>
-			<false/>
-			<key>key</key>
-			<string>frost</string>
-			<key>max</key>
-			<real>1.0</real>
-			<key>min</key>
-			<real>0.0</real>
-			<key>showValue</key>
-			<false/>
 		</dict>
 	</array>
 	<key>title</key>

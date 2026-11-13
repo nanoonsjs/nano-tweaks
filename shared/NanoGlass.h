@@ -18,15 +18,14 @@
 #import <objc/message.h>
 
 static Class NGClass(void) {
-    static Class c; static BOOL looked;
-    if (!looked) {
-        looked = YES;
+    static Class c;
+    if (!c) {
         Class k = NSClassFromString(@"LGLiveBackdropView");
         if (k && [k instancesRespondToSelector:NSSelectorFromString(@"initWithFrame:groupName:filterType:")]) c = k;
     }
     return c;
 }
-static CGFloat gNGFrost = 0.5;
+static CGFloat gNGFrost = 0;
 static BOOL gNGOff, gNGLoaded;
 static NSHashTable *gNGViews;   // every glass of ours (weak), refreshed when the setting changes
 static void NGLoad(void) {
@@ -38,7 +37,8 @@ static void NGLoad(void) {
     id fr = f[@"frost"], en = f[@"enabled"];
     if (!fr) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("frost"), CFSTR("com.nano.glass")); if (cf) fr = (__bridge_transfer id)cf; }
     if (!en) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("enabled"), CFSTR("com.nano.glass")); if (cf) en = (__bridge_transfer id)cf; }
-    gNGFrost = [fr respondsToSelector:@selector(doubleValue)] ? MAX(0, MIN(1, [fr doubleValue])) : 0.5;
+    (void)fr;
+    gNGFrost = 0;   // NanoGlass 1.1: no slider; the blur is LiquidAss's own (its settings apply everywhere)
     gNGOff = en ? ![en boolValue] : NO;
     gNGLoaded = YES;
 }

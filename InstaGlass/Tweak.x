@@ -1,4 +1,5 @@
-// InstaGlass 0.3.3 - made by nano
+// InstaGlass 0.3.4 - made by nano
+// 0.3.4: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
 // 0.3.3: glass follows the NanoGlass slider (clear to frosted)
 // 0.3.2: with LiquidAss installed, the bar is the same liquid glass as MusicPill
 // 0.3.1: finds Instagram's tab bar (IGTabBar) again
@@ -439,7 +440,7 @@ static void DebugBox(UIWindow *w) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" InstaGlass 0.3.3 debug\n %@", gDebug];
+    l.text = [NSString stringWithFormat:@" InstaGlass 0.3.4 debug\n %@", gDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 600)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 60, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];

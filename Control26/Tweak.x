@@ -1,4 +1,5 @@
-// Control26 1.2.3 - made by nano
+// Control26 1.2.4 - made by nano
+// 1.2.4: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
 // 1.2.3: glass follows the NanoGlass slider (clear to frosted)
 // 1.2.2: with LiquidAss installed, our glass buttons are the same liquid glass as MusicPill
 // 1.2: smaller iPhones (4.7"/5.5"): pages fit the screen, Connectivity fits (short names), page icons fit the margin;

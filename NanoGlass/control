@@ -1,6 +1,6 @@
 Package: com.nano.glass
 Name: NanoGlass
-Version: 1.0
+Version: 1.1
 Architecture: iphoneos-arm
 Description: One slider for the glass in all of nano's tweaks (Messages26, Photos26, InstaGlass, Control26): slide from clear liquid glass, like the LiquidAss tab bar, to frosted. Needs LiquidAss for the liquid glass. Made by nano.
 Maintainer: nano

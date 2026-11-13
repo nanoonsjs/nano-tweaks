@@ -1,4 +1,5 @@
-// NanoGlass 1.0 - made by nano
+// NanoGlass 1.1 - made by nano
+// 1.1: no slider: just a Liquid Glass switch for all the tweaks (MusicPill too); the blur comes from LiquidAss's own settings
 // 1.0: one slider for the glass in all of nano's tweaks: clear liquid glass (LiquidAss's tab bar glass) to frosted,
 //      applied live in Messages26, Photos26, InstaGlass and Control26; a live preview in Settings
 //

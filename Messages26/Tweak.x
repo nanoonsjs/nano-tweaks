@@ -1,4 +1,5 @@
-// Messages26 1.4.1 - made by nano
+// Messages26 1.4.2 - made by nano
+// 1.4.2: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
 // 1.4.1: glass follows the NanoGlass slider (clear to frosted); no more blurry icons where LiquidAss already has its own glass
 // 1.4: with LiquidAss installed, all our glass is the same liquid glass as MusicPill (LiquidAss's tab bar glass)
 // 1.3.9: sharing a video no longer crashes; music and other files open in Apple's own viewer (only photos and videos get the iOS 26 one)
@@ -5420,7 +5421,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.4.1 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.4.2 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

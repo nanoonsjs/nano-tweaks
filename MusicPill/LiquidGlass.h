@@ -773,15 +773,9 @@ static BOOL MPLGReady(void) {
 // is only used without LiquidAss.
 #import <objc/message.h>
 static NSString *const kMPTabFilter = @"dylv.liquidglass.tabbar";
-static Class MPLGClass(void) {
-    static Class c; static BOOL looked;
-    if (!looked) {
-        looked = YES;
-        Class k = NSClassFromString(@"LGLiveBackdropView");
-        if (k && [k instancesRespondToSelector:NSSelectorFromString(@"initWithFrame:groupName:filterType:")]) c = k;
-    }
-    return c;
-}
+#include "../shared/NanoGlass.h"
+// 1.7: LiquidAss's glass, unless NanoGlass's Liquid Glass switch is off
+static Class MPLGClass(void) { return NGOn() ? NGClass() : nil; }
 static BOOL MPIsLGGlass(UIView *v) { return [v.accessibilityIdentifier isEqualToString:@"nano.glass"]; }
 static UIView *MPLGMake(CGRect f) {
     Class c = MPLGClass(); if (!c) return nil;
