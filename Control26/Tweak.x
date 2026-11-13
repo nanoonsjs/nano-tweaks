@@ -1,4 +1,5 @@
-// Control26 1.2.5 - made by nano
+// Control26 1.2.6 - made by nano
+// 1.2.6: fixed SpringBoard freezing (then respringing) on an incoming call: Apple's views we replace are hidden with a mask instead of fighting every setAlpha in SpringBoard
 // 1.2.5: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.2.4: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
 // 1.2.3: glass follows the NanoGlass slider (clear to frosted)
@@ -229,10 +230,22 @@ static UIViewController *OwnerVC(UIView *v) {
     return [r isKindOfClass:[UIViewController class]] ? (UIViewController *)r : nil;
 }
 
+// 1.2.6: hidden with an empty mask (iOS never touches it), not by forcing alpha to 0 forever. Forcing alpha
+// fought iOS (and other tweaks) re-showing Apple's views, and on an incoming call that fight could lock up
+// SpringBoard until it resprung.
+static const void *kOrigMask = &kOrigMask, *kOrigTouch = &kOrigTouch;
+static void GoneMask(UIView *v) {
+    if ([v.layer.mask.name isEqualToString:@"c26.gone"]) return;
+    if (v.layer.mask) objc_setAssociatedObject(v, kOrigMask, v.layer.mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);   // theirs, back later
+    CALayer *m = [CALayer layer]; m.name = @"c26.gone"; m.frame = CGRectZero; v.layer.mask = m;
+}
 static void HideOriginal(UIView *v) {
     if (!v) return;
+    if (!objc_getAssociatedObject(v, kHidByUs)) objc_setAssociatedObject(v, kOrigTouch, @(v.userInteractionEnabled), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(v, kHidByUs, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (v.alpha != 0) v.alpha = 0;
+    v.userInteractionEnabled = NO;   // invisible: never catches a tap even if iOS fades it back in
+    GoneMask(v);
 }
 static void ShowOriginal(UIView *v);
 static NSHashTable *gHiddenMusic;  // everything the music module code hid
@@ -241,7 +254,6 @@ static void HideMusic(UIView *v) {
     if (!gHiddenMusic) gHiddenMusic = [NSHashTable weakObjectsHashTable];
     [gHiddenMusic addObject:v];
     HideOriginal(v);
-    if (![v.layer.mask.name isEqualToString:@"c26.gone"]) { CALayer *m = [CALayer layer]; m.name = @"c26.gone"; m.frame = CGRectZero; v.layer.mask = m; }
 }
 static void RestoreMusic(void) {
     for (UIView *v in [gHiddenMusic allObjects]) ShowOriginal(v);
@@ -252,7 +264,11 @@ static void ShowOriginal(UIView *v) {
     if (!v || !objc_getAssociatedObject(v, kHidByUs)) return;
     objc_setAssociatedObject(v, kHidByUs, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     v.alpha = 1;
-    if ([v.layer.mask.name isEqualToString:@"c26.gone"]) v.layer.mask = nil;
+    if ([v.layer.mask.name isEqualToString:@"c26.gone"]) v.layer.mask = objc_getAssociatedObject(v, kOrigMask);
+    objc_setAssociatedObject(v, kOrigMask, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSNumber *tch = objc_getAssociatedObject(v, kOrigTouch);
+    v.userInteractionEnabled = tch ? tch.boolValue : YES;
+    objc_setAssociatedObject(v, kOrigTouch, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 __attribute__((unused)) static void Forward(UIControl *c) {
@@ -4749,27 +4765,8 @@ static void Tick(void) {
 %end
 %end
 
-// Keep the views we replaced hidden if Apple tries to show them again.
-%hook UILabel
-- (void)setAlpha:(CGFloat)a {
-    if (a > 0 && objc_getAssociatedObject(self, kHidByUs)) { %orig(0); return; }
-    %orig;
-}
-%end
-
-%hook UIImageView
-- (void)setAlpha:(CGFloat)a {
-    if (a > 0 && objc_getAssociatedObject(self, kHidByUs)) { %orig(0); return; }
-    %orig;
-}
-%end
-
-%hook UIControl
-- (void)setAlpha:(CGFloat)a {
-    if (a > 0 && objc_getAssociatedObject(self, kHidByUs)) { %orig(0); return; }
-    %orig;
-}
-%end
+// (1.2.6: no more setAlpha hooks on every label / image / control in SpringBoard; the views we replace stay
+// hidden by their empty mask)
 
 %group Conn
 %hook CCUILabeledRoundButton
@@ -4806,10 +4803,7 @@ static void Tick(void) {
 
 %group Glyphs
 %hook CCUICAPackageView
-- (void)setAlpha:(CGFloat)a {
-    if (a > 0 && objc_getAssociatedObject(self, kHidByUs)) { %orig(0); return; }
-    %orig;
-}
+- (void)didMoveToWindow { %orig; }   // 1.2.6: hidden by mask now (was a setAlpha fight)
 %end
 %end
 
