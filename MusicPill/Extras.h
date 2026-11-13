@@ -1227,7 +1227,8 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
             _mg.layer.cornerRadius = 0;
             // close to the tab bar glass: a light veil, frosted a touch
             _mg.glassTint = _light ? [UIColor colorWithWhite:1 alpha:0.32] : [UIColor colorWithRed:0.165 green:0.165 blue:0.176 alpha:0.32];
-            _mg.matchLiquidAss = NO;     // 1.7.7: the drop is clear, sharp glass (LiquidAss's blur made it foggy); the pill keeps LiquidAss's
+            _mg.matchLiquidAss = NO;
+            _mg.matchTint = YES;         // 1.7.11: the pill's LiquidAss tint (light and dark), so it doesn't turn darker or milky     // 1.7.7: the drop is clear, sharp glass (LiquidAss's blur made it foggy); the pill keeps LiquidAss's
             _mg.alpha = 0;
             [_holder insertSubview:_mg aboveSubview:_cDrop ?: _cPill ?: _cBase];
         }
@@ -1411,7 +1412,7 @@ static void GooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, CGFl
             // the Metal glass takes over from the pill's own glass over the first bit of the pull
             // 1.7.10: as in 1.7.3: the shader glass takes over the whole pill over the first bit of the pull, so pill,
             // neck and drop are one piece of liquid
-            CGFloat k = MAX(0, MIN(1, d / 10));
+            CGFloat k = MAX(0, MIN(1, d / 18)); k = k * k * (3 - 2 * k);   // 1.7.11: a softer hand-over
             _mg.alpha = k;
             _cPill.alpha = 1 - k; _cDrop.alpha = 0;
             _cMask.path = nil; _cTint.path = nil;

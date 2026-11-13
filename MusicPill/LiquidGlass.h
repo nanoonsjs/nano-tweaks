@@ -690,7 +690,8 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
 @property (nonatomic, copy) NSArray<NSValue *> *shapes;
 @property (nonatomic) CGFloat shapeRadius, mergePts;
 // 1.7.4: look exactly like LiquidAss's tab bar glass (its blur, tint, refraction ...); captureScale: sharper refraction
-@property (nonatomic) BOOL matchLiquidAss, excludeFirst;   // excludeFirst: draw nothing inside the first shape
+@property (nonatomic) BOOL matchLiquidAss, excludeFirst;
+@property (nonatomic) BOOL matchTint;   // 1.7.11: only LiquidAss's tint colors (light / dark), not its blur   // excludeFirst: draw nothing inside the first shape
 @property (nonatomic) CGPoint foot; @property (nonatomic) CGFloat footRadius;   // ...except around foot (our points), fading out over footRadius
 @property (nonatomic) CGFloat captureScale;
 @end
@@ -801,6 +802,11 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
     [self.glassTint getRed:&r green:&g blue:&b alpha:&a];
     u.materialTint = simd_make_float4(r, g, b, a);
     u.excludeFirst = self.excludeFirst ? 1 : 0;
+    if (self.matchTint && !self.matchLiquidAss && NSClassFromString(@"LGLiveBackdropView")) {
+        BOOL lightT = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+        u.materialTint = lightT ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
+        u.materialTint.w *= 0.3;   // this shader lays tint on much heavier than LiquidAss
+    }
     u.footX = self.foot.x * sc; u.footY = (self.bounds.size.height - self.foot.y) * sc;   // flipped, like the shapes
     u.footRadius = self.footRadius * sc;
     if (self.matchLiquidAss) {
