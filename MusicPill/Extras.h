@@ -1228,7 +1228,8 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
             // close to the tab bar glass: a light veil, frosted a touch
             _mg.glassTint = _light ? [UIColor colorWithWhite:1 alpha:0.32] : [UIColor colorWithRed:0.165 green:0.165 blue:0.176 alpha:0.32];
             _mg.matchLiquidAss = NO;
-            _mg.matchTint = YES;         // 1.7.11: the pill's LiquidAss tint (light and dark), so it doesn't turn darker or milky     // 1.7.7: the drop is clear, sharp glass (LiquidAss's blur made it foggy); the pill keeps LiquidAss's
+            _mg.matchTint = NO;
+            _mg.useLiquidAssGlass = YES;  // 1.7.13: LiquidAss's own glass formula on the melted pill, neck and drop         // 1.7.11: the pill's LiquidAss tint (light and dark), so it doesn't turn darker or milky     // 1.7.7: the drop is clear, sharp glass (LiquidAss's blur made it foggy); the pill keeps LiquidAss's
             _mg.alpha = 0;
             [_holder insertSubview:_mg aboveSubview:_cDrop ?: _cPill ?: _cBase];
         }

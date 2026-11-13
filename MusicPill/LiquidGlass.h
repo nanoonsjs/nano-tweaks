@@ -63,6 +63,9 @@ static NSString *const kMPLiquidGlassShader = @
     "    float4 rectangles[maxRectangles]; // Array of rectangles (x, y, width, height) in points, upper-left origin\n"
     "    int excludeFirst;                // MusicPill: leave the first shape (the pill) empty, its own glass shows there\n"
     "    float footX, footY, footRadius;  // ...except around this point (pixels), where the drop grows out of it\n"
+    "    float bezelPx, refrScale, lasDispersion; // MusicPill: LiquidAss's glass on our merged shape\n"
+    "    int useLAS;\n"
+    "    float4 lasTint;\n"
     "};\n"
     "\n"
     "// Constant linear sampler for texture lookups (bilinear filtering, no wrap)\n"
@@ -447,10 +450,54 @@ static NSString *const kMPLiquidGlassShader = @
     "// =============================================================================\n"
     "// Fragment Shader: Full Progressive Effect Pipeline\n"
     "// =============================================================================\n"
+    "// MusicPill 1.7.13: the glass of the Liquid (Gl)ass tweak (\"LiquidAss\" by dylv / winaviation-tweaks,\n"
+    "// CC BY-NC 4.0, github.com/winaviation-tweaks/liquidass, LiquidAssBackboardd liquidGlassPixel), adapted to\n"
+    "// our smooth-union shape: circular edge profile over the bezel, displacement inward along the edge normal,\n"
+    "// 7-tap color split, tint mix.\n"
+    "half4 lasPixel(float2 uv, constant ShaderUniforms& u, texture2d<half> bg) {\n"
+    "    constexpr sampler s(filter::linear, address::clamp_to_edge);\n"
+    "    float2 px = uv * u.resolution;\n"
+    "    float sd = primaryShapeSDF(px, u) * u.resolution.y;\n"
+    "    if (sd > 1.0f) return half4(0);\n"
+    "    float edgeOpacity = clamp(1.0f - max(0.0f, sd), 0.0f, 1.0f);\n"
+    "    float dist = max(0.0f, -sd);\n"
+    "    float2 g = float2(primaryShapeSDF(px + float2(1, 0), u) - primaryShapeSDF(px - float2(1, 0), u),\n"
+    "                      primaryShapeSDF(px + float2(0, 1), u) - primaryShapeSDF(px - float2(0, 1), u));\n"
+    "    float2 dir = length(g) > 1e-7f ? normalize(g) : float2(0, 1);\n"
+    "    float bezel = max(u.bezelPx, 1.0f);\n"
+    "    float4 tint = u.lasTint;\n"
+    "    half4 col;\n"
+    "    if (dist >= bezel) {\n"
+    "        col = bg.sample(s, uv);\n"
+    "    } else {\n"
+    "        float t = saturate(dist / bezel);\n"
+    "        float normDisp = 1.0f - sqrt(t * (2.0f - t));\n"
+    "        float2 dispPx = -dir * normDisp * bezel * u.refrScale * edgeOpacity;\n"
+    "        col = bg.sample(s, clamp(uv + dispPx / u.resolution, 0.0f, 1.0f));\n"
+    "        float disp = clamp(u.lasDispersion, 0.0f, 20.0f);\n"
+    "        if (disp > 0.001f) {\n"
+    "            float2 ab = -dir * normDisp * disp * 8.0f * u.contentsScale * edgeOpacity;\n"
+    "            float3 acc = float3(0);\n"
+    "            for (int i = 0; i < 3; i++) { float w = 1.0f - float(i) / 3.0f; half4 sm = bg.sample(s, clamp(uv + (dispPx + ab * w) / u.resolution, 0.0f, 1.0f)); acc.r += float(sm.r) * w; acc.g += float(sm.g) * (1.0f - w); }\n"
+    "            for (int i = 0; i < 4; i++) { float w = float(i) / 3.0f; half4 sm = bg.sample(s, clamp(uv + (dispPx - ab * w) / u.resolution, 0.0f, 1.0f)); acc.g += float(sm.g) * (1.0f - w); acc.b += float(sm.b) * w; }\n"
+    "            col.rgb = half3(acc * float3(0.5f, 1.0f / 3.0f, 0.5f));\n"
+    "        }\n"
+    "    }\n"
+    "    float3 outRGB = mix(float3(col.rgb), tint.rgb, tint.a);\n"
+    "    float k = edgeOpacity;\n"
+    "    if (u.excludeFirst != 0 && u.rectangleCount > 0) {\n"
+    "        float4 r0 = u.rectangles[0];\n"
+    "        float d0 = roundedRectangleSDF(px, r0, min(u.cornerRadius, 0.5f * min(r0.z, r0.w)), u.cornerRoundnessExponent, u);\n"
+    "        k *= smoothstep(-1.5f, 0.5f, d0);\n"
+    "    }\n"
+    "    return half4(half3(outRGB * k), half(k));\n"
+    "}\n"
+    "\n"
     "fragment half4 liquidGlassEffect(VertexOutput input [[stage_in]],\n"
     "                                 constant ShaderUniforms& uniforms [[buffer(0)]],\n"
     "                                 texture2d<half> background [[texture(0)]]) {\n"
     "\n"
+    "    if (uniforms.useLAS != 0) return lasPixel(float2(input.uv), uniforms, background);\n"
     "    // Logical resolution (scale-normalized)\n"
     "    float2 logicalResolution = uniforms.resolution / uniforms.contentsScale;\n"
     "\n"
@@ -611,6 +658,9 @@ typedef struct {
     simd_float4 rectangles[16];
     int32_t excludeFirst;
     float footX, footY, footRadius;
+    float bezelPx, refrScale, lasDispersion;
+    int32_t useLAS;
+    simd_float4 lasTint;
 } MPLGUniforms;
 
 // one Metal pipeline for every glass view
@@ -691,7 +741,8 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
 @property (nonatomic) CGFloat shapeRadius, mergePts;
 // 1.7.4: look exactly like LiquidAss's tab bar glass (its blur, tint, refraction ...); captureScale: sharper refraction
 @property (nonatomic) BOOL matchLiquidAss, excludeFirst;
-@property (nonatomic) BOOL matchTint;   // 1.7.11: only LiquidAss's tint colors (light / dark), not its blur   // excludeFirst: draw nothing inside the first shape
+@property (nonatomic) BOOL matchTint;
+@property (nonatomic) BOOL useLiquidAssGlass;   // 1.7.13: LiquidAss's own glass formula (and its settings) on our shapes   // 1.7.11: only LiquidAss's tint colors (light / dark), not its blur   // excludeFirst: draw nothing inside the first shape
 @property (nonatomic) CGPoint foot; @property (nonatomic) CGFloat footRadius;   // ...except around foot (our points), fading out over footRadius
 @property (nonatomic) CGFloat captureScale;
 @end
@@ -802,6 +853,17 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
     [self.glassTint getRed:&r green:&g blue:&b alpha:&a];
     u.materialTint = simd_make_float4(r, g, b, a);
     u.excludeFirst = self.excludeFirst ? 1 : 0;
+    if (self.useLiquidAssGlass) {
+        BOOL lightL = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+        CGFloat half = self.shapes.count ? self.shapeRadius : MIN(self.bounds.size.width, self.bounds.size.height) / 2;
+        u.useLAS = 1;
+        u.bezelPx = MIN(MPLANum(@"TabBar.BezelWidth", 20.0) * 2, MAX(1, half)) * sc;
+        u.refrScale = MPLANum(@"TabBar.RefractionScale", 2.2);
+        u.lasDispersion = MPLABool(@"TabBar.DispersionEnabled", YES) ? MPLANum(@"TabBar.DispersionStrength", 2.0) : 0;
+        u.lasTint = lightL ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
+        CGFloat want = MAX(0.05, MPLANum(@"TabBar.Blur", 3.0) * 0.5 * _scaleCo);   // LiquidAss's blur (points)
+        if (fabs(want - _blur) > 0.01) { _blur = want; _blurK = nil; }
+    }
     if (self.matchTint && !self.matchLiquidAss && NSClassFromString(@"LGLiveBackdropView")) {
         BOOL lightT = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
         u.materialTint = lightT ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
