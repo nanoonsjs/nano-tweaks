@@ -476,7 +476,7 @@ static NSString *const kMPLiquidGlassShader = @
     "        col = bg.sample(s, clamp(uv + dispPx / u.resolution, 0.0f, 1.0f));\n"
     "        float disp = clamp(u.lasDispersion, 0.0f, 20.0f);\n"
     "        if (disp > 0.001f) {\n"
-    "            float2 ab = -dir * normDisp * disp * 8.0f * u.contentsScale * edgeOpacity;\n"
+    "            float2 ab = -dir * normDisp * disp * 8.0f * edgeOpacity;\n"
     "            float3 acc = float3(0);\n"
     "            for (int i = 0; i < 3; i++) { float w = 1.0f - float(i) / 3.0f; half4 sm = bg.sample(s, clamp(uv + (dispPx + ab * w) / u.resolution, 0.0f, 1.0f)); acc.r += float(sm.r) * w; acc.g += float(sm.g) * (1.0f - w); }\n"
     "            for (int i = 0; i < 4; i++) { float w = float(i) / 3.0f; half4 sm = bg.sample(s, clamp(uv + (dispPx - ab * w) / u.resolution, 0.0f, 1.0f)); acc.g += float(sm.g) * (1.0f - w); acc.b += float(sm.b) * w; }\n"
@@ -857,11 +857,12 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
         BOOL lightL = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
         CGFloat half = self.shapes.count ? self.shapeRadius : MIN(self.bounds.size.width, self.bounds.size.height) / 2;
         u.useLAS = 1;
-        u.bezelPx = MIN(MPLANum(@"TabBar.BezelWidth", 20.0) * 2, MAX(1, half)) * sc;
+        // 1.7.14: LiquidAss works in screen pixels (2 px per bezel point), not points: 1.7.13 bent 3x too much
+        u.bezelPx = MIN(MPLANum(@"TabBar.BezelWidth", 20.0) * 2, MAX(1, half) * sc);
         u.refrScale = MPLANum(@"TabBar.RefractionScale", 2.2);
         u.lasDispersion = MPLABool(@"TabBar.DispersionEnabled", YES) ? MPLANum(@"TabBar.DispersionStrength", 2.0) : 0;
         u.lasTint = lightL ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
-        CGFloat want = MAX(0.05, MPLANum(@"TabBar.Blur", 3.0) * 0.5 * _scaleCo);   // LiquidAss's blur (points)
+        CGFloat want = MAX(0.05, MPLANum(@"TabBar.Blur", 3.0) * _scaleCo);   // LiquidAss's blur radius (points), as strong as theirs
         if (fabs(want - _blur) > 0.01) { _blur = want; _blurK = nil; }
     }
     if (self.matchTint && !self.matchLiquidAss && NSClassFromString(@"LGLiveBackdropView")) {
