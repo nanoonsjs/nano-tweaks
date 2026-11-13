@@ -1,4 +1,5 @@
-// Control26 1.2.6 - made by nano
+// Control26 1.2.7 - made by nano
+// 1.2.7: AirPlay opens as a card like the Lock Screen's (the panel shrinks to just the song and the speakers, the list pops in)
 // 1.2.6: fixed SpringBoard freezing (then respringing) on an incoming call: Apple's views we replace are hidden with a mask instead of fighting every setAlpha in SpringBoard
 // 1.2.5: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.2.4: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
@@ -4817,6 +4818,82 @@ static void InitCC(void)     { %init(SlidersCC); }
 static void InitMRU(void)    { %init(SlidersMRU); }
 static void InitGlyphs(void) { %init(Glyphs); }
 
+#pragma mark - AirPlay card (1.2.7)
+
+// Tapping AirPlay used to fill the whole tall media panel with the speaker list. Now the panel shrinks to just
+// the speakers (song on top, then the rows), like the card on the Lock Screen, and the list pops in.
+static __weak UIViewController *gCCMediaVC;   // MRUControlCenterViewController
+static UIView *C26RoutingView(UIViewController *cc) {
+    id np = nil, rvc = nil;
+    @try { np = [cc valueForKey:@"nowPlayingViewController"]; rvc = np ? [np valueForKey:@"_routingViewController"] : nil; } @catch (__unused id e) { return nil; }
+    UIView *rv = [rvc isKindOfClass:[UIViewController class]] ? ((UIViewController *)rvc).viewIfLoaded : nil;
+    if (!rv.window || rv.hidden || rv.alpha < 0.5) return nil;
+    for (UIView *p = rv.superview; p; p = p.superview) if (p.hidden || p.alpha < 0.05) return nil;
+    return rv;
+}
+static double (*origPrefH)(id, SEL);
+static double C26PrefH(UIViewController *self, SEL _cmd) {
+    double h = origPrefH(self, _cmd);
+    gCCMediaVC = self;
+    if (!gEnabled || !gMusic) return h;
+    @try {
+        UIView *rv = C26RoutingView(self);
+        UITableView *tv = rv ? [rv valueForKey:@"tableView"] : nil;
+        if (![tv isKindOfClass:[UITableView class]]) return h;
+        [tv layoutIfNeeded];
+        CGFloat ch = tv.contentSize.height;
+        if (ch < 20) return h;
+        UIEdgeInsets in = tv.contentInset;
+        CGRect tvInRv = [tv convertRect:tv.bounds toView:self.viewIfLoaded];
+        CGFloat top = MAX(0, CGRectGetMinY(tvInRv)) + in.top;   // the song header above the list
+        double fit = top + ch + in.bottom + 14;
+        return MAX(150, MIN(h, fit));
+    } @catch (__unused id e) {}
+    return h;
+}
+// ask Control Center to resize the expanded panel to the new preferred height
+static void C26ResizeMedia(void) {
+    UIViewController *cc = gCCMediaVC; if (!cc) return;
+    id np = nil; @try { np = [cc valueForKey:@"nowPlayingViewController"]; } @catch (__unused id e) {}
+    SEL s = NSSelectorFromString(@"nowPlayingViewController:didChangeSizeWithAnimations:completion:");
+    if (!np || ![cc respondsToSelector:s]) return;
+    @try { ((void (*)(id, SEL, id, id, id))objc_msgSend)(cc, s, np, ^{}, ^(BOOL f) {}); } @catch (__unused id e) {}
+}
+static void (*origRVDidAppear)(id, SEL, BOOL);
+static void C26RVDidAppear(UIViewController *self, SEL _cmd, BOOL a) {
+    origRVDidAppear(self, _cmd, a);
+    if (!gEnabled || !gMusic || !gCCMediaVC) return;
+    UIView *v = self.viewIfLoaded;
+    BOOL inCC = NO; for (UIView *p = v; p; p = p.superview) if (p == gCCMediaVC.viewIfLoaded) { inCC = YES; break; }
+    if (!inCC) return;
+    // the Lock Screen card's pop: in from a touch smaller, quickly settling
+    v.transform = CGAffineTransformMakeScale(0.9, 0.9); v.alpha = 0;
+    [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{ v.transform = CGAffineTransformIdentity; v.alpha = 1; } completion:nil];
+    dispatch_async(dispatch_get_main_queue(), ^{ C26ResizeMedia(); });
+}
+static void (*origRVDidDisappear)(id, SEL, BOOL);
+static void C26RVDidDisappear(UIViewController *self, SEL _cmd, BOOL a) {
+    origRVDidDisappear(self, _cmd, a);
+    if (gEnabled && gMusic && gCCMediaVC) dispatch_async(dispatch_get_main_queue(), ^{ C26ResizeMedia(); });
+}
+static void (*origRVUpdated)(id, SEL, id);
+static void C26RVUpdated(id self, SEL _cmd, id rvc) {
+    origRVUpdated(self, _cmd, rvc);
+    if (gEnabled && gMusic && gCCMediaVC) dispatch_async(dispatch_get_main_queue(), ^{ if (C26RoutingView(gCCMediaVC)) C26ResizeMedia(); });   // speakers came or went
+}
+static BOOL gAirHooked;
+static void TryAirPlayHooks(void) {
+    if (gAirHooked) return;
+    Class cc = NSClassFromString(@"MRUControlCenterViewController"), rv = NSClassFromString(@"MRURoutingViewController"), np = NSClassFromString(@"MRUNowPlayingViewController");
+    if (!cc || !rv || !np) return;
+    gAirHooked = YES;
+    if ([cc instancesRespondToSelector:@selector(preferredExpandedContentHeight)]) MSHookMessageEx(cc, @selector(preferredExpandedContentHeight), (IMP)C26PrefH, (IMP *)&origPrefH);
+    MSHookMessageEx(rv, @selector(viewDidAppear:), (IMP)C26RVDidAppear, (IMP *)&origRVDidAppear);
+    MSHookMessageEx(rv, @selector(viewDidDisappear:), (IMP)C26RVDidDisappear, (IMP *)&origRVDidDisappear);
+    SEL up = NSSelectorFromString(@"routingViewControllerDidUpdateItems:");
+    if ([np instancesRespondToSelector:up]) MSHookMessageEx(np, up, (IMP)C26RVUpdated, (IMP *)&origRVUpdated);
+}
+
 static void TryLateHooks(void) {
     if (!gMediaHooked && NSClassFromString(@"MRUNowPlayingView"))      { gMediaHooked = YES; InitMedia(); }
     if (!gCCHooked && NSClassFromString(@"CCUIBaseSliderView"))        { gCCHooked = YES; InitCC(); }
@@ -4826,6 +4903,7 @@ static void TryLateHooks(void) {
     if (!gJ2Hooked && NSClassFromString(@"CCUIButtonModuleView"))      { gJ2Hooked = YES; InitJ2(); }
     if (!gConnHooked && NSClassFromString(@"CCUILabeledRoundButton"))  { gConnHooked = YES; InitConn(); }
     @try { TryEditHooks(); } @catch (__unused id e) {}
+    @try { TryAirPlayHooks(); } @catch (__unused id e) {}
 }
 
 static void StartLateHooks(void) {
@@ -4833,7 +4911,7 @@ static void StartLateHooks(void) {
     __block int tries = 0;
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         TryLateHooks();
-        if ((gMediaHooked && gCCHooked && gMRUHooked && gGlyphHooked && gJ1Hooked && gJ2Hooked && gConnHooked && gEditHooked && gSettingsHooked) || ++tries > 120) [t invalidate];
+        if ((gMediaHooked && gCCHooked && gMRUHooked && gGlyphHooked && gJ1Hooked && gJ2Hooked && gConnHooked && gEditHooked && gSettingsHooked && gAirHooked) || ++tries > 120) [t invalidate];
     }];
 }
 
