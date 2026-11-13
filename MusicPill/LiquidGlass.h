@@ -805,7 +805,11 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
     if (self.matchTint && !self.matchLiquidAss && NSClassFromString(@"LGLiveBackdropView")) {
         BOOL lightT = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
         u.materialTint = lightT ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
-        u.materialTint.w *= 0.3;   // this shader lays tint on much heavier than LiquidAss
+        u.materialTint.w *= 0.55;   // 1.7.12: tinted LiquidAss = tinted drop, clear = clear (this shader tints heavier than LiquidAss)
+        // and as frosted as LiquidAss's blur setting (lighter than LiquidAss's own, which made it foggy)
+        CGFloat b = MPLANum(@"TabBar.Blur", 3.0);
+        CGFloat want = MAX(0.3, b * _scaleCo * 0.4);
+        if (fabs(want - _blur) > 0.01) { _blur = want; _blurK = nil; }
     }
     u.footX = self.foot.x * sc; u.footY = (self.bounds.size.height - self.foot.y) * sc;   // flipped, like the shapes
     u.footRadius = self.footRadius * sc;
