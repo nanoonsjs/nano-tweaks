@@ -876,10 +876,13 @@ static UIView *MPLGMake(CGRect f) {
 static void MPLGFit(UIView *v, CGRect f, CGFloat radius) {
     if (!v) return;
     BOOL rc = fabs(v.layer.cornerRadius - radius) > 0.25;
-    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    // 1.8.2: inside an animation (minimize / expand, circles rolling out) the glass moves WITH everything else;
+    // snapping it to the end size made the buttons and icons show outside the glass for the whole animation
+    BOOL animating = [UIView inheritedAnimationDuration] > 0;
+    if (!animating) { [CATransaction begin]; [CATransaction setDisableActions:YES]; }
     if (!CGRectEqualToRect(v.frame, f)) v.frame = f;
     if (rc) v.layer.cornerRadius = radius;
-    [CATransaction commit];
+    if (!animating) [CATransaction commit];
     @try {
         if ([v respondsToSelector:NSSelectorFromString(@"applyFilters")]) ((void (*)(id, SEL))objc_msgSend)(v, NSSelectorFromString(@"applyFilters"));
         if (rc && [v respondsToSelector:NSSelectorFromString(@"updateSpecular")]) ((void (*)(id, SEL))objc_msgSend)(v, NSSelectorFromString(@"updateSpecular"));

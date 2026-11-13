@@ -1,4 +1,5 @@
-// MusicPill 1.8.1 - made by nano
+// MusicPill 1.8.2 - made by nano
+// 1.8.2: minimizing / expanding is smooth: the glass shrinks together with the buttons (they showed outside it), the circles' icons fade in once the circles have formed
 // 1.8.1: after a short pull the pill bounces when the drop has gone back in, not before
 // 1.8: the liquid drop is real liquid glass melting out of the pill; slower Dynamic Pill close with an instant bounce
 // 1.7.18: the Dynamic Pill closes slower; the pill bounces the moment the drop lands in it, no delay
@@ -1515,7 +1516,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.8.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.8.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2256,9 +2257,10 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
         for (UIView *v in @[tab, search, ti, si]) [v.layer removeAllAnimations];
         tab.transform = search.transform = CGAffineTransformIdentity;
         LayoutCircle(tab, wide); tab.alpha = 1;
-        LayoutCircle(search, rightStart); search.alpha = 1;
+        LayoutCircle(search, rightStart); search.alpha = 0;   // 1.8.2: fades in as it rolls out (no tiny circle popping in)
         search.transform = CGAffineTransformMakeScale(0.25, 0.25);
-        ti.alpha = 1; ti.transform = CGAffineTransformMakeScale(0.4, 0.4);
+        si.alpha = 0;
+        ti.alpha = 0; ti.transform = CGAffineTransformMakeScale(0.4, 0.4);   // the tab icon appears once its circle has formed
         [pill refresh];
         if (pill.hidden || CGRectIsEmpty(pill.frame)) { pill.frame = miniRect; [pill layoutIfNeeded]; }
         // 1. The bar's glass takes over from Music's tab bar, and Music's mini bar hands over to our pill.
@@ -2273,6 +2275,9 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
         } completion:nil];
         wobble(tab, 0.9, 1.12, 0.08);
         [UIView animateWithDuration:0.5 delay:0.12 usingSpringWithDamping:0.6 initialSpringVelocity:0.6 options:o animations:^{ ti.transform = CGAffineTransformIdentity; } completion:nil];
+        [UIView animateWithDuration:0.24 delay:0.2 options:o | UIViewAnimationOptionCurveEaseOut animations:^{ ti.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.22 delay:0.06 options:o | UIViewAnimationOptionCurveEaseOut animations:^{ search.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.22 delay:0.24 options:o | UIViewAnimationOptionCurveEaseOut animations:^{ si.alpha = 1; } completion:nil];
         // 3. Search buds off the right end and rolls into its own circle.
         [UIView animateWithDuration:0.6 delay:0.02 usingSpringWithDamping:0.66 initialSpringVelocity:0.5 options:o animations:^{
             LayoutCircle(search, right);
@@ -2300,6 +2305,7 @@ static void SetCollapsed(BOOL collapse, BOOL animated) {
             LayoutCircle(search, rightStart);
             search.transform = CGAffineTransformMakeScale(0.25, 0.25);
         } completion:nil];
+        [UIView animateWithDuration:0.2 delay:0.08 options:o animations:^{ search.alpha = 0; } completion:nil];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.34 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             if (!gCollapsed) { search.hidden = YES; search.transform = CGAffineTransformIdentity; }
         });
