@@ -1129,6 +1129,7 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     BOOL _light, _absorbing;
     BOOL _clear;                   // 1.6.6: Pill Glass set toward clear: the drop is clear glass too
     UIView *_cBase, *_cPill, *_cDrop; CAShapeLayer *_cMask, *_cTint;
+    CAGradientLayer *_hi, *_caustic; CAShapeLayer *_hiMask;   // 1.6.7: one shiny rim for the whole shape, light caught in the drop
 }
 - (void)beginOn:(UIView *)pill touchX:(CGFloat)x {
     UIView *host = pill.superview;
@@ -1139,8 +1140,8 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     _tx = _x = _bx = MAX(CGRectGetMinX(P), MIN(CGRectGetMaxX(P), x)); _td = _d = 0; _vx = _vd = _vbx = 0;
     _light = pill.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
     _holder = [[UIView alloc] initWithFrame:host.bounds]; _holder.userInteractionEnabled = NO;
-    _clear = gPillGlass < 0.9;
-    _cBase = _cPill = _cDrop = nil; _cMask = _cTint = nil; _glassV = nil;
+    _clear = gPillGlass < 0.9 || MPLGClass();   // 1.6.7: with LiquidAss the drop is always glass (blurred toward tinted)
+    _cBase = _cPill = _cDrop = nil; _cMask = _cTint = nil; _glassV = nil; _hi = _caustic = nil; _hiMask = nil;
     UIView *pg = [pill respondsToSelector:@selector(glass)] ? [pill valueForKey:@"glass"] : nil;
     if (_clear) [self buildClear];
     else {
@@ -1186,7 +1187,7 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     @try {
         Class F = NSClassFromString(@"CAFilter");
         id blur = ((id (*)(id, SEL, NSString *))objc_msgSend)(F, NSSelectorFromString(@"filterWithType:"), @"gaussianBlur");
-        [blur setValue:@3 forKey:@"inputRadius"];
+        [blur setValue:@(MAX(3, 18 * MAX(0, MIN(1, gPillGlass)))) forKey:@"inputRadius"];
         id sat = ((id (*)(id, SEL, NSString *))objc_msgSend)(F, NSSelectorFromString(@"filterWithType:"), @"colorSaturate");
         [sat setValue:@1.6 forKey:@"inputAmount"];
         if (blur && sat) _cBase.layer.filters = @[blur, sat];
@@ -1197,10 +1198,23 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     _cDrop = MPLGMake(CGRectZero); _cDrop.autoresizingMask = UIViewAutoresizingNone;
     if (_cPill) [_holder addSubview:_cPill];
     if (_cDrop) [_holder addSubview:_cDrop];
-    CGFloat k = MAX(0, MIN(1, gPillGlass / 0.9));
+    CGFloat k = MAX(0, MIN(1, MPLGClass() ? gPillGlass : gPillGlass / 0.9));
+    CGFloat ta = MPLGClass() ? (_light ? 0.42 : 0.32) * k : 0.6 * k;
     _cTint = [CAShapeLayer layer];
-    _cTint.fillColor = (_light ? [UIColor colorWithWhite:1 alpha:0.6 * k] : [UIColor colorWithWhite:0.05 alpha:0.6 * k]).CGColor;
+    _cTint.fillColor = (_light ? [UIColor colorWithWhite:1 alpha:ta] : [UIColor colorWithWhite:0.06 alpha:ta]).CGColor;
     [_holder.layer addSublayer:_cTint];
+    // the whole outline catches the light: bright along the top, a faint reflection along the bottom
+    _hi = [CAGradientLayer layer]; _hi.frame = _holder.bounds;
+    _hi.colors = @[(id)[UIColor colorWithWhite:1 alpha:_light ? 0.95 : 0.75].CGColor, (id)[UIColor colorWithWhite:1 alpha:0.12].CGColor, (id)[UIColor colorWithWhite:1 alpha:_light ? 0.5 : 0.35].CGColor];
+    _hi.locations = @[@0, @0.55, @1];
+    _hiMask = [CAShapeLayer layer]; _hiMask.fillColor = UIColor.clearColor.CGColor; _hiMask.strokeColor = UIColor.blackColor.CGColor; _hiMask.lineWidth = 1.3;
+    _hi.mask = _hiMask;
+    [_holder.layer addSublayer:_hi];
+    // light focused through the drop lands as a soft glow near its bottom (like a real water drop)
+    _caustic = [CAGradientLayer layer]; _caustic.type = kCAGradientLayerRadial;
+    _caustic.colors = @[(id)[UIColor colorWithWhite:1 alpha:_light ? 0.55 : 0.38].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+    _caustic.startPoint = CGPointMake(0.5, 0.5); _caustic.endPoint = CGPointMake(1, 1);
+    [_holder.layer addSublayer:_caustic];
 }
 - (void)followX:(CGFloat)x d:(CGFloat)d {
     UIView *pill = _pill; if (!pill.superview || _mode != 0) return;
@@ -1310,11 +1324,20 @@ static CGFloat GooForm(CGFloat d) { CGFloat x = MAX(0, MIN(1, (d - 4) / 56)); re
         UIBezierPath *nk = nil;
         if (_cPill && hasDrop) { nk = [UIBezierPath bezierPath]; [nk moveToPoint:CGPointMake(fx - base, top + 1.5)]; [nk addLineToPoint:CGPointMake(fx - base, top)]; bump(nk); [nk addLineToPoint:CGPointMake(fx + base, top + 1.5)]; [nk closePath]; }
         _cMask.path = _cPill ? nk.CGPath : p.CGPath;
-        _cTint.path = p.CGPath;
+        _cTint.path = _cPill ? nk.CGPath : p.CGPath;   // the pill and the ball tint themselves
         MPLGFit(_cPill, P, R);
         CGFloat bw = MAX(1, rx * 2), bh = MAX(1, ry * 2);
         MPLGFit(_cDrop, CGRectMake(cx - bw / 2, by - bh / 2, bw, bh), MIN(bw, bh) / 2);
         _cDrop.alpha = hasDrop ? MAX(0, MIN(1, (d - 8) / 22)) : 0;
+        MPLGStyle(_cPill, gPillGlass, _light); MPLGStyle(_cDrop, gPillGlass, _light);
+        MPLGBare(_cPill); MPLGBare(_cDrop);   // no seams: one rim (_hi) runs round the whole shape
+        CGRect sb = p.bounds; CGFloat H = MAX(1, _holder.bounds.size.height);
+        _hiMask.frame = _holder.bounds; _hiMask.path = p.CGPath;
+        _hi.startPoint = CGPointMake(0.5, CGRectGetMinY(sb) / H); _hi.endPoint = CGPointMake(0.5, CGRectGetMaxY(sb) / H);
+        CGFloat cw = rx * 1.3, ch = ry * 0.75;
+        _caustic.frame = CGRectMake(cx - cw / 2 + (cx - fx) * 0.08, by + ry * 0.62 - ch / 2, cw, ch);
+        _caustic.opacity = hasDrop ? MAX(0, MIN(1, (d - 18) / 30)) : 0;
+        _rim.opacity = 0.35;
     }
     _inkMask.path = inkP.CGPath;
     _ink.startPoint = CGPointMake(0.5, (by - ry) / MAX(1, _holder.bounds.size.height));

@@ -1,4 +1,4 @@
-// MusicPill 1.6.6 - made by nano
+// MusicPill 1.6.7 - made by nano
 // 1.6.5: Pill Glass uses real liquid glass (Metal, ported from LiquidGlassKit); the real pill no longer hands its glass to LiquidAss
 // 1.6.4: Pill Glass: clear = the tab bar's own glass (copied live), tinted = the usual pill
 // 1.6.3: real-looking glass (tilt reflections, vivid colors through it, thickness) and the pill sits lower
@@ -404,8 +404,10 @@ static UIColor *GlassIconDim(void) { static UIColor *c; if (!c) c = Dyn([UIColor
 static BOOL HighContrast(void);
 // Light mode glass needs a visible rim and shadow (white on white disappeared).
 // Applied each pass: CGColors don't follow light / dark on their own.
+static void MPGlassAny(UIView *g);   // 1.6.7, below
 static void GlassEdge(UIView *g) {
     if (!g) return;
+    if (MPLGClass()) { MPGlassAny(g); return; }
     BOOL light = g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
     NSNumber *was = objc_getAssociatedObject(g, @selector(traitCollection));
     if (was && was.boolValue == light) return;
@@ -560,7 +562,7 @@ static BOOL PrefBool(NSDictionary *file, NSString *key, BOOL def) {
 
 static int gPlayerStyle = 0;   // 0 = follow Increase Contrast, 1 = pink accents, 2 = standard (white)
 static CGFloat gPillGlass = 1.0;   // 1.6.1: the pill's glass: 0 = really clear, 0.5 = as it was, 1 = tinted
-@class UIVisualEffectView; static void PillGlassLevel(UIVisualEffectView *g);
+@class UIVisualEffectView; static void PillGlassLevel(UIVisualEffectView *g); static void MPGlassRefreshAll(void);
 static void LoadPrefs(void) {
     CFPreferencesAppSynchronize(DOM);
     NSString *src = nil;
@@ -672,6 +674,7 @@ static void ReloadAndApply(void) {
     UIView *host = [tb.superview viewWithTag:COLLAPSE_TAG];
     for (UIView *v in host.subviews) if ([v respondsToSelector:@selector(applyLook)]) { [v setNeedsLayout]; [v performSelector:@selector(applyLook)]; }
     for (UIView *v in host.subviews) { UIView *cg = [v viewWithTag:1]; if ([cg isKindOfClass:[UIVisualEffectView class]] && v.accessibilityIdentifier.length) PillGlassLevel((UIVisualEffectView *)cg); }
+    MPGlassRefreshAll();
 }
 
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
@@ -1503,7 +1506,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2476,7 +2479,7 @@ static void GlassLook(UIVisualEffectView *g, CGFloat t, BOOL light) {
     if (![g isKindOfClass:[UIVisualEffectView class]]) return;
     t = MAX(0, MIN(1, t));
     GlassCleanupOld(g);
-    BOOL normal = t >= 0.9;
+    BOOL normal = t >= 0.9 && !MPLGClass();   // 1.6.7: with LiquidAss, tinted = the same glass, blurred
     CALayer *mine = nil;
     for (CALayer *l in g.layer.sublayers) if ([l.name isEqualToString:@"mp.clear"]) mine = l;
     UIView *frost = [g.contentView viewWithTag:0x4D50574C];
@@ -2511,16 +2514,9 @@ static void GlassLook(UIVisualEffectView *g, CGFloat t, BOOL light) {
         for (UIView *v in [g.contentView.subviews copy]) if ([v isKindOfClass:[MPLiquidGlassView class]]) [v removeFromSuperview];
         for (CALayer *l in [g.layer.sublayers copy]) if ([l.name isEqualToString:@"mp.clear"]) [l removeFromSuperlayer];
         MPLGFit(lgv, g.contentView.bounds, rad);
-        CGFloat k = t / 0.9;
-        if (k > 0.02) {
-            if (!tv) {
-                tv = [[UIView alloc] initWithFrame:g.contentView.bounds]; tv.tag = 0x4D50544E; tv.userInteractionEnabled = NO;
-                tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            }
-            if (tv.superview != g.contentView || [g.contentView.subviews indexOfObject:tv] != [g.contentView.subviews indexOfObject:lgv] + 1) [g.contentView insertSubview:tv aboveSubview:lgv];
-            tv.frame = g.contentView.bounds;
-            tv.backgroundColor = light ? [UIColor colorWithWhite:1 alpha:0.6 * k] : [UIColor colorWithWhite:0.05 alpha:0.6 * k];
-        } else [tv removeFromSuperview];
+        MPLGStyle(lgv, t, light);
+        [tv removeFromSuperview];
+        if (g.layer.shadowOpacity > 0) g.layer.shadowOpacity = 0;
         g.layer.borderWidth = 0;   // LiquidAss draws its own edge
         return;
     }
@@ -2582,6 +2578,29 @@ static void PillGlassLevel(UIVisualEffectView *g) {
     if (![g isKindOfClass:[UIVisualEffectView class]]) return;
     GlassLook(g, gPillGlass, g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark);
 }
+// 1.6.7: every glass button (back, X, edit, top bar buttons, search field ...) gets the pill's glass
+static NSHashTable *gMPGlassAll;
+static void MPGlassAny(UIView *g) {
+    if (!g || !MPLGClass()) return;
+    if (!gMPGlassAll) gMPGlassAll = [NSHashTable weakObjectsHashTable];
+    [gMPGlassAll addObject:g];
+    if ([g isKindOfClass:[UIVisualEffectView class]]) { PillGlassLevel((UIVisualEffectView *)g); return; }
+    UIView *lgv = nil;
+    for (UIView *v in g.subviews) if (MPIsLGGlass(v)) { lgv = v; break; }
+    if (!lgv) {
+        lgv = MPLGMake(g.bounds); if (!lgv) return;
+        lgv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [g insertSubview:lgv atIndex:0];
+    } else if (g.subviews.firstObject != lgv) [g sendSubviewToBack:lgv];
+    if (g.backgroundColor && ![g.backgroundColor isEqual:UIColor.clearColor]) g.backgroundColor = UIColor.clearColor;
+    if (g.layer.borderWidth != 0) g.layer.borderWidth = 0;
+    if (g.layer.shadowOpacity != 0) g.layer.shadowOpacity = 0;
+    if (!g.clipsToBounds) g.clipsToBounds = YES;
+    CGFloat r = g.layer.cornerRadius > 0 ? g.layer.cornerRadius : MIN(g.bounds.size.width, g.bounds.size.height) / 2;
+    MPLGFit(lgv, g.bounds, r);
+    MPLGStyle(lgv, gPillGlass, g.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark);
+}
+static void MPGlassRefreshAll(void) { for (UIView *g in [gMPGlassAll allObjects]) if (g.window) MPGlassAny(g); }
 
 // Our pill stands in for Music's bar in both states. Expanded, it sits exactly
 // where Music's (hidden) bar is; while the full player is up, Music's bar is back.
@@ -2881,7 +2900,7 @@ static void PlayerStarSync(void);
         [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.8 options:o animations:^{
             c.transform = CGAffineTransformMakeScale(1.18, 1.18);
         } completion:nil];
-        if ([c.accessibilityIdentifier isEqualToString:@"tab"] || [c.accessibilityIdentifier isEqualToString:@"search"]) [self startGoo:c];
+        // 1.6.7: no more glass neck joining a pressed circle to the pill
     } else if (g.state == UIGestureRecognizerStateChanged) {
         CGPoint p = [g locationInView:c];
         UIView *pill = nil;
@@ -3949,6 +3968,7 @@ static void RemoveGlass(UIView *v, int depth) {
 static void SetFrameIfNew(UIView *v, CGRect f, CGFloat radius) {
     if (!CGRectEqualToRect(v.frame, f)) v.frame = f;
     if (v.layer.cornerRadius != radius) v.layer.cornerRadius = radius;
+    if (v.tag == NAVGLASS_TAG) MPGlassAny(v);
 }
 
 // Glass goes right behind the icon, in the icon's own container, so it moves
@@ -4112,6 +4132,7 @@ static void StyleSearchBar(UISearchBar *sb) {
             tf.layer.borderWidth = 0.75; tf.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
             [tf addTarget:[MPSegBounce shared] action:@selector(searchTapped:) forControlEvents:UIControlEventEditingDidBegin];
         }
+        MPGlassAny(tf);
         // "Apple Music | Library" scope bar: small glass capsule.
         NSMutableArray *st = [NSMutableArray arrayWithObject:sb];
         int g = 0;
@@ -4155,6 +4176,7 @@ static void StyleSearchBar(UISearchBar *sb) {
             CGRect df = CGRectMake(round(ic.x - D / 2), round(cy - D / 2), D, D);
             // (not while it's being squished: that moves everything together)
             if (CGAffineTransformIsIdentity(cancel.transform) && !CGRectEqualToRect(disc.frame, df)) { disc.frame = df; disc.layer.cornerRadius = D / 2; [disc viewWithTag:7].frame = disc.bounds; }
+            MPGlassAny(disc);
             [cancel sendSubviewToBack:disc];
             if (cancel.imageView) [cancel bringSubviewToFront:cancel.imageView];
         }
@@ -4339,6 +4361,7 @@ static void LibraryEdit(UINavigationBar *nb, CGRect avatarFrame, BOOL avatarHidd
     UIView *disc = [eb viewWithTag:1];
     GlassEdge(disc);
     if (!CGRectEqualToRect(disc.frame, CGRectMake(0, 0, D, D))) { disc.frame = CGRectMake(0, 0, D, D); disc.layer.cornerRadius = D / 2; }
+    MPGlassAny(disc);
     CGPoint c = CGPointMake(CGRectGetMinX(avatarFrame) - 10 - D / 2, CGRectGetMidY(avatarFrame));
     if (!CGRectEqualToRect(eb.bounds, CGRectMake(0, 0, D, D)) || !CGPointEqualToPoint(eb.center, c)) { eb.bounds = CGRectMake(0, 0, D, D); eb.center = c; }
     if (eb.imageView) [eb bringSubviewToFront:eb.imageView];
@@ -4387,6 +4410,7 @@ static UIView *LiquidBlob(CGRect f, UIView *content) {
     g.layer.cornerRadius = MIN(f.size.width, f.size.height) / 2; g.layer.cornerCurve = kCACornerCurveContinuous;
     g.layer.borderWidth = 0.75; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.22].CGColor;
     [b addSubview:g];
+    if (MPLGClass()) PillGlassLevel(g);
     if (content) {
         content.tag = 2; content.frame = b.bounds;
         content.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -4832,9 +4856,9 @@ static CGPoint GlyphCenter(UIView *c, UIView *host) {
 }
 
 static void SetGlassFrame(UIView *g, CGRect f) {
-    GlassEdge(g);
     if (CGAffineTransformIsIdentity(g.transform) && !CGRectEqualToRect(g.frame, f)) g.frame = f;
     if (g.layer.cornerRadius != f.size.height / 2) g.layer.cornerRadius = f.size.height / 2;
+    GlassEdge(g);
 }
 
 static const void *kBackGlass = &kBackGlass, *kPairGlass = &kPairGlass;
@@ -5161,6 +5185,7 @@ static UIView *GlassDisc(CGFloat D) {
     e.frame = CGRectMake(0, 0, D, D); e.layer.cornerRadius = D / 2;
     e.layer.cornerCurve = kCACornerCurveContinuous;
     e.layer.borderWidth = 0.75; e.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
+    MPGlassAny(e);
     return e;
 }
 
@@ -7167,6 +7192,7 @@ static void PlayerExtras(UIView *player, UIWindow *w) {
         }
         CGRect lf = CGRectInset(loss.frame, -4, -3);
         if (!CGRectEqualToRect(gl.frame, lf)) { gl.frame = lf; gl.layer.cornerRadius = lf.size.height / 2; }
+        if (MPLGClass()) PillGlassLevel(gl);
         gl.hidden = NO;
         gl.alpha = loss.alpha;
         lossGlass = gl;
@@ -7869,6 +7895,7 @@ static void ShowUpNext(UIView *pill, NSString *title, NSString *artist, UIImage 
     g.userInteractionEnabled = NO; g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [cap addSubview:g];
     FrostGlass(g, cap); ApplyGlow(g, NO);
+    if (MPLGClass()) PillGlassLevel(g);
     UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(7, (H - 32) / 2, 32, 32)];
     iv.image = art; iv.contentMode = UIViewContentModeScaleAspectFill; iv.clipsToBounds = YES;
     iv.layer.cornerRadius = 8; iv.layer.cornerCurve = kCACornerCurveContinuous;
@@ -8067,6 +8094,7 @@ static void PinsEval(UIScrollView *list, UISearchController *sc, UISearchBar *sb
             g.frame = chip.bounds; g.clipsToBounds = YES; g.layer.cornerRadius = H / 2; g.layer.cornerCurve = kCACornerCurveContinuous;
             g.userInteractionEnabled = NO;
             [chip addSubview:g];
+            if (MPLGClass()) PillGlassLevel(g);
             UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(6, 6, 32, 32)];
             iv.image = [p[@"img"] isKindOfClass:[NSData class]] ? [UIImage imageWithData:p[@"img"]] : nil;
             iv.contentMode = UIViewContentModeScaleAspectFill; iv.clipsToBounds = YES; iv.layer.cornerRadius = 16;

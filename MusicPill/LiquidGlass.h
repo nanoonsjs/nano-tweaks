@@ -807,3 +807,54 @@ static void MPLGFit(UIView *v, CGRect f, CGFloat radius) {
         if (rc && [v respondsToSelector:NSSelectorFromString(@"updateSpecular")]) ((void (*)(id, SEL))objc_msgSend)(v, NSSelectorFromString(@"updateSpecular"));
     } @catch (__unused id e) {}
 }
+
+// 1.6.7: one look for every glass: the tab bar glass, getting blurrier (frosted) and a little tinted as the
+// Pill Glass slider goes toward tinted. Blur and tint live inside the glass view, under its edge and shine.
+#define MPLG_BLUR_TAG 0x4D504C42
+#define MPLG_TINT_TAG 0x4D504C54
+static void MPLGStyle(UIView *lgv, CGFloat t, BOOL light) {
+    if (!lgv) return;
+    t = MAX(0, MIN(1, t));
+    CGRect b = lgv.bounds; CGFloat r = lgv.layer.cornerRadius;
+    UIView *bl = nil, *tn = nil;
+    for (UIView *v in lgv.subviews) { if (v.tag == MPLG_BLUR_TAG) bl = v; else if (v.tag == MPLG_TINT_TAG) tn = v; }
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    CGFloat br = round(18 * t * 2) / 2;
+    if (br >= 0.5) {
+        if (!bl) {
+            bl = [[MPLGBackdrop alloc] initWithFrame:b]; bl.tag = MPLG_BLUR_TAG;
+            bl.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [lgv insertSubview:bl atIndex:0];
+            @try { [bl.layer setValue:@0.5 forKey:@"scale"]; } @catch (__unused id e) {}
+        }
+        NSNumber *was = [bl.layer valueForKey:@"mp.br"];
+        if (!was || fabs(was.doubleValue - br) > 0.01) {
+            @try {
+                Class F = NSClassFromString(@"CAFilter");
+                id f = ((id (*)(id, SEL, NSString *))objc_msgSend)(F, NSSelectorFromString(@"filterWithType:"), @"gaussianBlur");
+                [f setValue:@(br) forKey:@"inputRadius"];
+                if (f) bl.layer.filters = @[f];
+            } @catch (__unused id e) {}
+            [bl.layer setValue:@(br) forKey:@"mp.br"];
+        }
+        if (!CGRectEqualToRect(bl.frame, b)) bl.frame = b;
+        bl.layer.cornerRadius = r; bl.layer.masksToBounds = YES;
+    } else [bl removeFromSuperview];
+    CGFloat ta = (light ? 0.42 : 0.32) * t;
+    if (ta > 0.01) {
+        if (!tn) {
+            tn = [[UIView alloc] initWithFrame:b]; tn.tag = MPLG_TINT_TAG; tn.userInteractionEnabled = NO;
+            tn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        }
+        UIView *under = bl.superview ? bl : nil;
+        if (tn.superview != lgv) { if (under) [lgv insertSubview:tn aboveSubview:under]; else [lgv insertSubview:tn atIndex:0]; }
+        if (!CGRectEqualToRect(tn.frame, b)) tn.frame = b;
+        tn.layer.cornerRadius = r;
+        tn.backgroundColor = light ? [UIColor colorWithWhite:1 alpha:ta] : [UIColor colorWithWhite:0.06 alpha:ta];
+    } else [tn removeFromSuperview];
+    [CATransaction commit];
+}
+// LiquidAss's own rim and shine off (for the drop's pieces, which get one outline for the whole shape)
+static void MPLGBare(UIView *lgv) {
+    for (CALayer *l in lgv.layer.sublayers) if (([l isKindOfClass:[CAShapeLayer class]] || [l isKindOfClass:[CAGradientLayer class]]) && l.opacity != 0) l.opacity = 0;
+}
