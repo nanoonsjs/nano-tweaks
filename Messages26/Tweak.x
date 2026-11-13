@@ -1,4 +1,5 @@
-// Messages26 1.4 - made by nano
+// Messages26 1.4.1 - made by nano
+// 1.4.1: glass follows the NanoGlass slider (clear to frosted); no more blurry icons where LiquidAss already has its own glass
 // 1.4: with LiquidAss installed, all our glass is the same liquid glass as MusicPill (LiquidAss's tab bar glass)
 // 1.3.9: sharing a video no longer crashes; music and other files open in Apple's own viewer (only photos and videos get the iOS 26 one)
 // 1.3.8: contact page styling back (1.3.7 lost a line it needed)
@@ -690,7 +691,7 @@ static void RimFit(UIView *v, BOOL dark) {
     rim.frame = v.bounds;
     ((CAShapeLayer *)rim.mask).path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(v.bounds, 0.6, 0.6) cornerRadius:MAX(0, r - 0.6)].CGPath;
     [CATransaction commit];
-    NGApply(v, 0.5);   // 1.4: with LiquidAss, the same liquid glass as MusicPill
+    NGApply(v);   // 1.4: with LiquidAss, the same liquid glass as MusicPill
 }
 static void StyleEntry(UIView *entry) {
     UIView *field = FieldOf(entry);
@@ -5419,7 +5420,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.4 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.4.1 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

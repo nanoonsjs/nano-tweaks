@@ -1,4 +1,5 @@
-// Photos26 3.4 - made by nano
+// Photos26 3.4.1 - made by nano
+// 3.4.1: glass follows the NanoGlass slider (clear to frosted)
 // 3.4: with LiquidAss installed, the bar and buttons are the same liquid glass as MusicPill
 // 3.3: the info sheet from 3.2 is gone again (Apple's info panel as before)
 // 3.1: glass video player in Recently Deleted; Recover / Delete there use the iOS 26 card; only full-screen photos get framed
@@ -330,7 +331,7 @@ static void Forward(UIBarButtonItem *it) {
     self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:r].CGPath;
     [CATransaction commit];
     // 3.4: with LiquidAss, the same liquid glass as MusicPill
-    if (NGOn()) { NGApply(_blur, 0.5); _rim.opacity = 0; }
+    NGApply(_blur); _rim.opacity = (NGOn() && NGIsGlass(_blur.contentView.subviews.firstObject)) ? 0 : 1;
 }
 @end
 

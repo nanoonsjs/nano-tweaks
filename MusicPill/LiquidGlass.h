@@ -827,7 +827,7 @@ static void MPLGStyle(UIView *lgv, CGFloat t, BOOL light) {
             [lgv insertSubview:bl atIndex:0];
             @try { [bl.layer setValue:@0.5 forKey:@"scale"]; } @catch (__unused id e) {}
         }
-        NSNumber *was = [bl.layer valueForKey:@"mp.br"];
+        NSNumber *was = [bl.layer valueForKey:@"mpBr"];
         if (!was || fabs(was.doubleValue - br) > 0.01) {
             @try {
                 Class F = NSClassFromString(@"CAFilter");
@@ -835,7 +835,7 @@ static void MPLGStyle(UIView *lgv, CGFloat t, BOOL light) {
                 [f setValue:@(br) forKey:@"inputRadius"];
                 if (f) bl.layer.filters = @[f];
             } @catch (__unused id e) {}
-            [bl.layer setValue:@(br) forKey:@"mp.br"];
+            [bl.layer setValue:@(br) forKey:@"mpBr"];
         }
         if (!CGRectEqualToRect(bl.frame, b)) bl.frame = b;
         bl.layer.cornerRadius = r; bl.layer.masksToBounds = YES;

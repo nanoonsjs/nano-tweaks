@@ -1,4 +1,5 @@
-// Control26 1.2.2 - made by nano
+// Control26 1.2.3 - made by nano
+// 1.2.3: glass follows the NanoGlass slider (clear to frosted)
 // 1.2.2: with LiquidAss installed, our glass buttons are the same liquid glass as MusicPill
 // 1.2: smaller iPhones (4.7"/5.5"): pages fit the screen, Connectivity fits (short names), page icons fit the margin;
 //      Style setting (iOS 26 / iOS 18), Module Shapes (round controls, capsule sliders) without other tweaks,
@@ -2829,7 +2830,7 @@ static void RoundGlass(UIButton *b) {
     fx.layer.cornerRadius = MIN(b.bounds.size.width, b.bounds.size.height) / 2;
     if (b.imageView) [b bringSubviewToFront:b.imageView];
     if (b.titleLabel) [b bringSubviewToFront:b.titleLabel];
-    NGApply(fx, 0.5);   // 1.2.2: with LiquidAss, the same liquid glass as MusicPill
+    NGApply(fx);   // 1.2.2: with LiquidAss, the same liquid glass as MusicPill
 }
 static void Pop(UIView *v) {
     [UIView animateWithDuration:0.12 animations:^{ v.transform = CGAffineTransformMakeScale(0.88, 0.88); } completion:^(__unused BOOL f) {

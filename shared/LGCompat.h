@@ -7,6 +7,7 @@
 //
 // Use: LGCompatRegister(glassView) for each glass view we draw (the glass itself, not the button), and set gLGCompatOn from the prefs.
 #pragma once
+#define NANO_LGCOMPAT 1
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
