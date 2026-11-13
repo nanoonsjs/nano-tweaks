@@ -187,7 +187,7 @@ static NSString *const kMPLiquidGlassShader = @
     "        float rectDistance = roundedRectangleSDF(\n"
     "            fragmentCoord,\n"
     "            rect,\n"
-    "            uniforms.cornerRadius,\n"
+    "            min(uniforms.cornerRadius, 0.5f * min(rect.z, rect.w)),\n"
     "            uniforms.cornerRoundnessExponent,\n"
     "            uniforms\n"
     "        );\n"
@@ -642,6 +642,10 @@ static BOOL MPLGReady(void) {
 
 @interface MPLiquidGlassView : MTKView
 @property (nonatomic, strong) UIColor *glassTint;   // the material tint (alpha = how tinted)
+// 1.7.2: several shapes (in our own coordinates) melted into one piece of glass (smooth union), each rounded
+// up to shapeRadius; mergePts = how far apart they still blend. No shapes = our bounds with our corner radius.
+@property (nonatomic, copy) NSArray<NSValue *> *shapes;
+@property (nonatomic) CGFloat shapeRadius, mergePts;
 @end
 @implementation MPLiquidGlassView {
     id<MTLCommandQueue> _queue;
@@ -734,6 +738,10 @@ static BOOL MPLGReady(void) {
     u.contentsScale = sc;
     u.shapeMergeSmoothness = 0.2;
     u.cornerRadius = self.layer.cornerRadius;
+    if (self.shapes.count) {
+        u.cornerRadius = self.shapeRadius;
+        u.shapeMergeSmoothness = MAX(0.001, self.mergePts / MAX(1, self.bounds.size.height));
+    }
     u.cornerRoundnessExponent = 2;
     // the "regular" glass from LiquidGlassKit
     u.glassThickness = 10; u.refractiveIndex = 1.5; u.dispersionStrength = 5;
@@ -745,6 +753,11 @@ static BOOL MPLGReady(void) {
     u.materialTint = simd_make_float4(r, g, b, a);
     u.rectangleCount = 1;
     u.rectangles[0] = simd_make_float4(0, 0, self.bounds.size.width, self.bounds.size.height);
+    if (self.shapes.count) {
+        int n = 0;
+        for (NSValue *v in self.shapes) { if (n >= 16) break; CGRect r = v.CGRectValue; u.rectangles[n++] = simd_make_float4(r.origin.x, r.origin.y, r.size.width, r.size.height); }
+        u.rectangleCount = n;
+    }
     memcpy(_uniforms.contents, &u, sizeof(u));
 }
 - (void)drawRect:(CGRect)rect {

@@ -1130,7 +1130,8 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     BOOL _clear;                   // 1.6.6: Pill Glass set toward clear: the drop is clear glass too
     UIView *_cBase, *_cPill, *_cDrop; CAShapeLayer *_cMask, *_cTint;
     CAGradientLayer *_hi, *_caustic; CAShapeLayer *_hiMask;
-    BOOL _broken; CGFloat _nk; CFTimeInterval _popT;   // 1.6.8: pulled far, the neck snaps (_nk 1 joined -> 0 apart) and the drop is its own ball   // 1.6.7: one shiny rim for the whole shape, light caught in the drop
+    BOOL _broken; CGFloat _nk; CFTimeInterval _popT;
+    MPLiquidGlassView *_mg;   // 1.7.2: the whole drop as ONE piece of liquid glass (smooth union, LiquidGlassKit's shader)   // 1.6.8: pulled far, the neck snaps (_nk 1 joined -> 0 apart) and the drop is its own ball   // 1.6.7: one shiny rim for the whole shape, light caught in the drop
 }
 - (void)beginOn:(UIView *)pill touchX:(CGFloat)x {
     UIView *host = pill.superview;
@@ -1142,7 +1143,7 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     _light = pill.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
     _holder = [[UIView alloc] initWithFrame:host.bounds]; _holder.userInteractionEnabled = NO;
     _clear = gPillGlass < 0.9 || MPLGClass();   // 1.6.7: with LiquidAss the drop is always glass (blurred toward tinted)
-    _cBase = _cPill = _cDrop = nil; _cMask = _cTint = nil; _glassV = nil; _hi = _caustic = nil; _hiMask = nil;
+    _cBase = _cPill = _cDrop = nil; _cMask = _cTint = nil; _glassV = nil; _hi = _caustic = nil; _hiMask = nil; _mg = nil;
     UIView *pg = [pill respondsToSelector:@selector(glass)] ? [pill valueForKey:@"glass"] : nil;
     if (_clear) [self buildClear];
     else {
@@ -1216,6 +1217,20 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     _caustic.colors = @[(id)[UIColor colorWithWhite:1 alpha:_light ? 0.55 : 0.38].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
     _caustic.startPoint = CGPointMake(0.5, 0.5); _caustic.endPoint = CGPointMake(1, 1);
     [_holder.layer addSublayer:_caustic];
+    // one Metal glass over the pill and the space above it (fixed, so its buffers stay put while you pull)
+    UIView *pill = _pill;
+    if (pill) {
+        CGRect P = pill.frame;
+        _mg = [[MPLiquidGlassView alloc] initWithFrame:CGRectMake(CGRectGetMinX(P) - 24, CGRectGetMinY(P) - 150, P.size.width + 48, P.size.height + 156)];
+        if (_mg) {
+            _mg.autoresizingMask = UIViewAutoresizingNone;
+            _mg.layer.cornerRadius = 0;
+            // close to the tab bar glass: a light veil, frosted a touch
+            _mg.glassTint = _light ? [UIColor colorWithWhite:1 alpha:0.32] : [UIColor colorWithRed:0.165 green:0.165 blue:0.176 alpha:0.32];
+            _mg.alpha = 0;
+            [_holder insertSubview:_mg aboveSubview:_cDrop ?: _cPill ?: _cBase];
+        }
+    }
 }
 - (void)followX:(CGFloat)x d:(CGFloat)d {
     UIView *pill = _pill; if (!pill.superview || _mode != 0) return;
@@ -1364,6 +1379,36 @@ static void GooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, CGFl
         _caustic.frame = CGRectMake(cx - cw / 2 + (cx - fx) * 0.08, by + ry * 0.62 - ch / 2, cw, ch);
         _caustic.opacity = hasDrop ? MAX(0, MIN(1, (d - 18) / 30)) : 0;
         _rim.opacity = 0.35;
+        if (_mg) {
+            // 1.7.2: pill, neck and drop as shapes melted together by the shader: the neck is a chain of
+            // beads from its foot on the pill up to the drop, thinning as it rises, so it leans and pinches
+            // like real liquid; past the snap the beads are gone and the drop is its own ball.
+            CGPoint o = _mg.frame.origin;
+            NSMutableArray *sh = [NSMutableArray array];
+            [sh addObject:[NSValue valueWithCGRect:CGRectOffset(P, -o.x, -o.y)]];
+            if (hasDrop && !apart) {
+                int nb = 6;
+                CGFloat footR = MIN(R * 0.95, base * 0.55), endR = MAX(1.2, neck);
+                CGPoint a = CGPointMake(fx, top + footR * 0.6), b = CGPointMake(cx, by), c = CGPointMake((fx + cx) / 2 + lean * 0.2, (top + by) / 2);
+                for (int i = 1; i <= nb; i++) {
+                    CGFloat t = (CGFloat)i / (nb + 1), it = 1 - t;
+                    CGFloat x = it * it * a.x + 2 * it * t * c.x + t * t * b.x, y = it * it * a.y + 2 * it * t * c.y + t * t * b.y;
+                    CGFloat rr = footR + (endR - footR) * sqrt(t);
+                    [sh addObject:[NSValue valueWithCGRect:CGRectMake(x - rr - o.x, y - rr - o.y, rr * 2, rr * 2)]];
+                }
+            } else if (apart && lb > 0.05) {
+                CGFloat br = 9 * lb;
+                [sh addObject:[NSValue valueWithCGRect:CGRectMake(fx - br - o.x, top + 4 - 7 * lb - br - o.y, br * 2, br * 2)]];
+            }
+            if (hasDrop && r0 > 0.5) [sh addObject:[NSValue valueWithCGRect:CGRectMake(cx - rx - o.x, by - ry - o.y, rx * 2, ry * 2)]];
+            _mg.shapes = sh; _mg.shapeRadius = R; _mg.mergePts = 9;
+            // the Metal glass takes over from the pill's own glass over the first bit of the pull
+            CGFloat k = MAX(0, MIN(1, d / 10));
+            _mg.alpha = k;
+            _cPill.alpha = 1 - k; _cDrop.alpha = 0;
+            _cMask.path = nil; _cTint.path = nil;
+            _hi.opacity = 1 - k; _rim.opacity = 0.35 * (1 - k);
+        }
     }
     _inkMask.path = inkP.CGPath;
     _ink.startPoint = CGPointMake(0.5, (by - ry) / MAX(1, _holder.bounds.size.height));
@@ -1372,6 +1417,7 @@ static void GooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, CGFl
     _shine.path = r0 > 3 ? [UIBezierPath bezierPathWithOvalInRect:CGRectMake(cx - rx + 2.5, by - ry + 2.5, rx * 2 - 5, ry * 2 - 5)].CGPath : nil;
     _shine.strokeStart = 0.55; _shine.strokeEnd = 0.82;
     _shine.opacity = MIN(1, d / 26);
+    if (_mg) _shine.opacity *= 1 - _mg.alpha;   // the shader draws its own glare
     if (_light) _holder.layer.shadowPath = p.CGPath;
     [CATransaction commit];
 }
