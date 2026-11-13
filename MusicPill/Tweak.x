@@ -1,4 +1,4 @@
-// MusicPill 1.6.5 - made by nano
+// MusicPill 1.6.6 - made by nano
 // 1.6.5: Pill Glass uses real liquid glass (Metal, ported from LiquidGlassKit); the real pill no longer hands its glass to LiquidAss
 // 1.6.4: Pill Glass: clear = the tab bar's own glass (copied live), tinted = the usual pill
 // 1.6.3: real-looking glass (tilt reflections, vivid colors through it, thickness) and the pill sits lower
@@ -1503,7 +1503,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.5 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.6.6 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -2484,7 +2484,8 @@ static void GlassLook(UIVisualEffectView *g, CGFloat t, BOOL light) {
     if (normal) {
         // the usual pill
         [mine removeFromSuperlayer];
-        for (UIView *v in [g.contentView.subviews copy]) if ([v isKindOfClass:[MPLiquidGlassView class]]) [v removeFromSuperview];
+        for (UIView *v in [g.contentView.subviews copy]) if ([v isKindOfClass:[MPLiquidGlassView class]] || MPIsLGGlass(v)) [v removeFromSuperview];
+        for (UIView *v in [gLGKeepHidden allObjects]) LGSetHidden(v, NO);
         [gLGKeepHidden removeAllObjects];
         g.layer.borderWidth = 0.75;
         UIVisualEffect *fx = objc_getAssociatedObject(g, kGlassFx); if (fx && !g.effect) g.effect = fx;
@@ -2496,9 +2497,33 @@ static void GlassLook(UIVisualEffectView *g, CGFloat t, BOOL light) {
     // our own glass from here on: LiquidAss compatibility mustn't hide it, and their glass on the pill steps aside
     if (gLGOurs) [gLGOurs removeObject:g];
     LGOursHidden(g, NO);
-    if (LGPresent()) for (UIView *v in LGTheirsOn(g)) { if (!gLGKeepHidden) gLGKeepHidden = [NSHashTable weakObjectsHashTable]; [gLGKeepHidden addObject:v]; LGSetHidden(v, YES); }
+    // 1.6.6: LiquidAss's own glass (the tab bar) is never touched any more; 1.6.5 hid it by mistake
+    for (UIView *v in [gLGKeepHidden allObjects]) LGSetHidden(v, NO);
+    [gLGKeepHidden removeAllObjects];
     if (g.effect) { objc_setAssociatedObject(g, kGlassFx, g.effect, OBJC_ASSOCIATION_RETAIN_NONATOMIC); g.effect = nil; }
     frost.hidden = YES;
+    CGFloat rad = g.layer.cornerRadius > 0 ? g.layer.cornerRadius : g.bounds.size.height / 2;
+    // 1.6.6: LiquidAss installed: the very glass the tab bar uses, drawn by the system (smooth while scrolling)
+    UIView *lgv = nil;
+    for (UIView *v in g.contentView.subviews) if (MPIsLGGlass(v)) lgv = v;
+    if (!lgv) { lgv = MPLGMake(g.contentView.bounds); if (lgv) [g.contentView insertSubview:lgv atIndex:0]; }
+    if (lgv) {
+        for (UIView *v in [g.contentView.subviews copy]) if ([v isKindOfClass:[MPLiquidGlassView class]]) [v removeFromSuperview];
+        for (CALayer *l in [g.layer.sublayers copy]) if ([l.name isEqualToString:@"mp.clear"]) [l removeFromSuperlayer];
+        MPLGFit(lgv, g.contentView.bounds, rad);
+        CGFloat k = t / 0.9;
+        if (k > 0.02) {
+            if (!tv) {
+                tv = [[UIView alloc] initWithFrame:g.contentView.bounds]; tv.tag = 0x4D50544E; tv.userInteractionEnabled = NO;
+                tv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            }
+            if (tv.superview != g.contentView || [g.contentView.subviews indexOfObject:tv] != [g.contentView.subviews indexOfObject:lgv] + 1) [g.contentView insertSubview:tv aboveSubview:lgv];
+            tv.frame = g.contentView.bounds;
+            tv.backgroundColor = light ? [UIColor colorWithWhite:1 alpha:0.6 * k] : [UIColor colorWithWhite:0.05 alpha:0.6 * k];
+        } else [tv removeFromSuperview];
+        g.layer.borderWidth = 0;   // LiquidAss draws its own edge
+        return;
+    }
     // 1.6.5: real liquid glass (refraction, color split at the edges, glare), rendered with Metal
     MPLiquidGlassView *lg = nil;
     for (UIView *v in g.contentView.subviews) if ([v isKindOfClass:[MPLiquidGlassView class]]) lg = (MPLiquidGlassView *)v;
@@ -2508,7 +2533,7 @@ static void GlassLook(UIVisualEffectView *g, CGFloat t, BOOL light) {
     }
     if (lg) {
         lg.frame = g.contentView.bounds;
-        lg.layer.cornerRadius = g.layer.cornerRadius > 0 ? g.layer.cornerRadius : g.bounds.size.height / 2;
+        lg.layer.cornerRadius = rad;
         CGFloat a = 0.1 + 0.7 * (t / 0.9);
         lg.glassTint = light ? [UIColor colorWithRed:0.9 green:0.95 blue:1 alpha:a] : [UIColor colorWithRed:0 green:0.05 blue:0.1 alpha:a];
         for (CALayer *l in [g.layer.sublayers copy]) if ([l.name isEqualToString:@"mp.clear"]) [l removeFromSuperlayer];

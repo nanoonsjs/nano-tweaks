@@ -1127,6 +1127,8 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     CGFloat _rScale;               // 1 normally; shrinks to 0 when the drop leaves
     int _mode;                     // 0 follow, 1 retract, 2 detached
     BOOL _light, _absorbing;
+    BOOL _clear;                   // 1.6.6: Pill Glass set toward clear: the drop is clear glass too
+    UIView *_cBase, *_cPill, *_cDrop; CAShapeLayer *_cMask, *_cTint;
 }
 - (void)beginOn:(UIView *)pill touchX:(CGFloat)x {
     UIView *host = pill.superview;
@@ -1137,31 +1139,36 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     _tx = _x = _bx = MAX(CGRectGetMinX(P), MIN(CGRectGetMaxX(P), x)); _td = _d = 0; _vx = _vd = _vbx = 0;
     _light = pill.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
     _holder = [[UIView alloc] initWithFrame:host.bounds]; _holder.userInteractionEnabled = NO;
-    // the same glass as the pill
-    _glassV = [[UIVisualEffectView alloc] initWithEffect:_light ? [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight] : TabGlassEffect()];
-    _glassV.frame = _holder.bounds; _glassV.userInteractionEnabled = NO;
-    if (_light) { _tint = [[UIView alloc] initWithFrame:_glassV.bounds]; _tint.backgroundColor = [UIColor colorWithWhite:1 alpha:0.62]; [_glassV.contentView addSubview:_tint]; }
-    // the drop itself goes inky and glossy (dark mode), fading back to the pill's glass down the neck
-    _ink = [CAGradientLayer layer]; _ink.frame = _holder.bounds;
-    UIColor *inkC = _light ? [UIColor colorWithWhite:0.0 alpha:0.10] : [UIColor colorWithWhite:0.0 alpha:0.55];
-    _ink.colors = @[(id)inkC.CGColor, (id)[inkC colorWithAlphaComponent:0].CGColor];
-    _inkMask = [CAShapeLayer layer]; _inkMask.fillColor = UIColor.blackColor.CGColor; _ink.mask = _inkMask;
-    [_glassV.contentView.layer addSublayer:_ink];
-    // the album glow the pill has
+    _clear = gPillGlass < 0.9;
+    _cBase = _cPill = _cDrop = nil; _cMask = _cTint = nil; _glassV = nil;
     UIView *pg = [pill respondsToSelector:@selector(glass)] ? [pill valueForKey:@"glass"] : nil;
-    _maskV = [[UIView alloc] initWithFrame:_holder.bounds];
-    _shape = [CAShapeLayer layer]; _shape.fillColor = UIColor.blackColor.CGColor;
-    [_maskV.layer addSublayer:_shape];
-    _glassV.maskView = _maskV;
-    [_holder addSubview:_glassV];
+    if (_clear) [self buildClear];
+    else {
+        // the same glass as the pill
+        _glassV = [[UIVisualEffectView alloc] initWithEffect:_light ? [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight] : TabGlassEffect()];
+        _glassV.frame = _holder.bounds; _glassV.userInteractionEnabled = NO;
+        if (_light) { _tint = [[UIView alloc] initWithFrame:_glassV.bounds]; _tint.backgroundColor = [UIColor colorWithWhite:1 alpha:0.62]; [_glassV.contentView addSubview:_tint]; }
+        // the drop itself goes inky and glossy (dark mode), fading back to the pill's glass down the neck
+        _ink = [CAGradientLayer layer]; _ink.frame = _holder.bounds;
+        UIColor *inkC = _light ? [UIColor colorWithWhite:0.0 alpha:0.10] : [UIColor colorWithWhite:0.0 alpha:0.55];
+        _ink.colors = @[(id)inkC.CGColor, (id)[inkC colorWithAlphaComponent:0].CGColor];
+        _inkMask = [CAShapeLayer layer]; _inkMask.fillColor = UIColor.blackColor.CGColor; _ink.mask = _inkMask;
+        [_glassV.contentView.layer addSublayer:_ink];
+        // the album glow the pill has
+        _maskV = [[UIView alloc] initWithFrame:_holder.bounds];
+        _shape = [CAShapeLayer layer]; _shape.fillColor = UIColor.blackColor.CGColor;
+        [_maskV.layer addSublayer:_shape];
+        _glassV.maskView = _maskV;
+        [_holder addSubview:_glassV];
+    }
     _rim = [CAShapeLayer layer]; _rim.fillColor = UIColor.clearColor.CGColor;
-    _rim.strokeColor = (_light ? [UIColor colorWithWhite:0 alpha:0.08] : [UIColor colorWithWhite:1 alpha:0.2]).CGColor;
+    _rim.strokeColor = (_clear ? [UIColor colorWithWhite:1 alpha:_light ? 0.55 : 0.28] : _light ? [UIColor colorWithWhite:0 alpha:0.08] : [UIColor colorWithWhite:1 alpha:0.2]).CGColor;
     _rim.lineWidth = _light ? 0.8 : 0.75;
     _shine = [CAShapeLayer layer]; _shine.fillColor = UIColor.clearColor.CGColor;
     _shine.strokeColor = [UIColor colorWithWhite:1 alpha:_light ? 0.9 : 0.55].CGColor; _shine.lineWidth = 1.4; _shine.lineCap = kCALineCapRound;
     _shine.shadowColor = UIColor.whiteColor.CGColor; _shine.shadowOpacity = _light ? 0 : 0.5; _shine.shadowRadius = 2; _shine.shadowOffset = CGSizeZero;
     [_holder.layer addSublayer:_rim]; [_holder.layer addSublayer:_shine];
-    if (_light) { _holder.layer.shadowColor = UIColor.blackColor.CGColor; _holder.layer.shadowOpacity = 0.12; _holder.layer.shadowRadius = 12; _holder.layer.shadowOffset = CGSizeMake(0, 4); }
+    if (_light && !_clear) { _holder.layer.shadowColor = UIColor.blackColor.CGColor; _holder.layer.shadowOpacity = 0.12; _holder.layer.shadowRadius = 12; _holder.layer.shadowOffset = CGSizeMake(0, 4); }
     [host insertSubview:_holder belowSubview:pill];
     // the pill's glass steps aside: from now on the pill sits on this one piece of glass
     pg.hidden = YES; (void)pg;
@@ -1170,6 +1177,30 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(step:)];
     if (@available(iOS 15.0, *)) _link.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
     [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+// 1.6.6: the clear drop: the pill and the drop are each LiquidAss's tab bar glass (a capsule and a ball, so
+// both bend the light at their edges); the neck between them is plain clear glass. A touch of tint follows
+// the Pill Glass slider.
+- (void)buildClear {
+    _cBase = [[MPLGBackdrop alloc] initWithFrame:_holder.bounds];
+    @try {
+        Class F = NSClassFromString(@"CAFilter");
+        id blur = ((id (*)(id, SEL, NSString *))objc_msgSend)(F, NSSelectorFromString(@"filterWithType:"), @"gaussianBlur");
+        [blur setValue:@3 forKey:@"inputRadius"];
+        id sat = ((id (*)(id, SEL, NSString *))objc_msgSend)(F, NSSelectorFromString(@"filterWithType:"), @"colorSaturate");
+        [sat setValue:@1.6 forKey:@"inputAmount"];
+        if (blur && sat) _cBase.layer.filters = @[blur, sat];
+    } @catch (__unused id e) {}
+    _cMask = [CAShapeLayer layer]; _cMask.fillColor = UIColor.blackColor.CGColor; _cBase.layer.mask = _cMask;
+    [_holder addSubview:_cBase];
+    _cPill = MPLGMake(CGRectZero); _cPill.autoresizingMask = UIViewAutoresizingNone;
+    _cDrop = MPLGMake(CGRectZero); _cDrop.autoresizingMask = UIViewAutoresizingNone;
+    if (_cPill) [_holder addSubview:_cPill];
+    if (_cDrop) [_holder addSubview:_cDrop];
+    CGFloat k = MAX(0, MIN(1, gPillGlass / 0.9));
+    _cTint = [CAShapeLayer layer];
+    _cTint.fillColor = (_light ? [UIColor colorWithWhite:1 alpha:0.6 * k] : [UIColor colorWithWhite:0.05 alpha:0.6 * k]).CGColor;
+    [_holder.layer addSublayer:_cTint];
 }
 - (void)followX:(CGFloat)x d:(CGFloat)d {
     UIView *pill = _pill; if (!pill.superview || _mode != 0) return;
@@ -1247,18 +1278,23 @@ static CGFloat GooForm(CGFloat d) { CGFloat x = MAX(0, MIN(1, (d - 4) / 56)); re
     CGFloat base = r0 * (1.9 - 0.3 * form) + 8 + 4 * form;
     CGFloat neck = r0 * (1.05 - 0.75 * form) + 0.9 * form;
     CGFloat lean = (cx - fx) * 0.5;
+    BOOL hasDrop = r0 > 0.5 && d > 0.5;
+    CGPoint lt = CGPointMake(cx - rx * 0.95, MIN(top - 0.3, by + ry * 0.3)), rt = CGPointMake(cx + rx * 0.95, MIN(top - 0.3, by + ry * 0.3));
+    // from the neck's left foot, up over the drop, down to its right foot
+    void (^bump)(UIBezierPath *) = ^(UIBezierPath *q) {
+        [q addCurveToPoint:lt controlPoint1:CGPointMake(fx - base * 0.42, top) controlPoint2:CGPointMake(cx - neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5))];
+        // the drop: an ellipse top from left to right
+        int segs = 18; double a0 = M_PI - 0.31, a1 = 2 * M_PI + 0.31;
+        for (int i = 1; i <= segs; i++) { double a = a0 + (a1 - a0) * i / segs; [q addLineToPoint:CGPointMake(cx + rx * cos(a), MIN(top - 0.3, by + ry * sin(a)))]; }
+        [q addLineToPoint:rt];
+        [q addCurveToPoint:CGPointMake(fx + base, top) controlPoint1:CGPointMake(cx + neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5)) controlPoint2:CGPointMake(fx + base * 0.42, top)];
+    };
     UIBezierPath *p = [UIBezierPath bezierPath];
     // the pill (a capsule) with the drop rising out of its top edge, as one outline
     [p moveToPoint:CGPointMake(CGRectGetMinX(P) + R, top)];
-    if (r0 > 0.5 && d > 0.5) {
+    if (hasDrop) {
         [p addLineToPoint:CGPointMake(fx - base, top)];
-        CGPoint lt = CGPointMake(cx - rx * 0.95, MIN(top - 0.3, by + ry * 0.3)), rt = CGPointMake(cx + rx * 0.95, MIN(top - 0.3, by + ry * 0.3));
-        [p addCurveToPoint:lt controlPoint1:CGPointMake(fx - base * 0.42, top) controlPoint2:CGPointMake(cx - neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5))];
-        // the drop: an ellipse top from left to right
-        int segs = 18; double a0 = M_PI - 0.31, a1 = 2 * M_PI + 0.31;
-        for (int i = 1; i <= segs; i++) { double a = a0 + (a1 - a0) * i / segs; [p addLineToPoint:CGPointMake(cx + rx * cos(a), MIN(top - 0.3, by + ry * sin(a)))]; }
-        [p addLineToPoint:rt];
-        [p addCurveToPoint:CGPointMake(fx + base, top) controlPoint1:CGPointMake(cx + neck + lean * 0.2, MIN(top, by + ry + (top - by - ry) * 0.5)) controlPoint2:CGPointMake(fx + base * 0.42, top)];
+        bump(p);
     }
     [p addLineToPoint:CGPointMake(CGRectGetMaxX(P) - R, top)];
     [p addArcWithCenter:CGPointMake(CGRectGetMaxX(P) - R, top + R) radius:R startAngle:-M_PI_2 endAngle:M_PI_2 clockwise:YES];
@@ -1269,6 +1305,17 @@ static CGFloat GooForm(CGFloat d) { CGFloat x = MAX(0, MIN(1, (d - 4) / 56)); re
     UIBezierPath *inkP = [UIBezierPath bezierPathWithRect:CGRectMake(CGRectGetMinX(P), by - ry - 4, P.size.width, MAX(0, top - (by - ry - 4)) + 2)];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _shape.path = p.CGPath; _rim.path = p.CGPath;
+    if (_clear) {
+        // the neck alone (the pill and the ball have their own glass)
+        UIBezierPath *nk = nil;
+        if (_cPill && hasDrop) { nk = [UIBezierPath bezierPath]; [nk moveToPoint:CGPointMake(fx - base, top + 1.5)]; [nk addLineToPoint:CGPointMake(fx - base, top)]; bump(nk); [nk addLineToPoint:CGPointMake(fx + base, top + 1.5)]; [nk closePath]; }
+        _cMask.path = _cPill ? nk.CGPath : p.CGPath;
+        _cTint.path = p.CGPath;
+        MPLGFit(_cPill, P, R);
+        CGFloat bw = MAX(1, rx * 2), bh = MAX(1, ry * 2);
+        MPLGFit(_cDrop, CGRectMake(cx - bw / 2, by - bh / 2, bw, bh), MIN(bw, bh) / 2);
+        _cDrop.alpha = hasDrop ? MAX(0, MIN(1, (d - 8) / 22)) : 0;
+    }
     _inkMask.path = inkP.CGPath;
     _ink.startPoint = CGPointMake(0.5, (by - ry) / MAX(1, _holder.bounds.size.height));
     _ink.endPoint = CGPointMake(0.5, (top + 2) / MAX(1, _holder.bounds.size.height));

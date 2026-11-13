@@ -652,6 +652,7 @@ static BOOL MPLGReady(void) {
     id<MTLTexture> _bg;
     MPLGBackdrop *_backdrop;
     CGFloat _scaleCo, _blur;
+    MPSImageGaussianBlur *_blurK;
 }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!MPLGReady()) return nil;
@@ -660,7 +661,7 @@ static BOOL MPLGReady(void) {
     self.opaque = NO; self.layer.opaque = NO;
     self.clearColor = MTLClearColorMake(0, 0, 0, 0);
     self.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
-    self.preferredFramesPerSecond = 30;
+    self.preferredFramesPerSecond = 60;
     self.paused = NO;
     _queue = [gLGDevice newCommandQueue];
     _uniforms = [gLGDevice newBufferWithLength:sizeof(MPLGUniforms) options:0];
@@ -720,8 +721,8 @@ static BOOL MPLGReady(void) {
 }
 - (void)blurBG:(id<MTLCommandBuffer>)cb {
     if (_blur <= 0 || !_bg) return;
-    MPSImageGaussianBlur *b = [[MPSImageGaussianBlur alloc] initWithDevice:gLGDevice sigma:(float)(_blur * self.contentScaleFactor)];
-    b.edgeMode = MPSImageEdgeModeClamp;
+    if (!_blurK) { _blurK = [[MPSImageGaussianBlur alloc] initWithDevice:gLGDevice sigma:(float)(_blur * self.contentScaleFactor)]; _blurK.edgeMode = MPSImageEdgeModeClamp; }
+    MPSImageGaussianBlur *b = _blurK;
     id<MTLTexture> t = _bg;
     [b encodeToCommandBuffer:cb inPlaceTexture:&t fallbackCopyAllocator:nil];
     _bg = t;
@@ -766,3 +767,43 @@ static BOOL MPLGReady(void) {
     [cb commit];
 }
 @end
+
+// 1.6.6: with LiquidAss installed, the clear glass IS LiquidAss's tab bar glass (its LGLiveBackdropView with the
+// tab bar filter). That's rendered by the system itself, so it's as smooth as the tab bar. Our Metal glass above
+// is only used without LiquidAss.
+#import <objc/message.h>
+static NSString *const kMPTabFilter = @"dylv.liquidglass.tabbar";
+static Class MPLGClass(void) {
+    static Class c; static BOOL looked;
+    if (!looked) {
+        looked = YES;
+        Class k = NSClassFromString(@"LGLiveBackdropView");
+        if (k && [k instancesRespondToSelector:NSSelectorFromString(@"initWithFrame:groupName:filterType:")]) c = k;
+    }
+    return c;
+}
+static BOOL MPIsLGGlass(UIView *v) { return [v.accessibilityIdentifier isEqualToString:@"nano.glass"]; }
+static UIView *MPLGMake(CGRect f) {
+    Class c = MPLGClass(); if (!c) return nil;
+    UIView *v = nil;
+    @try { v = ((id (*)(id, SEL, CGRect, id, id))objc_msgSend)([c alloc], NSSelectorFromString(@"initWithFrame:groupName:filterType:"), f, nil, kMPTabFilter); }
+    @catch (__unused id e) { v = nil; }
+    if (!v) return nil;
+    v.userInteractionEnabled = NO;
+    v.accessibilityIdentifier = @"nano.glass";   // ours: LiquidAss compatibility leaves it alone
+    v.layer.masksToBounds = YES;
+    if (@available(iOS 13.0, *)) v.layer.cornerCurve = kCACornerCurveContinuous;
+    return v;
+}
+static void MPLGFit(UIView *v, CGRect f, CGFloat radius) {
+    if (!v) return;
+    BOOL rc = fabs(v.layer.cornerRadius - radius) > 0.25;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if (!CGRectEqualToRect(v.frame, f)) v.frame = f;
+    if (rc) v.layer.cornerRadius = radius;
+    [CATransaction commit];
+    @try {
+        if ([v respondsToSelector:NSSelectorFromString(@"applyFilters")]) ((void (*)(id, SEL))objc_msgSend)(v, NSSelectorFromString(@"applyFilters"));
+        if (rc && [v respondsToSelector:NSSelectorFromString(@"updateSpecular")]) ((void (*)(id, SEL))objc_msgSend)(v, NSSelectorFromString(@"updateSpecular"));
+    } @catch (__unused id e) {}
+}

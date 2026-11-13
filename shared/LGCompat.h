@@ -22,6 +22,7 @@ static BOOL LGPresent(void) {
     return v == 1;
 }
 static BOOL LGIsTheirs(UIView *v) {
+    if ([v.accessibilityIdentifier isEqualToString:@"nano.glass"]) return NO;   // LiquidAss's glass class, but placed by us
     NSString *n = NSStringFromClass(v.class);
     return [n hasPrefix:@"LG"] && ([n hasSuffix:@"ButtonView"] || [n hasSuffix:@"BackdropView"] || [n hasSuffix:@"PhysicsView"] || [n hasSuffix:@"PillView"] || [n hasSuffix:@"BlurView"]);
 }
