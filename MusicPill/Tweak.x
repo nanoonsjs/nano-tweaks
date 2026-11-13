@@ -1,4 +1,5 @@
-// MusicPill 1.7.2 - made by nano
+// MusicPill 1.7.3 - made by nano
+// 1.7.3: the liquid drop glass was drawn upside down (above the pill); now it rises out of the pill
 // 1.7.2: the liquid drop is one piece of real liquid glass: pill, neck and drop melt together (smooth union) and bend the light along the whole shape
 // 1.7.1: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.7: Pill Glass slider removed: the pill, drop and buttons use LiquidAss's own glass (its blur setting applies); follows NanoGlass's Liquid Glass switch
@@ -1506,7 +1507,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.7.2 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.7.3 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];

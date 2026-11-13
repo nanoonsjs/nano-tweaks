@@ -755,7 +755,9 @@ static BOOL MPLGReady(void) {
     u.rectangles[0] = simd_make_float4(0, 0, self.bounds.size.width, self.bounds.size.height);
     if (self.shapes.count) {
         int n = 0;
-        for (NSValue *v in self.shapes) { if (n >= 16) break; CGRect r = v.CGRectValue; u.rectangles[n++] = simd_make_float4(r.origin.x, r.origin.y, r.size.width, r.size.height); }
+        CGFloat H = self.bounds.size.height;
+        // the shader measures from the bottom (its UVs are flipped), so the shapes are flipped too
+        for (NSValue *v in self.shapes) { if (n >= 16) break; CGRect r = v.CGRectValue; u.rectangles[n++] = simd_make_float4(r.origin.x, H - CGRectGetMaxY(r), r.size.width, r.size.height); }
         u.rectangleCount = n;
     }
     memcpy(_uniforms.contents, &u, sizeof(u));
