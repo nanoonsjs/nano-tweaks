@@ -1,4 +1,5 @@
-// InstaGlass 0.3.1 - made by nano
+// InstaGlass 0.3.2 - made by nano
+// 0.3.2: with LiquidAss installed, the bar is the same liquid glass as MusicPill
 // 0.3.1: finds Instagram's tab bar (IGTabBar) again
 // 0.3.0: no more glass on the like / comment row of posts (the tab bar is never
 //        inside a list); the bubble follows the tab you're on, also when you swipe
@@ -12,6 +13,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#include "../shared/NanoGlass.h"
 
 #define GLASS_TAG 0x49474C41
 #define DEBUG_TAG 0x49474442
@@ -163,6 +165,7 @@ static void Glass(UIView *bar) {
     if (bar.clipsToBounds) bar.clipsToBounds = NO;
     if (!IsFullBar(bar) && bar.layer.cornerRadius != r) { bar.layer.cornerRadius = r; bar.layer.cornerCurve = kCACornerCurveContinuous; }
     bar.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:want cornerRadius:r].CGPath;
+    NGApply(g, 0.5);   // 0.3.2: with LiquidAss, the same liquid glass as MusicPill
 }
 
 // The selected-tab bubble: a filled capsule inside the bar, about one tab wide.
@@ -435,7 +438,7 @@ static void DebugBox(UIWindow *w) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" InstaGlass 0.3.1 debug\n %@", gDebug];
+    l.text = [NSString stringWithFormat:@" InstaGlass 0.3.2 debug\n %@", gDebug];
     CGSize s = [l sizeThatFits:CGSizeMake(w.bounds.size.width - 24, 600)];
     l.frame = CGRectMake(12, w.safeAreaInsets.top + 60, w.bounds.size.width - 24, s.height + 12);
     [w bringSubviewToFront:l];

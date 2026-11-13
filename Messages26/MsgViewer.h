@@ -201,6 +201,7 @@ static UIVisualEffectView *MVGlass(CGFloat radius) {
     g.layer.cornerRadius = radius; g.layer.cornerCurve = kCACornerCurveContinuous;
     g.layer.borderWidth = 0.8; g.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
     g.contentView.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.35];
+    NGApply(g, 0.5);
     return g;
 }
 

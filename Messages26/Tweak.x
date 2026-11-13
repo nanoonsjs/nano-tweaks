@@ -1,4 +1,5 @@
-// Messages26 1.3.9 - made by nano
+// Messages26 1.4 - made by nano
+// 1.4: with LiquidAss installed, all our glass is the same liquid glass as MusicPill (LiquidAss's tab bar glass)
 // 1.3.9: sharing a video no longer crashes; music and other files open in Apple's own viewer (only photos and videos get the iOS 26 one)
 // 1.3.8: contact page styling back (1.3.7 lost a line it needed)
 // 1.3.7: contact animation removed; contact page: black background, photo and Info tab not cut off, round press highlight on call / video / mail; viewer hides save once saved
@@ -116,6 +117,7 @@
 #import <objc/message.h>
 #import <substrate.h>
 #include "../shared/LGCompat.h"
+#include "../shared/NanoGlass.h"
 #import <PhotosUI/PhotosUI.h>
 #import <Photos/Photos.h>
 #import <LocalAuthentication/LocalAuthentication.h>
@@ -688,6 +690,7 @@ static void RimFit(UIView *v, BOOL dark) {
     rim.frame = v.bounds;
     ((CAShapeLayer *)rim.mask).path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(v.bounds, 0.6, 0.6) cornerRadius:MAX(0, r - 0.6)].CGPath;
     [CATransaction commit];
+    NGApply(v, 0.5);   // 1.4: with LiquidAss, the same liquid glass as MusicPill
 }
 static void StyleEntry(UIView *entry) {
     UIView *field = FieldOf(entry);
@@ -2911,7 +2914,7 @@ static NSArray *Presets(void) {
     CGFloat W = self.view.bounds.size.width;
     UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(20, 22, W - 40, 30)]; t.text = @"Bubble Colors"; t.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold]; t.textColor = UIColor.labelColor; t.autoresizingMask = UIViewAutoresizingFlexibleWidth; [self.view addSubview:t];
     // live preview
-    _preview = [[UIView alloc] initWithFrame:CGRectMake(16, 64, W - 32, 128)]; _preview.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    _preview = [[UIView alloc] initWithFrame:CGRectMake(16, 64, W - 32, 128)]; _preview.accessibilityIdentifier = @"ng.skip"; _preview.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     _preview.backgroundColor = dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.125 alpha:1] : UIColor.whiteColor; _preview.layer.cornerRadius = 26; _preview.layer.cornerCurve = kCACornerCurveContinuous;
     [self.view addSubview:_preview];
     _bTheirs = [self bubble:@"Hey, how do I look? 👀" right:NO]; _bTheirs.frame = CGRectOffset(_bTheirs.bounds, 12, 16); [_preview addSubview:_bTheirs];
@@ -5416,7 +5419,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.3.9 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.4 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

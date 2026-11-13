@@ -1,4 +1,5 @@
-// Photos26 3.3 - made by nano
+// Photos26 3.4 - made by nano
+// 3.4: with LiquidAss installed, the bar and buttons are the same liquid glass as MusicPill
 // 3.3: the info sheet from 3.2 is gone again (Apple's info panel as before)
 // 3.1: glass video player in Recently Deleted; Recover / Delete there use the iOS 26 card; only full-screen photos get framed
 // 3.0: Delete grows out of the trash button as an iOS 26 glass card
@@ -85,6 +86,7 @@
 //  - Frames are set only when they change, with a busy flag against re-entry.
 #import <UIKit/UIKit.h>
 #include "../shared/LGCompat.h"
+#include "../shared/NanoGlass.h"
 #import <QuartzCore/QuartzCore.h>
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
@@ -327,6 +329,8 @@ static void Forward(UIBarButtonItem *it) {
     _rimMask.path = p.CGPath;
     self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:r].CGPath;
     [CATransaction commit];
+    // 3.4: with LiquidAss, the same liquid glass as MusicPill
+    if (NGOn()) { NGApply(_blur, 0.5); _rim.opacity = 0; }
 }
 @end
 
