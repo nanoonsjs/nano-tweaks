@@ -1274,12 +1274,9 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     } else if (_broken && _d < 40) _broken = NO;
     _nk += ((_broken ? 0 : 1) - _nk) * MIN(1, dt * (_broken ? 16 : 10));
-    // 1.7.18: the pill bounces the moment the drop lands in it, not once the liquid has settled
-    if (_mode == 1 && !_bounced && _d < 6 && _vd < 0) {
-        _bounced = YES;
-        UIView *pl = _pill;
-        if (pl.window) { XLandBounce(pl.layer); [[[UIImpactFeedbackGenerator alloc] initWithStyle:_absorbing ? UIImpactFeedbackStyleSoft : UIImpactFeedbackStyleLight] impactOccurred]; }
-    }
+    // 1.8.1: the drop is gone the moment it sinks back into the pill: clear it and bounce the pill right then
+    // (1.8 bounced while the last bit of drop was still showing, so a short pull bounced before it went down)
+    if (_mode == 1 && _d < 1.2 && _vd <= 0) { [self cleanup]; return; }
     if (_mode != 0 && _d < 0.5 && fabs(_vd) < 8) { [self cleanup]; return; }
     [self draw];
 }
