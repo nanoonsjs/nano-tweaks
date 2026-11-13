@@ -1,4 +1,5 @@
-// MusicPill 1.7.14 - made by nano
+// MusicPill 1.7.15 - made by nano
+// 1.7.15: the liquid drop measures the real pill's glass when you start pulling (how tinted, how frosted) and copies it
 // 1.7.14: the liquid drop's glass matches the pill: edge bending and rainbow edge were 3x too strong, blur was half as strong
 // 1.7.13: the liquid drop is drawn with the same glass formula as the pill (edge bending, color split, tint, blur, from its settings), on the melted pill + neck + drop shape
 // 1.7.12: the liquid drop follows LiquidAss: tinted there = tinted drop, clear there = clear drop (its tint and blur)
@@ -1517,7 +1518,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.7.14 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.7.15 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];

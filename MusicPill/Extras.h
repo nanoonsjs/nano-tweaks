@@ -1231,6 +1231,21 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
             _mg.matchTint = NO;
             _mg.useLiquidAssGlass = YES;  // 1.7.13: LiquidAss's own glass formula on the melted pill, neck and drop         // 1.7.11: the pill's LiquidAss tint (light and dark), so it doesn't turn darker or milky     // 1.7.7: the drop is clear, sharp glass (LiquidAss's blur made it foggy); the pill keeps LiquidAss's
             _mg.alpha = 0;
+            // 1.7.15: measure the real pill glass (its middle, away from the bent edges) before it steps aside,
+            // so the drop gets exactly its tint and frost
+            UIView *pgv = [pill respondsToSelector:@selector(glass)] ? [pill valueForKey:@"glass"] : nil;
+            UIView *box = [pgv isKindOfClass:[UIVisualEffectView class]] ? ((UIVisualEffectView *)pgv).contentView : pgv;
+            UIView *lgv = nil; for (UIView *v in box.subviews) if (MPIsLGGlass(v)) lgv = v;
+            if (lgv) {
+                CGFloat Rr = lgv.bounds.size.height / 2;
+                CGRect cr = CGRectInset(lgv.bounds, Rr + 14, MIN(14, lgv.bounds.size.height * 0.28));
+                float m[3], var;
+                if (MPViewStats(lgv, cr, m, &var)) {
+                    CGRect inMg = [lgv convertRect:cr toView:_holder];
+                    inMg.origin.x -= _mg.frame.origin.x; inMg.origin.y -= _mg.frame.origin.y;
+                    [_mg calibrateMean:m var:var rect:inMg];
+                }
+            }
             [_holder insertSubview:_mg aboveSubview:_cDrop ?: _cPill ?: _cBase];
         }
     }
