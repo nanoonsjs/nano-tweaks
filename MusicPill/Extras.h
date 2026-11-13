@@ -1227,25 +1227,10 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
             _mg.layer.cornerRadius = 0;
             // close to the tab bar glass: a light veil, frosted a touch
             _mg.glassTint = _light ? [UIColor colorWithWhite:1 alpha:0.32] : [UIColor colorWithRed:0.165 green:0.165 blue:0.176 alpha:0.32];
-            _mg.matchLiquidAss = NO;
-            _mg.matchTint = NO;
-            _mg.useLiquidAssGlass = YES;  // 1.7.13: LiquidAss's own glass formula on the melted pill, neck and drop         // 1.7.11: the pill's LiquidAss tint (light and dark), so it doesn't turn darker or milky     // 1.7.7: the drop is clear, sharp glass (LiquidAss's blur made it foggy); the pill keeps LiquidAss's
+            _mg.matchLiquidAss = YES;
+            _mg.excludeFirst = YES;      // 1.7.6: the pill keeps its own LiquidAss glass; the shader only draws the neck and drop    // 1.7.4: the same blur and tint as the pill's LiquidAss glass
+            _mg.captureScale = 0.5;      // sharper refraction
             _mg.alpha = 0;
-            // 1.7.15: measure the real pill glass (its middle, away from the bent edges) before it steps aside,
-            // so the drop gets exactly its tint and frost
-            UIView *pgv = [pill respondsToSelector:@selector(glass)] ? [pill valueForKey:@"glass"] : nil;
-            UIView *box = [pgv isKindOfClass:[UIVisualEffectView class]] ? ((UIVisualEffectView *)pgv).contentView : pgv;
-            UIView *lgv = nil; for (UIView *v in box.subviews) if (MPIsLGGlass(v)) lgv = v;
-            if (lgv) {
-                CGFloat Rr = lgv.bounds.size.height / 2;
-                CGRect cr = CGRectInset(lgv.bounds, Rr + 14, MIN(14, lgv.bounds.size.height * 0.28));
-                float m[3], var;
-                if (MPViewStats(lgv, cr, m, &var)) {
-                    CGRect inMg = [lgv convertRect:cr toView:_holder];
-                    inMg.origin.x -= _mg.frame.origin.x; inMg.origin.y -= _mg.frame.origin.y;
-                    [_mg calibrateMean:m var:var rect:inMg];
-                }
-            }
             [_holder insertSubview:_mg aboveSubview:_cDrop ?: _cPill ?: _cBase];
         }
     }
@@ -1389,7 +1374,7 @@ static void GooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, CGFl
         MPLGFit(_cDrop, CGRectMake(cx - bw / 2, by - bh / 2, bw, bh), MIN(bw, bh) / 2);
         _cDrop.alpha = ballA;
         MPLGStyle(_cPill, gPillGlass, _light); MPLGStyle(_cDrop, gPillGlass, _light);
-        MPLGBare(_cPill); MPLGBare(_cDrop);   // with the shader the pill keeps LiquidAss's own rim and shine   // no seams: one rim (_hi) runs round the whole shape
+        if (!_mg) MPLGBare(_cPill); MPLGBare(_cDrop);   // with the shader the pill keeps LiquidAss's own rim and shine   // no seams: one rim (_hi) runs round the whole shape
         CGRect sb = p.bounds; CGFloat H = MAX(1, _holder.bounds.size.height);
         _hiMask.frame = _holder.bounds; _hiMask.path = p.CGPath;
         _hi.startPoint = CGPointMake(0.5, CGRectGetMinY(sb) / H); _hi.endPoint = CGPointMake(0.5, CGRectGetMaxY(sb) / H);
@@ -1419,18 +1404,10 @@ static void GooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, CGFl
                 [sh addObject:[NSValue valueWithCGRect:CGRectMake(fx - br - o.x, top + 4 - 7 * lb - br - o.y, br * 2, br * 2)]];
             }
             if (hasDrop && r0 > 0.5) [sh addObject:[NSValue valueWithCGRect:CGRectMake(cx - rx - o.x, by - ry - o.y, rx * 2, ry * 2)]];
-            _mg.shapes = sh; _mg.shapeRadius = R; _mg.mergePts = 9;
-            // 1.7.8: around the neck's foot the drop's glass flows into the pill (fading out), so they're joined
-            // like one liquid; the rest of the pill stays its LiquidAss glass
-            if (hasDrop && !apart) { _mg.foot = CGPointMake(fx - o.x, top - o.y); _mg.footRadius = MAX(R * 1.1, base * 1.35) * MIN(1, d / 14); }
-            else if (apart && lb > 0.05) { _mg.foot = CGPointMake(fx - o.x, top - o.y); _mg.footRadius = 26 * lb; }
-            else _mg.footRadius = 0;
+            _mg.shapes = sh; _mg.shapeRadius = R; _mg.mergePts = 12;
             // the Metal glass takes over from the pill's own glass over the first bit of the pull
-            // 1.7.10: as in 1.7.3: the shader glass takes over the whole pill over the first bit of the pull, so pill,
-            // neck and drop are one piece of liquid
-            CGFloat k = MAX(0, MIN(1, d / 18)); k = k * k * (3 - 2 * k);   // 1.7.11: a softer hand-over
-            _mg.alpha = k;
-            _cPill.alpha = 1 - k; _cDrop.alpha = 0;
+            _mg.alpha = 1;
+            _cPill.alpha = 1; _cDrop.alpha = 0;   // the pill stays LiquidAss's glass, exactly as set in its settings
             _cMask.path = nil; _cTint.path = nil;
             _hi.opacity = 0; _rim.opacity = 0;    // no white outline
         }

@@ -62,10 +62,6 @@ static NSString *const kMPLiquidGlassShader = @
     "    int rectangleCount;              // Number of active rectangles\n"
     "    float4 rectangles[maxRectangles]; // Array of rectangles (x, y, width, height) in points, upper-left origin\n"
     "    int excludeFirst;                // MusicPill: leave the first shape (the pill) empty, its own glass shows there\n"
-    "    float footX, footY, footRadius;  // ...except around this point (pixels), where the drop grows out of it\n"
-    "    float bezelPx, refrScale, lasDispersion; // MusicPill: LiquidAss's glass on our merged shape\n"
-    "    int useLAS;\n"
-    "    float4 lasTint;\n"
     "};\n"
     "\n"
     "// Constant linear sampler for texture lookups (bilinear filtering, no wrap)\n"
@@ -450,54 +446,10 @@ static NSString *const kMPLiquidGlassShader = @
     "// =============================================================================\n"
     "// Fragment Shader: Full Progressive Effect Pipeline\n"
     "// =============================================================================\n"
-    "// MusicPill 1.7.13: the glass of the Liquid (Gl)ass tweak (\"LiquidAss\" by dylv / winaviation-tweaks,\n"
-    "// CC BY-NC 4.0, github.com/winaviation-tweaks/liquidass, LiquidAssBackboardd liquidGlassPixel), adapted to\n"
-    "// our smooth-union shape: circular edge profile over the bezel, displacement inward along the edge normal,\n"
-    "// 7-tap color split, tint mix.\n"
-    "half4 lasPixel(float2 uv, constant ShaderUniforms& u, texture2d<half> bg) {\n"
-    "    constexpr sampler s(filter::linear, address::clamp_to_edge);\n"
-    "    float2 px = uv * u.resolution;\n"
-    "    float sd = primaryShapeSDF(px, u) * u.resolution.y;\n"
-    "    if (sd > 1.0f) return half4(0);\n"
-    "    float edgeOpacity = clamp(1.0f - max(0.0f, sd), 0.0f, 1.0f);\n"
-    "    float dist = max(0.0f, -sd);\n"
-    "    float2 g = float2(primaryShapeSDF(px + float2(1, 0), u) - primaryShapeSDF(px - float2(1, 0), u),\n"
-    "                      primaryShapeSDF(px + float2(0, 1), u) - primaryShapeSDF(px - float2(0, 1), u));\n"
-    "    float2 dir = length(g) > 1e-7f ? normalize(g) : float2(0, 1);\n"
-    "    float bezel = max(u.bezelPx, 1.0f);\n"
-    "    float4 tint = u.lasTint;\n"
-    "    half4 col;\n"
-    "    if (dist >= bezel) {\n"
-    "        col = bg.sample(s, uv);\n"
-    "    } else {\n"
-    "        float t = saturate(dist / bezel);\n"
-    "        float normDisp = 1.0f - sqrt(t * (2.0f - t));\n"
-    "        float2 dispPx = -dir * normDisp * bezel * u.refrScale * edgeOpacity;\n"
-    "        col = bg.sample(s, clamp(uv + dispPx / u.resolution, 0.0f, 1.0f));\n"
-    "        float disp = clamp(u.lasDispersion, 0.0f, 20.0f);\n"
-    "        if (disp > 0.001f) {\n"
-    "            float2 ab = -dir * normDisp * disp * 8.0f * edgeOpacity;\n"
-    "            float3 acc = float3(0);\n"
-    "            for (int i = 0; i < 3; i++) { float w = 1.0f - float(i) / 3.0f; half4 sm = bg.sample(s, clamp(uv + (dispPx + ab * w) / u.resolution, 0.0f, 1.0f)); acc.r += float(sm.r) * w; acc.g += float(sm.g) * (1.0f - w); }\n"
-    "            for (int i = 0; i < 4; i++) { float w = float(i) / 3.0f; half4 sm = bg.sample(s, clamp(uv + (dispPx - ab * w) / u.resolution, 0.0f, 1.0f)); acc.g += float(sm.g) * (1.0f - w); acc.b += float(sm.b) * w; }\n"
-    "            col.rgb = half3(acc * float3(0.5f, 1.0f / 3.0f, 0.5f));\n"
-    "        }\n"
-    "    }\n"
-    "    float3 outRGB = mix(float3(col.rgb), tint.rgb, tint.a);\n"
-    "    float k = edgeOpacity;\n"
-    "    if (u.excludeFirst != 0 && u.rectangleCount > 0) {\n"
-    "        float4 r0 = u.rectangles[0];\n"
-    "        float d0 = roundedRectangleSDF(px, r0, min(u.cornerRadius, 0.5f * min(r0.z, r0.w)), u.cornerRoundnessExponent, u);\n"
-    "        k *= smoothstep(-1.5f, 0.5f, d0);\n"
-    "    }\n"
-    "    return half4(half3(outRGB * k), half(k));\n"
-    "}\n"
-    "\n"
     "fragment half4 liquidGlassEffect(VertexOutput input [[stage_in]],\n"
     "                                 constant ShaderUniforms& uniforms [[buffer(0)]],\n"
     "                                 texture2d<half> background [[texture(0)]]) {\n"
     "\n"
-    "    if (uniforms.useLAS != 0) return lasPixel(float2(input.uv), uniforms, background);\n"
     "    // Logical resolution (scale-normalized)\n"
     "    float2 logicalResolution = uniforms.resolution / uniforms.contentsScale;\n"
     "\n"
@@ -600,9 +552,7 @@ static NSString *const kMPLiquidGlassShader = @
     "    if (uniforms.excludeFirst != 0 && uniforms.rectangleCount > 0) {\n"
     "        float4 r0 = uniforms.rectangles[0];\n"
     "        float d0 = roundedRectangleSDF(fragmentPixelCoord, r0, min(uniforms.cornerRadius, 0.5f * min(r0.z, r0.w)), uniforms.cornerRoundnessExponent, uniforms);\n"
-    "        float keep = smoothstep(-1.5f, 0.5f, d0);\n"
-    "        if (uniforms.footRadius > 0.5f) keep = max(keep, 1.0f - smoothstep(uniforms.footRadius * 0.45f, uniforms.footRadius, distance(fragmentPixelCoord, float2(uniforms.footX, uniforms.footY))));\n"
-    "        outputColor *= half(keep);\n"
+    "        outputColor *= half(smoothstep(-1.5f, 0.5f, d0));\n"
     "    }\n"
     "\n"
     "    return outputColor;\n"
@@ -657,10 +607,6 @@ typedef struct {
     int32_t rectangleCount;
     simd_float4 rectangles[16];
     int32_t excludeFirst;
-    float footX, footY, footRadius;
-    float bezelPx, refrScale, lasDispersion;
-    int32_t useLAS;
-    simd_float4 lasTint;
 } MPLGUniforms;
 
 // one Metal pipeline for every glass view
@@ -733,45 +679,6 @@ static simd_float4 MPLATint(NSString *k, NSString *def) {
     return simd_make_float4(((x >> 24) & 255) / 255.0f, ((x >> 16) & 255) / 255.0f, ((x >> 8) & 255) / 255.0f, (x & 255) / 255.0f);
 }
 
-// 1.7.15: what a glass actually looks like on screen: the average color and the contrast (luminance variance)
-// of a region of a view, rendered small (24 x 6)
-#define MP_CW 24
-#define MP_CH 6
-static void MPCellStats(const float *cells, float m[3], float *var) {
-    double r = 0, g = 0, b = 0; int n = MP_CW * MP_CH;
-    for (int i = 0; i < n; i++) { r += cells[i * 3]; g += cells[i * 3 + 1]; b += cells[i * 3 + 2]; }
-    m[0] = r / n; m[1] = g / n; m[2] = b / n;
-    double ml = 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2], v = 0;
-    for (int i = 0; i < n; i++) { double l = 0.2126 * cells[i * 3] + 0.7152 * cells[i * 3 + 1] + 0.0722 * cells[i * 3 + 2]; v += (l - ml) * (l - ml); }
-    *var = v / n;
-}
-static BOOL MPViewStats(UIView *v, CGRect r, float m[3], float *var) {
-    if (!v.window || r.size.width < 4 || r.size.height < 2) return NO;
-    uint8_t buf[MP_CW * MP_CH * 4]; memset(buf, 0, sizeof(buf));
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    CGContextRef ctx = CGBitmapContextCreate(buf, MP_CW, MP_CH, 8, MP_CW * 4, cs, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
-    CGColorSpaceRelease(cs);
-    if (!ctx) return NO;
-    CGContextTranslateCTM(ctx, 0, MP_CH);
-    CGContextScaleCTM(ctx, MP_CW / r.size.width, -MP_CH / r.size.height);
-    CGContextTranslateCTM(ctx, -r.origin.x, -r.origin.y);
-    UIGraphicsPushContext(ctx);
-    BOOL ok = NO;
-    @try { ok = [v drawViewHierarchyInRect:v.bounds afterScreenUpdates:NO]; } @catch (__unused id e) {}
-    UIGraphicsPopContext();
-    CGContextRelease(ctx);
-    if (!ok) return NO;
-    float cells[MP_CW * MP_CH * 3]; int opaque = 0;
-    for (int i = 0; i < MP_CW * MP_CH; i++) {
-        float a = buf[i * 4 + 3] / 255.0f; if (a > 0.5f) opaque++;
-        float k = a > 0.01f ? 1.0f / a : 0;
-        cells[i * 3] = buf[i * 4 + 2] / 255.0f * k; cells[i * 3 + 1] = buf[i * 4 + 1] / 255.0f * k; cells[i * 3 + 2] = buf[i * 4] / 255.0f * k;
-    }
-    if (opaque < MP_CW * MP_CH / 2) return NO;   // nothing drawn
-    MPCellStats(cells, m, var);
-    return YES;
-}
-
 @interface MPLiquidGlassView : MTKView
 @property (nonatomic, strong) UIColor *glassTint;   // the material tint (alpha = how tinted)
 // 1.7.2: several shapes (in our own coordinates) melted into one piece of glass (smooth union), each rounded
@@ -779,11 +686,7 @@ static BOOL MPViewStats(UIView *v, CGRect r, float m[3], float *var) {
 @property (nonatomic, copy) NSArray<NSValue *> *shapes;
 @property (nonatomic) CGFloat shapeRadius, mergePts;
 // 1.7.4: look exactly like LiquidAss's tab bar glass (its blur, tint, refraction ...); captureScale: sharper refraction
-@property (nonatomic) BOOL matchLiquidAss, excludeFirst;
-@property (nonatomic) BOOL matchTint;
-@property (nonatomic) BOOL useLiquidAssGlass;
-- (void)calibrateMean:(const float *)mean var:(float)var rect:(CGRect)rect;   // 1.7.15: the real pill's look in rect (our points)   // 1.7.13: LiquidAss's own glass formula (and its settings) on our shapes   // 1.7.11: only LiquidAss's tint colors (light / dark), not its blur   // excludeFirst: draw nothing inside the first shape
-@property (nonatomic) CGPoint foot; @property (nonatomic) CGFloat footRadius;   // ...except around foot (our points), fading out over footRadius
+@property (nonatomic) BOOL matchLiquidAss, excludeFirst;   // excludeFirst: draw nothing inside the first shape
 @property (nonatomic) CGFloat captureScale;
 @end
 @implementation MPLiquidGlassView {
@@ -797,7 +700,6 @@ static BOOL MPViewStats(UIView *v, CGRect r, float m[3], float *var) {
     CGFloat _scaleCo, _blur;
     MPSImageGaussianBlur *_blurK;
     CGFloat _laBlur;
-    BOOL _calPending, _calDone; float _calMean[3], _calVar; CGRect _calRect; simd_float4 _calTint;
 }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!MPLGReady()) return nil;
@@ -839,41 +741,6 @@ static BOOL MPViewStats(UIView *v, CGRect r, float m[3], float *var) {
     [self setupBuffer];
 }
 // the backdrop sits right under us, same frame, and is drawn into our small buffer
-- (void)calibrateMean:(const float *)mean var:(float)var rect:(CGRect)rect {
-    _calMean[0] = mean[0]; _calMean[1] = mean[1]; _calMean[2] = mean[2]; _calVar = var; _calRect = rect;
-    _calPending = YES; _calDone = NO;
-}
-// the background under the pill (from our own capture) against the real pill: how tinted and how blurred it is
-- (void)calibrateFrom:(const uint8_t *)data w:(size_t)w h:(size_t)h bpr:(size_t)bpr {
-    _calPending = NO;
-    CGFloat s = self.contentScaleFactor * _scaleCo;
-    int x0 = (int)(_calRect.origin.x * s), y0 = (int)(_calRect.origin.y * s), cw = (int)(_calRect.size.width * s), ch = (int)(_calRect.size.height * s);
-    if (cw < MP_CW || ch < MP_CH || x0 < 0 || y0 < 0 || x0 + cw > (int)w || y0 + ch > (int)h) return;
-    float cells[MP_CW * MP_CH * 3]; memset(cells, 0, sizeof(cells));
-    for (int cy = 0; cy < MP_CH; cy++) for (int cx = 0; cx < MP_CW; cx++) {
-        double r = 0, g = 0, b = 0; int n = 0;
-        for (int yy = y0 + cy * ch / MP_CH; yy < y0 + (cy + 1) * ch / MP_CH; yy++) {
-            int row = (int)h - 1 - yy;   // the capture is drawn upside down in memory
-            if (row < 0 || row >= (int)h) continue;
-            const uint8_t *p = data + row * bpr;
-            for (int xx = x0 + cx * cw / MP_CW; xx < x0 + (cx + 1) * cw / MP_CW; xx++) { float a = p[xx * 4 + 3] / 255.0f; float k = a > 0.01f ? 1.0f / a : 0; b += p[xx * 4] * k; g += p[xx * 4 + 1] * k; r += p[xx * 4 + 2] * k; n++; }
-        }
-        if (n) { int i = (cy * MP_CW + cx) * 3; cells[i] = r / n / 255.0; cells[i + 1] = g / n / 255.0; cells[i + 2] = b / n / 255.0; }
-    }
-    float bm[3], bv; MPCellStats(cells, bm, &bv);
-    BOOL light = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
-    simd_float4 T = light ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
-    float d0 = T.x - bm[0], d1 = T.y - bm[1], d2 = T.z - bm[2];
-    float o0 = _calMean[0] - bm[0], o1 = _calMean[1] - bm[1], o2 = _calMean[2] - bm[2];
-    float dd = d0 * d0 + d1 * d1 + d2 * d2;
-    float a = dd > 0.004f ? (o0 * d0 + o1 * d1 + o2 * d2) / dd : T.w * 0.3f;
-    a = MAX(0, MIN(1, a));
-    _calTint = simd_make_float4(T.x, T.y, T.z, a);
-    float rr = _calVar / MAX(1e-6f, bv * (1 - a) * (1 - a));
-    CGFloat sigmaPt = bv < 0.0004f ? 0 : (rr >= 0.85f ? 0 : MIN(18.0, 3.0 + 14.0 * (0.85 - rr) / 0.85));
-    _blur = MAX(0.05, sigmaPt * _scaleCo); _blurK = nil;
-    _calDone = YES;
-}
 - (void)capture {
     UIView *sv = self.superview;
     if (!sv || !_buffer || !_cvTex) return;
@@ -895,7 +762,6 @@ static BOOL MPViewStats(UIView *v, CGRect r, float m[3], float *var) {
         [_backdrop drawViewHierarchyInRect:_backdrop.bounds afterScreenUpdates:NO];
         UIGraphicsPopContext();
         CGContextRelease(ctx);
-        if (_calPending) @try { [self calibrateFrom:(const uint8_t *)data w:w h:h bpr:bpr]; } @catch (__unused id e) { _calPending = NO; }
     }
     CVPixelBufferUnlockBaseAddress(_buffer, 0);
     CVMetalTextureCacheFlush(_cache, 0);
@@ -930,32 +796,6 @@ static BOOL MPViewStats(UIView *v, CGRect r, float m[3], float *var) {
     [self.glassTint getRed:&r green:&g blue:&b alpha:&a];
     u.materialTint = simd_make_float4(r, g, b, a);
     u.excludeFirst = self.excludeFirst ? 1 : 0;
-    if (self.useLiquidAssGlass) {
-        BOOL lightL = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
-        CGFloat half = self.shapes.count ? self.shapeRadius : MIN(self.bounds.size.width, self.bounds.size.height) / 2;
-        u.useLAS = 1;
-        // 1.7.14: LiquidAss works in screen pixels (2 px per bezel point), not points: 1.7.13 bent 3x too much
-        u.bezelPx = MIN(MPLANum(@"TabBar.BezelWidth", 20.0) * 2, MAX(1, half) * sc);
-        u.refrScale = MPLANum(@"TabBar.RefractionScale", 2.2);
-        u.lasDispersion = MPLABool(@"TabBar.DispersionEnabled", YES) ? MPLANum(@"TabBar.DispersionStrength", 2.0) : 0;
-        u.lasTint = lightL ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
-        if (_calDone) u.lasTint = _calTint;   // 1.7.15: measured from the real pill
-        else {
-            CGFloat want = MAX(0.05, MPLANum(@"TabBar.Blur", 3.0) * _scaleCo);
-            if (fabs(want - _blur) > 0.01) { _blur = want; _blurK = nil; }
-        }
-    }
-    if (self.matchTint && !self.matchLiquidAss && NSClassFromString(@"LGLiveBackdropView")) {
-        BOOL lightT = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
-        u.materialTint = lightT ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
-        u.materialTint.w *= 0.55;   // 1.7.12: tinted LiquidAss = tinted drop, clear = clear (this shader tints heavier than LiquidAss)
-        // and as frosted as LiquidAss's blur setting (lighter than LiquidAss's own, which made it foggy)
-        CGFloat b = MPLANum(@"TabBar.Blur", 3.0);
-        CGFloat want = MAX(0.3, b * _scaleCo * 0.4);
-        if (fabs(want - _blur) > 0.01) { _blur = want; _blurK = nil; }
-    }
-    u.footX = self.foot.x * sc; u.footY = (self.bounds.size.height - self.foot.y) * sc;   // flipped, like the shapes
-    u.footRadius = self.footRadius * sc;
     if (self.matchLiquidAss) {
         BOOL light = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
         u.refractiveIndex = MPLANum(@"TabBar.RefractiveIndex", 1.8);

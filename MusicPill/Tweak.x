@@ -1,12 +1,5 @@
-// MusicPill 1.7.15 - made by nano
-// 1.7.15: the liquid drop measures the real pill's glass when you start pulling (how tinted, how frosted) and copies it
-// 1.7.14: the liquid drop's glass matches the pill: edge bending and rainbow edge were 3x too strong, blur was half as strong
-// 1.7.13: the liquid drop is drawn with the same glass formula as the pill (edge bending, color split, tint, blur, from its settings), on the melted pill + neck + drop shape
-// 1.7.12: the liquid drop follows LiquidAss: tinted there = tinted drop, clear there = clear drop (its tint and blur)
-// 1.7.11: while you pull, the pill and drop keep the pill's glass color (no more turning darker, or milky in light mode); softer hand-over
-// 1.7.10: the liquid drop is back to the 1.7.3 pull (pill, neck and drop as one piece of liquid glass), without the white border
-// 1.7.8: the liquid drop is joined to the pill again (its glass flows into the pill around the neck), so it grows out of it like real liquid
-// 1.7.7: the liquid drop is clear, sharp glass again (it had gone foggy); the pill keeps its LiquidAss glass
+// MusicPill 1.7.16 - made by nano
+// 1.7.16: back to the 1.7.6 liquid drop (the pill keeps its own glass while you pull, no white border)
 // 1.7.6: while you pull, the pill keeps its own LiquidAss glass (clear or tinted, as set there); only the neck and drop are drawn by the shader; no white outline
 // 1.7.5: the liquid drop's glass was much darker than the pill's; now it's as light
 // 1.7.4: the liquid drop uses the same glass settings as the pill (blur, tint, refraction, color split, shine), so it doesn't go clear while you pull; sharper refraction and a juicier neck
@@ -1518,7 +1511,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.7.15 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.7.16 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
