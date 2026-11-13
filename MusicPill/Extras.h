@@ -908,11 +908,13 @@ static CGFloat XLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; 
     CFTimeInterval now = l.targetTimestamp > 0 ? l.targetTimestamp : CACurrentMediaTime();
     double dt = _lastT > 0 ? MIN(1.0 / 30, now - _lastT) : 1.0 / 60; _lastT = now;
     // a real spring (like iOS's own): response 0.42s, then integrate in small steps so it's the same at 60 or 120Hz
-    double w = 2 * M_PI / 0.32, k = w * w, c = 2 * _zeta * w;
+    double w = 2 * M_PI / (_goal >= 1 ? 0.5 : 0.32), k = w * w, c = 2 * _zeta * w;   // 1.7.18: closing is slower
     int n = MAX(1, (int)ceil(dt / (1.0 / 240)));
     double h = dt / n;
     for (int i = 0; i < n; i++) { double a = -k * (_prog - _goal) - c * _vel; _vel += a * h; _prog += _vel * h; }
     [self show:_prog];
+    // 1.7.18: it's a drop the moment it gets there: hand over at once, no waiting for the spring to settle
+    if (_goal >= 1 && self.tag == 0x4D50 && _prog >= 0.985) { [self landed]; return; }
     if (fabs(_prog - _goal) < 0.0015 && fabs(_vel) < 0.02) {
         [_link invalidate]; _link = nil;
         _prog = _goal; [self show:_goal];
@@ -1127,6 +1129,7 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     CGFloat _rScale;               // 1 normally; shrinks to 0 when the drop leaves
     int _mode;                     // 0 follow, 1 retract, 2 detached
     BOOL _light, _absorbing;
+    BOOL _bounced;   // 1.7.18: the pill already bounced for this drop
     BOOL _clear;                   // 1.6.6: Pill Glass set toward clear: the drop is clear glass too
     UIView *_cBase, *_cPill, *_cDrop; CAShapeLayer *_cMask, *_cTint;
     CAGradientLayer *_hi, *_caustic; CAShapeLayer *_hiMask;
@@ -1137,7 +1140,7 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
     UIView *host = pill.superview;
     if (!host) return;
     [self cleanup];
-    _pill = pill; _mode = 0; _rScale = 1; _absorbing = NO; _broken = NO; _nk = 1; _popT = 0;
+    _pill = pill; _mode = 0; _rScale = 1; _absorbing = NO; _bounced = NO; _broken = NO; _nk = 1; _popT = 0;
     CGRect P = pill.frame;
     _tx = _x = _bx = MAX(CGRectGetMinX(P), MIN(CGRectGetMaxX(P), x)); _td = _d = 0; _vx = _vd = _vbx = 0;
     _light = pill.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
@@ -1256,7 +1259,7 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
 - (void)step:(CADisplayLink *)l {
     CFTimeInterval now = CACurrentMediaTime(); double dt = _last > 0 ? MIN(1.0 / 30, now - _last) : 1.0 / 60; _last = now;
     // the drop chases the finger on a bouncy spring; the neck's foot on a lazier one
-    double wD = 2 * M_PI / (_mode == 1 ? (_absorbing ? 0.22 : 0.26) : 0.16), zD = _mode == 1 ? 0.66 : 0.58;
+    double wD = 2 * M_PI / (_mode == 1 ? (_absorbing ? 0.3 : 0.26) : 0.16), zD = _mode == 1 ? 0.66 : 0.58;
     double wB = 2 * M_PI / 0.32, zB = 0.72;
     int n = 6; double h = dt / n;
     for (int i = 0; i < n; i++) {
@@ -1271,6 +1274,12 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
     } else if (_broken && _d < 40) _broken = NO;
     _nk += ((_broken ? 0 : 1) - _nk) * MIN(1, dt * (_broken ? 16 : 10));
+    // 1.7.18: the pill bounces the moment the drop lands in it, not once the liquid has settled
+    if (_mode == 1 && !_bounced && _d < 6 && _vd < 0) {
+        _bounced = YES;
+        UIView *pl = _pill;
+        if (pl.window) { XLandBounce(pl.layer); [[[UIImpactFeedbackGenerator alloc] initWithStyle:_absorbing ? UIImpactFeedbackStyleSoft : UIImpactFeedbackStyleLight] impactOccurred]; }
+    }
     if (_mode != 0 && _d < 0.5 && fabs(_vd) < 8) { [self cleanup]; return; }
     [self draw];
 }
@@ -1435,7 +1444,7 @@ static void GooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, CGFl
 - (void)cleanup {
     [_link invalidate]; _link = nil;
     UIView *pill = _pill;
-    if (_holder && _mode == 1 && pill.window) {
+    if (_holder && _mode == 1 && pill.window && !_bounced) {
         // swallowed: the pill gives a squishy bounce
         XLandBounce(pill.layer);
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:_absorbing ? UIImpactFeedbackStyleSoft : UIImpactFeedbackStyleLight] impactOccurred];
