@@ -1,4 +1,5 @@
-// Control26 1.2.4 - made by nano
+// Control26 1.2.5 - made by nano
+// 1.2.5: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.2.4: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
 // 1.2.3: glass follows the NanoGlass slider (clear to frosted)
 // 1.2.2: with LiquidAss installed, our glass buttons are the same liquid glass as MusicPill

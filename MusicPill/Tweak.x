@@ -1,4 +1,5 @@
-// MusicPill 1.7 - made by nano
+// MusicPill 1.7.1 - made by nano
+// 1.7.1: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.7: Pill Glass slider removed: the pill, drop and buttons use LiquidAss's own glass (its blur setting applies); follows NanoGlass's Liquid Glass switch
 // 1.6.9: bug fixes
 // 1.6.5: Pill Glass uses real liquid glass (Metal, ported from LiquidGlassKit); the real pill no longer hands its glass to LiquidAss
@@ -675,10 +676,6 @@ static void ReloadAndApply(void) {
     MPGlassRefreshAll();
 }
 
-// 1.7: NanoGlass's Liquid Glass switch changed
-static void NanoGlassChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
-    dispatch_async(dispatch_get_main_queue(), ^{ CFPreferencesAppSynchronize(CFSTR("com.nano.glass")); NGLoad(); ReloadAndApply(); });
-}
 static void PrefsChanged(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) {
     // Settings may finish writing the file a moment after the notification.
     dispatch_async(dispatch_get_main_queue(), ^{ ReloadAndApply(); });
@@ -1508,7 +1505,7 @@ static void UpdateDebug(UITabBar *tb, UIView *root, CGRect tabRect, UIView *mini
         if (n.length > 40) n = [@"…" stringByAppendingString:[n substringFromIndex:n.length - 39]];
         found = [NSString stringWithFormat:@"%@ h=%.0f", n, mini.bounds.size.height];
     }
-    NSString *text = [NSString stringWithFormat:@" MusicPill 1.7 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
+    NSString *text = [NSString stringWithFormat:@" MusicPill 1.7.1 debug\n prefs: %@\n rename=%d round=%d size=%d swipe=%d\n tab y=%.0f h=%.0f\n PICKED: %@\n title: %@\n album: %@\n nav: %@\n float: %@\n collapse: %@\n %@",
                       gPrefsSource, gRename, gRound, gSize, gSwipe,
                       CGRectGetMinY(tabRect), tabRect.size.height, found, gMarqueeDebug, gAlbumDebug, gNavDebug, gFloatDebug, gCollapseDebug,
                       [c componentsJoinedByString:@"\n "]];
@@ -8497,7 +8494,6 @@ static void ShareNowPlayingFwd(UIView *from) { ShareNowPlaying(from); }
     if (![bid isEqualToString:@"com.apple.Music"]) return;
     LoadPrefs();
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PrefsChanged, NOTIFY, NULL, CFNotificationSuspensionBehaviorCoalesce);
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, NanoGlassChanged, CFSTR("com.nano.glass/changed"), NULL, CFNotificationSuspensionBehaviorCoalesce);
     %init;
     HookMenuClasses();
     HookResponses();

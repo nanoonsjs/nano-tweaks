@@ -5,8 +5,7 @@
 // shines, and stays smooth while scrolling. t (0..1) frosts it: 0 = clear like the tab bar, 1 = blurred and a
 // little tinted. Without LiquidAss nothing changes: each tweak keeps its own glass.
 //
-// How clear or frosted it is comes from the NanoGlass settings tweak (com.nano.glass: "frost" 0..1, "enabled"),
-// shared by every tweak; changes apply live (Darwin notification com.nano.glass/changed).
+// The glass looks exactly like LiquidAss's: change its blur in LiquidAss's settings and every tweak follows.
 //
 // Use: NGApply(glassView) wherever the glass gets its frame / corner radius (it's cheap to call often).
 // glassView can be a UIVisualEffectView (its effect and fill step aside) or a plain view / button (its fill steps
@@ -25,34 +24,11 @@ static Class NGClass(void) {
     }
     return c;
 }
-static CGFloat gNGFrost = 0;
-static BOOL gNGOff, gNGLoaded;
-static NSHashTable *gNGViews;   // every glass of ours (weak), refreshed when the setting changes
-static void NGLoad(void) {
-    NSDictionary *f = nil;
-    for (NSString *dir in @[@"/var/jb/var/mobile/Library/Preferences/", @"/var/mobile/Library/Preferences/"]) {
-        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:[dir stringByAppendingString:@"com.nano.glass.plist"]];
-        if ([d isKindOfClass:[NSDictionary class]]) { f = d; break; }
-    }
-    id fr = f[@"frost"], en = f[@"enabled"];
-    if (!fr) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("frost"), CFSTR("com.nano.glass")); if (cf) fr = (__bridge_transfer id)cf; }
-    if (!en) { CFPropertyListRef cf = CFPreferencesCopyAppValue(CFSTR("enabled"), CFSTR("com.nano.glass")); if (cf) en = (__bridge_transfer id)cf; }
-    (void)fr;
-    gNGFrost = 0;   // NanoGlass 1.1: no slider; the blur is LiquidAss's own (its settings apply everywhere)
-    gNGOff = en ? ![en boolValue] : NO;
-    gNGLoaded = YES;
-}
-static void NGRefreshAll(void);
-static void NGChanged(CFNotificationCenterRef c, void *o, CFStringRef n, const void *obj, CFDictionaryRef u) {
-    dispatch_async(dispatch_get_main_queue(), ^{ CFPreferencesAppSynchronize(CFSTR("com.nano.glass")); NGLoad(); NGRefreshAll(); });
-}
-static void NGEnsure(void) {
-    if (gNGLoaded) return;
-    NGLoad();
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, NGChanged, CFSTR("com.nano.glass/changed"), NULL, CFNotificationSuspensionBehaviorCoalesce);
-}
-static CGFloat NGFrost(void) { NGEnsure(); return gNGFrost; }
-static BOOL NGOn(void) { NGEnsure(); return NGClass() != nil && !gNGOff; }
+static CGFloat gNGFrost = 0;   // no extra frost: the blur is LiquidAss's own (its settings apply everywhere)
+static BOOL gNGOff, gNGLoaded;   // (gNGOff stays NO; the pair are also used as keys below)
+static NSHashTable *gNGViews;    // every glass of ours (weak)
+static CGFloat NGFrost(void) { return gNGFrost; }
+static BOOL NGOn(void) { return NGClass() != nil; }
 static BOOL NGIsGlass(UIView *v) { return [v.accessibilityIdentifier isEqualToString:@"nano.glass"]; }
 
 static UIView *NGMake(CGRect f) {

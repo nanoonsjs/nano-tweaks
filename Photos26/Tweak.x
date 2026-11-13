@@ -1,4 +1,5 @@
-// Photos26 3.4.2 - made by nano
+// Photos26 3.4.3 - made by nano
+// 3.4.3: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 3.4.2: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
 // 3.4.1: glass follows the NanoGlass slider (clear to frosted)
 // 3.4: with LiquidAss installed, the bar and buttons are the same liquid glass as MusicPill

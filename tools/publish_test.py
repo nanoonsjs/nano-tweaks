@@ -5,7 +5,7 @@ usage: publish_test.py REPO_DIR DEB..."""
 import sys, os, subprocess, gzip, bz2, lzma, hashlib, shutil, json, re
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.dirname(HERE)
-DIRS = {'com.nano.musicpill': 'MusicPill', 'com.nano.photos26': 'Photos26', 'com.nano.control26': 'Control26', 'com.nano.lockstar': 'LockStar', 'com.nano.glass': 'NanoGlass', 'com.nano.liquidlock': 'LiquidLock', 'com.nano.messages26': 'Messages26', 'com.nano.instaglass': 'InstaGlass'}
+DIRS = {'com.nano.musicpill': 'MusicPill', 'com.nano.photos26': 'Photos26', 'com.nano.control26': 'Control26', 'com.nano.lockstar': 'LockStar', 'com.nano.liquidlock': 'LiquidLock', 'com.nano.messages26': 'Messages26', 'com.nano.instaglass': 'InstaGlass'}
 BASE = 'https://nanoonsjs.github.io/nano-repo/test/'
 
 def changelog(d):
