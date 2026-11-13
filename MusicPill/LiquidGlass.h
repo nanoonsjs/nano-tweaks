@@ -640,12 +640,47 @@ static BOOL MPLGReady(void) {
 }
 @end
 
+// 1.7.4: LiquidAss's own tab bar glass settings (blur, tint, refraction, color split, shine), read through
+// LiquidAss itself when it's loaded (always current), else from its prefs file
+#import <dlfcn.h>
+static id MPLAPref(NSString *k) {
+    static id (*fn)(NSString *); static BOOL looked;
+    if (!looked) { looked = YES; fn = (id (*)(NSString *))dlsym(RTLD_DEFAULT, "LGGlassPreferenceValue"); }
+    id v = nil;
+    @try { if (fn) v = fn(k); } @catch (__unused id e) {}
+    if (v) return v;
+    static NSDictionary *file; static CFTimeInterval at;
+    if (!file || CACurrentMediaTime() - at > 2) {
+        at = CACurrentMediaTime();
+        for (NSString *dir in @[@"/var/jb/var/mobile/Library/Preferences/", @"/var/mobile/Library/Preferences/"]) {
+            NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:[dir stringByAppendingString:@"dylv.liquidassprefs.plist"]];
+            if ([d isKindOfClass:[NSDictionary class]]) { file = d; break; }
+        }
+        if (!file) file = @{};
+    }
+    return file[k];
+}
+static CGFloat MPLANum(NSString *k, CGFloat def) { id v = MPLAPref(k); return [v respondsToSelector:@selector(doubleValue)] ? [v doubleValue] : def; }
+static BOOL MPLABool(NSString *k, BOOL def) { id v = MPLAPref(k); return [v respondsToSelector:@selector(boolValue)] ? [v boolValue] : def; }
+static simd_float4 MPLATint(NSString *k, NSString *def) {
+    id v = MPLAPref(k);
+    NSString *h = [v isKindOfClass:[NSString class]] ? v : def;
+    h = [[h stringByReplacingOccurrencesOfString:@"#" withString:@""] uppercaseString];
+    if (h.length == 6) h = [h stringByAppendingString:@"FF"];
+    if (h.length != 8) h = [[def stringByReplacingOccurrencesOfString:@"#" withString:@""] uppercaseString];
+    unsigned int x = 0; [[NSScanner scannerWithString:h] scanHexInt:&x];
+    return simd_make_float4(((x >> 24) & 255) / 255.0f, ((x >> 16) & 255) / 255.0f, ((x >> 8) & 255) / 255.0f, (x & 255) / 255.0f);
+}
+
 @interface MPLiquidGlassView : MTKView
 @property (nonatomic, strong) UIColor *glassTint;   // the material tint (alpha = how tinted)
 // 1.7.2: several shapes (in our own coordinates) melted into one piece of glass (smooth union), each rounded
 // up to shapeRadius; mergePts = how far apart they still blend. No shapes = our bounds with our corner radius.
 @property (nonatomic, copy) NSArray<NSValue *> *shapes;
 @property (nonatomic) CGFloat shapeRadius, mergePts;
+// 1.7.4: look exactly like LiquidAss's tab bar glass (its blur, tint, refraction ...); captureScale: sharper refraction
+@property (nonatomic) BOOL matchLiquidAss;
+@property (nonatomic) CGFloat captureScale;
 @end
 @implementation MPLiquidGlassView {
     id<MTLCommandQueue> _queue;
@@ -657,6 +692,7 @@ static BOOL MPLGReady(void) {
     MPLGBackdrop *_backdrop;
     CGFloat _scaleCo, _blur;
     MPSImageGaussianBlur *_blurK;
+    CGFloat _laBlur;
 }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!MPLGReady()) return nil;
@@ -683,6 +719,7 @@ static BOOL MPLGReady(void) {
 }
 - (void)removeFromSuperview { [_backdrop removeFromSuperview]; [super removeFromSuperview]; }
 - (void)setupBuffer {
+    if (self.captureScale > 0) _scaleCo = self.captureScale;
     CGFloat s = self.contentScaleFactor * _scaleCo;
     size_t w = MAX(4, (size_t)(self.bounds.size.width * s)), h = MAX(4, (size_t)(self.bounds.size.height * s));
     if (_buffer && CVPixelBufferGetWidth(_buffer) == w && CVPixelBufferGetHeight(_buffer) == h) return;
@@ -751,6 +788,16 @@ static BOOL MPLGReady(void) {
     CGFloat r = 0, g = 0, b = 0, a = 0;
     [self.glassTint getRed:&r green:&g blue:&b alpha:&a];
     u.materialTint = simd_make_float4(r, g, b, a);
+    if (self.matchLiquidAss) {
+        BOOL light = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleDark;
+        u.refractiveIndex = MPLANum(@"TabBar.RefractiveIndex", 1.8);
+        u.dispersionStrength = MPLABool(@"TabBar.DispersionEnabled", YES) ? 2.5 * MPLANum(@"TabBar.DispersionStrength", 2.0) : 0;
+        u.glareIntensity = 0.12 * MPLANum(@"TabBar.SpecularOpacity", 1.0);
+        u.glassThickness = 10 * MAX(0.3, MPLANum(@"TabBar.RefractionScale", 2.2) / 2.2);
+        u.materialTint = light ? MPLATint(@"TabBar.LightTintColor", @"#FFFFFF80") : MPLATint(@"TabBar.DarkTintColor", @"#2A2A2D80");
+        CGFloat b = MPLANum(@"TabBar.Blur", 3.0);
+        if (fabs(b - _laBlur) > 0.01) { _laBlur = b; _blur = b * _scaleCo * 0.9; _blurK = nil; }
+    }
     u.rectangleCount = 1;
     u.rectangles[0] = simd_make_float4(0, 0, self.bounds.size.width, self.bounds.size.height);
     if (self.shapes.count) {

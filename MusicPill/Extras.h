@@ -1227,6 +1227,8 @@ static void XBounce(UIView *v, CGFloat dx, CGFloat dy, BOOL go) {
             _mg.layer.cornerRadius = 0;
             // close to the tab bar glass: a light veil, frosted a touch
             _mg.glassTint = _light ? [UIColor colorWithWhite:1 alpha:0.32] : [UIColor colorWithRed:0.165 green:0.165 blue:0.176 alpha:0.32];
+            _mg.matchLiquidAss = YES;    // 1.7.4: the same blur and tint as the pill's LiquidAss glass
+            _mg.captureScale = 0.5;      // sharper refraction
             _mg.alpha = 0;
             [_holder insertSubview:_mg aboveSubview:_cDrop ?: _cPill ?: _cBase];
         }
@@ -1401,7 +1403,7 @@ static void GooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, CGFl
                 [sh addObject:[NSValue valueWithCGRect:CGRectMake(fx - br - o.x, top + 4 - 7 * lb - br - o.y, br * 2, br * 2)]];
             }
             if (hasDrop && r0 > 0.5) [sh addObject:[NSValue valueWithCGRect:CGRectMake(cx - rx - o.x, by - ry - o.y, rx * 2, ry * 2)]];
-            _mg.shapes = sh; _mg.shapeRadius = R; _mg.mergePts = 9;
+            _mg.shapes = sh; _mg.shapeRadius = R; _mg.mergePts = 12;
             // the Metal glass takes over from the pill's own glass over the first bit of the pull
             CGFloat k = MAX(0, MIN(1, d / 10));
             _mg.alpha = k;
