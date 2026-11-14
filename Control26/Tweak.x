@@ -1,4 +1,5 @@
-// Control26 1.2.6 - made by nano
+// Control26 1.2.10 - made by nano
+// 1.2.10: fixed SpringBoard freezing on an incoming call with some other Control Center tweaks installed: sliders can't get stuck re-laying themselves out anymore
 // 1.2.6: fixed SpringBoard freezing (then respringing) on an incoming call: Apple's views we replace are hidden with a mask instead of fighting every setAlpha in SpringBoard
 // 1.2.5: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.2.4: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
@@ -4659,6 +4660,59 @@ static void PlacePresetButton(UIView *e) {
 
 #pragma mark - tick
 
+// 1.2.10: a Control Center slider laid out over and over in the same moment (another tweak's glass re-laying it out
+// each time, e.g. when a call comes in) froze SpringBoard. Past a dozen layouts within 50 ms the slider waits for
+// the next moment instead, so a layout loop can never lock up the screen.
+static const void *kLayT = &kLayT, *kLayN = &kLayN;
+static NSMutableDictionary<NSString *, NSValue *> *gLayOrig;
+static void C26SliderLayout(UIView *self, SEL _cmd);
+static Class gLayIn; static __unsafe_unretained id gLaySelf;   // re-entered through a superclass's hook
+static IMP C26LayOrigFor(UIView *v, Class *found) {
+    Class c = (gLaySelf == v && gLayIn) ? class_getSuperclass(gLayIn) : object_getClass(v);
+    for (; c; c = class_getSuperclass(c)) {
+        NSValue *o = gLayOrig[NSStringFromClass(c)];
+        if (o) { *found = c; return (IMP)o.pointerValue; }
+    }
+    return NULL;
+}
+static void C26SliderLayout(UIView *self, SEL _cmd) {
+    BOOL inner = (gLaySelf == self && gLayIn);   // same layout, just passing through a superclass's hook
+    if (!inner) {
+    CFTimeInterval now = CACurrentMediaTime();
+    NSNumber *t = objc_getAssociatedObject(self, kLayT);
+    int n = [objc_getAssociatedObject(self, kLayN) intValue];
+    if (t && now - t.doubleValue < 0.05) n++;
+    else { n = 0; objc_setAssociatedObject(self, kLayT, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    objc_setAssociatedObject(self, kLayN, @(n), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (n > 12) {
+        if (n == 13) {
+            __weak UIView *w = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [w setNeedsLayout]; });
+        }
+        return;
+    }
+    }
+    Class fc = Nil; IMP o = C26LayOrigFor(self, &fc);
+    if (!o) return;
+    Class pc = gLayIn; id ps = gLaySelf;
+    gLayIn = fc; gLaySelf = self;
+    ((void (*)(id, SEL))o)(self, _cmd);
+    gLayIn = pc; gLaySelf = ps;
+}
+// hooked once Control Center is up, so it wraps every other tweak's slider layout
+static void C26GuardSliderLayout(UIView *s) {
+    if (!gLayOrig) gLayOrig = [NSMutableDictionary dictionary];
+    for (NSString *cn in @[@"CCUIContinuousSliderView", @"MRUContinuousSliderView"]) {
+        Class c = NSClassFromString(cn);
+        if (!c || gLayOrig[cn] || ![s isKindOfClass:c]) continue;
+        Method m = class_getInstanceMethod(c, @selector(layoutSubviews));
+        if (!m || method_getImplementation(m) == (IMP)C26SliderLayout) continue;
+        IMP orig = NULL;
+        MSHookMessageEx(c, @selector(layoutSubviews), (IMP)C26SliderLayout, &orig);
+        if (orig) gLayOrig[cn] = [NSValue valueWithPointer:(const void *)orig];
+    }
+}
+
 static void Tick(void) {
     BOOL anyVisible = NO;
     UIWindow *win = nil;
@@ -4676,6 +4730,7 @@ static void Tick(void) {
     for (UIView *s in [gSliders allObjects]) {
         if (!s.window || !InControlCenter(s)) continue;
         anyVisible = YES; win = s.window;
+        @try { C26GuardSliderLayout(s); } @catch (__unused id e) {}
         @try { StyleSlider(s); AddBounce(s); } @catch (__unused id e) {}
         if (gDebug) [dbg addObject:[NSString stringWithFormat:@"%@ kind=%d v=%.2f glyphs=%lu track=%@", NSStringFromClass([s class]), SliderKind(s), SliderValue(s),
                                     (unsigned long)AllAppleGlyphs(s).count, objc_getAssociatedObject(s, kDirect) ? @"direct" : @"apple"]];
