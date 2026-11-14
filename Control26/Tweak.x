@@ -1,5 +1,4 @@
-// Control26 1.2.7 - made by nano
-// 1.2.7: fixed SpringBoard freezing on an incoming call when other glass tweaks are installed (Control26 no longer changes their glass)
+// Control26 1.2.6 - made by nano
 // 1.2.6: fixed SpringBoard freezing (then respringing) on an incoming call: Apple's views we replace are hidden with a mask instead of fighting every setAlpha in SpringBoard
 // 1.2.5: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.2.4: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
@@ -128,6 +127,7 @@
 #import <objc/message.h>
 #import <substrate.h>
 #import <mach-o/dyld.h>
+#include "../shared/NanoGlass.h"
 
 @interface MRUNowPlayingView : UIView @end
 @interface CCUIBaseSliderView : UIView @end
@@ -2848,6 +2848,7 @@ static void RoundGlass(UIButton *b) {
     fx.layer.cornerRadius = MIN(b.bounds.size.width, b.bounds.size.height) / 2;
     if (b.imageView) [b bringSubviewToFront:b.imageView];
     if (b.titleLabel) [b bringSubviewToFront:b.titleLabel];
+    NGApply(fx);   // 1.2.2: with LiquidAss, the same liquid glass as MusicPill
 }
 static void Pop(UIView *v) {
     [UIView animateWithDuration:0.12 animations:^{ v.transform = CGAffineTransformMakeScale(0.88, 0.88); } completion:^(__unused BOOL f) {

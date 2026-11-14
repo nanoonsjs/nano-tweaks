@@ -1,6 +1,6 @@
 Package: com.nano.control26
 Name: Control26
-Version: 1.2.7
+Version: 1.2.6
 Architecture: iphoneos-arm
 Description: The iOS 26 Control Center for iOS 16: edit mode with free placement and resizing, Add a Control, up to 6 pages, big Music and Connectivity layouts, layout presets, liquid glass music module, slide to power off, drop-in opening animation and an iOS 18 style settings page. Made by nano.
 Maintainer: nano
