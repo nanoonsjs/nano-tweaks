@@ -1,4 +1,5 @@
-// Messages26 1.4.6 - made by nano
+// Messages26 1.4.7 - made by nano
+// 1.4.7: new glass icons in the + menu (Photos, Camera, Apple Cash, Stickers, Audio, Music)
 // 1.4.6: forwarded voice messages really stay voice messages; Video as Voice made like a recorded one + purple icon; Face ID to turn Chat Lock off or unlock a chat on the list
 // 1.4.5: forwarded voice messages stay voice messages (not a .caf file); Video as Voice Message (+ menu)
 // 1.4.4: Forward Messages: hold a message → Forward, then pick who gets it
@@ -168,6 +169,22 @@ static void LockPreview(UIView *avatar, NSString *key);
 
 #include "IconData.h"
 #include "VVIcon.h"
+#include "MenuIcons.h"
+// 1.4.7: our own glass icons for the + menu (Photos, Camera, Apple Cash, Stickers, Audio, Music)
+#define MI(n) [UIImage imageWithData:[NSData dataWithBytes:kIc_##n length:sizeof(kIc_##n)] scale:3]
+static UIImage *MenuIconFor(NSDictionary *it) {
+    static NSDictionary *c; static dispatch_once_t o;
+    dispatch_once(&o, ^{ c = @{@"photos": MI(photos), @"camera": MI(camera), @"cash": MI(cash), @"stickers": MI(stickers), @"audio": MI(audio), @"music": MI(music)}; });
+    if (it[@"camera"]) return c[@"camera"];
+    NSString *n = [it[@"name"] lowercaseString];
+    if (!n.length || [n containsString:@"google"] || [n containsString:@"spotify"]) return nil;
+    if ([n isEqualToString:@"photos"]) return c[@"photos"];
+    if ([n containsString:@"cash"]) return c[@"cash"];
+    if ([n containsString:@"sticker"]) return c[@"stickers"];
+    if ([n isEqualToString:@"audio"] || [n isEqualToString:@"audio message"]) return c[@"audio"];
+    if ([n isEqualToString:@"music"] || [n isEqualToString:@"apple music"]) return c[@"music"];
+    return nil;
+}
 #define DOM CFSTR("com.nano.messages26")
 static BOOL gBigPfp = YES;
 static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
@@ -425,7 +442,9 @@ static NSArray *MenuItems(void) {
     UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake(22, 9, 44, 44)];
     iv.image = [it[@"icon"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]; iv.contentMode = UIViewContentModeScaleAspectFill;
     iv.layer.cornerRadius = 22; iv.clipsToBounds = YES;
-    if (it[@"camera"]) { iv.contentMode = UIViewContentModeCenter; iv.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1];
+    UIImage *mine = MenuIconFor(it);
+    if (mine) iv.image = mine;
+    else if (it[@"camera"]) { iv.contentMode = UIViewContentModeCenter; iv.backgroundColor = [UIColor colorWithWhite:0.25 alpha:1];
         iv.image = [[UIImage systemImageNamed:@"camera.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]] imageWithTintColor:UIColor.whiteColor renderingMode:UIImageRenderingModeAlwaysOriginal]; }
     iv.userInteractionEnabled = NO;
     [row addSubview:iv];
@@ -5486,7 +5505,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.4.6 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.4.7 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
