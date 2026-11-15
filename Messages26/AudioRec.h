@@ -284,7 +284,17 @@ static void RecOpen(__unused UIView *from) {
     if (gRec.superview) return;
     UIWindow *w = gEntry.window ?: [UIApplication sharedApplication].keyWindow; if (!w) return;
     CloseOpenApp();
-    [w endEditing:YES];
+    // 1.6.2: the keyboard lives in its own window above ours, so it's put away for real (not just this window)
+    [[UIApplication sharedApplication] sendAction:@selector(resignFirstResponder) to:nil from:nil forEvent:nil];
+    for (UIWindow *x in [UIApplication sharedApplication].windows) [x endEditing:YES];
+    @try {
+        UIViewController *chat = VVChat();
+        SEL d = NSSelectorFromString(@"dismissKeyboard");
+        if ([chat respondsToSelector:d]) ((void (*)(id, SEL))objc_msgSend)(chat, d);
+        id ic = [chat valueForKey:@"inputController"];
+        SEL d2 = NSSelectorFromString(@"dismissKeyboard");
+        if ([ic respondsToSelector:d2]) ((void (*)(id, SEL))objc_msgSend)(ic, d2);
+    } @catch (__unused id e) {}
     M26Rec *r = [[M26Rec alloc] initWithFrame:w.bounds];
     r.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [w addSubview:r];

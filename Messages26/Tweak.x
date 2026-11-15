@@ -1,4 +1,5 @@
-// Messages26 1.6.1 - made by nano
+// Messages26 1.6.2 - made by nano
+// 1.6.2: the keyboard goes away when the recorder opens (it stayed on top)
 // 1.6.1: Voice Recorder is a new panel replacing Apple's Audio app (+ menu Audio and the mic open it)
 // 1.6: Voice Recorder: tap the mic, record in high quality, preview (play / scrub), send or X
 // 1.5.3: Video as Voice in high quality (48 kHz stereo)
@@ -5561,7 +5562,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.6.1 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.6.2 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
