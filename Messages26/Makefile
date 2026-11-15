@@ -5,9 +5,14 @@ THEOS_PLATFORM_DEB_COMPRESSION_TYPE = xz
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = Messages26
+TWEAK_NAME = Messages26 M26Keeper
 Messages26_FILES = Tweak.x
-Messages26_FRAMEWORKS = UIKit QuartzCore PhotosUI Photos LocalAuthentication NaturalLanguage UserNotifications AudioToolbox AVFoundation CoreMedia
+Messages26_FRAMEWORKS = UIKit QuartzCore PhotosUI Photos QuickLook LocalAuthentication NaturalLanguage UserNotifications AudioToolbox AVFoundation CoreMedia
 Messages26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
+
+# Keep Unsent Messages: saves a message in imagent right before an unsend wipes it
+M26Keeper_FILES = Keeper.x
+M26Keeper_FRAMEWORKS = Foundation
+M26Keeper_CFLAGS = -fobjc-arc -Wno-error
 
 include $(THEOS_MAKE_PATH)/tweak.mk

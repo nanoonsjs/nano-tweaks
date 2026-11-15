@@ -1,4 +1,5 @@
-// Messages26 1.4.9 - made by nano
+// Messages26 1.5 - made by nano
+// 1.5: Keep Unsent Messages (see what someone unsent, photos / videos too)
 // 1.4.9: Camera with any app panel open no longer freezes; #images / Memoji / Digital Touch icons; only Apple's Stickers gets the stickers icon
 // 1.4.8: fixed Messages freezing when Camera was picked with Apple Cash / Audio still open
 // 1.4.7: new glass icons in the + menu (Photos, Camera, Apple Cash, Stickers, Audio, Music)
@@ -5087,6 +5088,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"save", @"Saved Messages", @"bookmark.fill", UIColor.systemOrangeColor, @"Hold a message → Save Message. Find them all here."],
              @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."],
              @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."],
+             @[@"keepunsent", @"Keep Unsent Messages", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"When someone unsends a message, you still see what it said under \"unsent a message\". Photos and videos they unsend are kept too (open them from here)."],
              @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"\"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
@@ -5096,6 +5098,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     if ([k isEqualToString:@"lock"] && Opt(@"lock")) return 3;
     if ([k isEqualToString:@"spell"] && Opt(@"spell")) return 2;
     if ([k isEqualToString:@"save"] && Opt(@"save")) return 2;
+    if ([k isEqualToString:@"keepunsent"] && Opt(@"keepunsent")) return 2;
     if ([k isEqualToString:@"remind"] && Opt(@"remind")) return 2;
     if ([k isEqualToString:@"unsend"] && Opt(@"unsend")) return 2;
     if ([k isEqualToString:@"sched"] && Opt(@"sched") && Scheduled().count) return 2;
@@ -5131,6 +5134,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
         return c;
     }
     if ([r[0] isEqualToString:@"spell"]) { c.textLabel.text = @"Ignored Words"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)IgnoredWords().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c; }
+    if ([r[0] isEqualToString:@"keepunsent"]) { c.textLabel.text = @"Unsent Messages"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)UnsentRows().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c; }
     if ([r[0] isEqualToString:@"save"]) { c.textLabel.text = @"Saved Messages"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)SavedMsgs().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c; }
     if ([r[0] isEqualToString:@"remind"]) { c.textLabel.text = @"Upcoming Reminders"; c.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)Reminders().count]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; return c; }
     if ([r[0] isEqualToString:@"anim"]) {
@@ -5217,6 +5221,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     NSString *k = FeatRows()[ip.section - 1][0];
     if (ip.row == 1 && [k isEqualToString:@"lock"]) [self.navigationController pushViewController:[[M26LockListVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES];
     if (ip.row == 1 && [k isEqualToString:@"spell"]) { [self.navigationController pushViewController:[[M26WordsVC alloc] initWithStyle:UITableViewStyleInsetGrouped] animated:YES]; return; }
+    if (ip.row == 1 && [k isEqualToString:@"keepunsent"]) { M26UnsentVC *l = [[M26UnsentVC alloc] initWithStyle:UITableViewStyleInsetGrouped]; [self.navigationController pushViewController:l animated:YES]; }
     if (ip.row == 1 && [k isEqualToString:@"save"]) { M26ListVC *l = [[M26ListVC alloc] initWithStyle:UITableViewStyleInsetGrouped]; l.kind = 0; [self.navigationController pushViewController:l animated:YES]; }
     if (ip.row == 1 && [k isEqualToString:@"remind"]) { M26ListVC *l = [[M26ListVC alloc] initWithStyle:UITableViewStyleInsetGrouped]; l.kind = 1; [self.navigationController pushViewController:l animated:YES]; }
     if (ip.row == 1 && [k isEqualToString:@"sched"]) { SaveScheduled(@[]); [tv reloadSections:[NSIndexSet indexSetWithIndex:ip.section] withRowAnimation:UITableViewRowAnimationFade]; }
@@ -5544,7 +5549,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.4.9 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.5 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -5615,6 +5620,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
 #include "MsgViewer.h"
 #include "MsgAudio.h"
 #include "VidVoice.h"
+#include "Unsent.h"
 #include "M26Contact.h"
 #include "../shared/NanoSettings.h"
 #include "M26Settings.h"
@@ -5649,6 +5655,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         @try { HookThemes(); } @catch (__unused id ex) {}
         @try { HookDetailsTable(); } @catch (__unused id ex) {}
         @try { StartVidVoice(); } @catch (__unused id ex) {}
+        @try { StartUnsent(); } @catch (__unused id ex) {}
         { Class CC = NSClassFromString(@"CKChatController"); SEL mm = NSSelectorFromString(@"_menuForChatItem:");
           if (CC && class_getInstanceMethod(CC, mm)) MSHookMessageEx(CC, mm, (IMP)MsgMenu, (IMP *)&origMsgMenu);
           Class AB = NSClassFromString(@"CKAggregateAcknowledgmentBalloonView"); SEL ac = NSSelectorFromString(@"configureForAggregateAcknowledgmentChatItem:");
