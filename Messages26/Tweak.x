@@ -1,4 +1,5 @@
-// Messages26 1.6 - made by nano
+// Messages26 1.6.1 - made by nano
+// 1.6.1: Voice Recorder is a new panel replacing Apple's Audio app (+ menu Audio and the mic open it)
 // 1.6: Voice Recorder: tap the mic, record in high quality, preview (play / scrub), send or X
 // 1.5.3: Video as Voice in high quality (48 kHz stereo)
 // 1.5.2: installing restarts the Messages background service so Keep Unsent Messages loads right away
@@ -398,6 +399,7 @@ static void OpenStripAppNamed(NSString *name) {
 }
 static void VidVoicePick(void);   // VidVoice.h
 static void RecAttach(UIView *entry);   // AudioRec.h
+static void RecOpen(UIView *from);
 static BOOL Opt(NSString *k);
 static UIViewController *VVChat(void);   // VidVoice.h
 // 1.4.8: an app (Apple Cash, Audio...) still open under the field froze Messages when Camera was picked:
@@ -642,6 +644,7 @@ static NSArray *MenuItems(void) {
     [self closeThen:^{
         if (it[@"camera"]) OpenCamera();
         else if (it[@"vidvoice"]) VidVoicePick();
+        else if (it[@"name"] && Opt(@"newaudio") && [[it[@"name"] lowercaseString] isEqualToString:@"audio"]) RecOpen(nil);
         else if (it[@"name"]) OpenStripAppNamed(it[@"name"]);
     }];
 }
@@ -5096,7 +5099,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."],
              @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."],
              @[@"keepunsent", @"Keep Unsent Messages", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"When someone unsends a message, you still see what it said under \"unsent a message\". Photos and videos they unsend are kept too (open them from here)."],
-             @[@"newaudio", @"Voice Recorder", @"mic.fill", UIColor.systemRedColor, @"Tap the mic instead of holding it: record in high quality, play it back, then send it or tap X to delete it."],
+             @[@"newaudio", @"Voice Recorder", @"mic.fill", UIColor.systemRedColor, @"Audio (+ menu) and the mic open a new recorder: tap to record in high quality, play it back, then send it or tap X to start over."],
              @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"\"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
@@ -5558,7 +5561,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.6 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.6.1 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
