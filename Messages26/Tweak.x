@@ -367,6 +367,7 @@ static void OpenStripAppNamed(NSString *name) {
     });
 }
 static void VidVoicePick(void);   // VidVoice.h
+static BOOL Opt(NSString *k);
 static void OpenCamera(void) {
     WithStrip(^{ [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; });
 }
