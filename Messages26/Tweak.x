@@ -1,4 +1,5 @@
-// Messages26 1.4.7 - made by nano
+// Messages26 1.4.8 - made by nano
+// 1.4.8: fixed Messages freezing when Camera was picked with Apple Cash / Audio still open
 // 1.4.7: new glass icons in the + menu (Photos, Camera, Apple Cash, Stickers, Audio, Music)
 // 1.4.6: forwarded voice messages really stay voice messages; Video as Voice made like a recorded one + purple icon; Face ID to turn Chat Lock off or unlock a chat on the list
 // 1.4.5: forwarded voice messages stay voice messages (not a .caf file); Video as Voice Message (+ menu)
@@ -387,8 +388,25 @@ static void OpenStripAppNamed(NSString *name) {
 }
 static void VidVoicePick(void);   // VidVoice.h
 static BOOL Opt(NSString *k);
+static UIViewController *VVChat(void);   // VidVoice.h
+// 1.4.8: an app (Apple Cash, Audio...) still open under the field froze Messages when Camera was picked:
+// it's put away first
+static BOOL CloseOpenApp(void) {
+    @try {
+        id ic = [VVChat() valueForKey:@"inputController"];
+        if (!ic) return NO;
+        id plug = nil; @try { plug = [ic valueForKey:@"browserPlugin"]; } @catch (__unused id e) {}
+        if (!plug) return NO;
+        SEL d = NSSelectorFromString(@"dismissBrowserViewController");
+        if (![ic respondsToSelector:d]) return NO;
+        ((void (*)(id, SEL))objc_msgSend)(ic, d);
+        return YES;
+    } @catch (__unused id e) { return NO; }
+}
 static void OpenCamera(void) {
-    WithStrip(^{ [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; });
+    void (^go)(void) = ^{ WithStrip(^{ [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; }); };
+    if (CloseOpenApp()) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), go);
+    else go();
 }
 static NSDictionary *PhotosApp(void) {
     NSArray *apps = StripApps();
@@ -5505,7 +5523,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.4.7 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.4.8 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
