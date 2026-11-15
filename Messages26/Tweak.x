@@ -1,4 +1,5 @@
-// Messages26 1.5.2 - made by nano
+// Messages26 1.5.3 - made by nano
+// 1.5.3: Video as Voice in high quality (48 kHz stereo)
 // 1.5.2: installing restarts the Messages background service so Keep Unsent Messages loads right away
 // 1.5.1: Keep Unsent: switch reaches the background part through a file, imagent filter by bundle too, a log (Unsent Messages → top right)
 // 1.5: Keep Unsent Messages (see what someone unsent, photos / videos too)
@@ -5553,7 +5554,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.5.2 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.5.3 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

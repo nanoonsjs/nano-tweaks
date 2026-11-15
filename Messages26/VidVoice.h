@@ -83,16 +83,16 @@ static void VVExtract(NSURL *video, void (^done)(NSURL *out, NSString *err)) {
         if (!track) { done(nil, @"That video has no sound"); return; }
         NSError *e = nil;
         AVAssetReader *rd = [AVAssetReader assetReaderWithAsset:asset error:&e];
-        AVAssetReaderTrackOutput *ro = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:track outputSettings:@{AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @24000, AVNumberOfChannelsKey: @1, AVLinearPCMBitDepthKey: @16, AVLinearPCMIsFloatKey: @NO, AVLinearPCMIsBigEndianKey: @NO, AVLinearPCMIsNonInterleaved: @NO}];
+        AVAssetReaderTrackOutput *ro = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:track outputSettings:@{AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2, AVLinearPCMBitDepthKey: @16, AVLinearPCMIsFloatKey: @NO, AVLinearPCMIsBigEndianKey: @NO, AVLinearPCMIsNonInterleaved: @NO}];
         if (!rd || ![rd canAddOutput:ro]) { done(nil, @"Couldn't read the video"); return; }
         [rd addOutput:ro];
         NSURL *out = VVTempURL(@"caf");
         AVAssetWriter *wr = [AVAssetWriter assetWriterWithURL:out fileType:AVFileTypeCoreAudioFormat error:&e];
         // Opus, like the voice messages Messages records; AAC if this phone can't write Opus
         AVAssetWriterInput *wi = nil;
-        @try { wi = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:@{AVFormatIDKey: @(kAudioFormatOpus), AVSampleRateKey: @24000, AVNumberOfChannelsKey: @1, AVEncoderBitRateKey: @32000}]; } @catch (__unused id x) { wi = nil; }
+        @try { wi = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:@{AVFormatIDKey: @(kAudioFormatOpus), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2, AVEncoderBitRateKey: @160000}]; } @catch (__unused id x) { wi = nil; }
         if (!wi || !wr || ![wr canAddInput:wi]) {
-            @try { wi = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:@{AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @44100, AVNumberOfChannelsKey: @1, AVEncoderBitRateKey: @64000}]; } @catch (__unused id x) { wi = nil; }
+            @try { wi = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:@{AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2, AVEncoderBitRateKey: @256000}]; } @catch (__unused id x) { wi = nil; }
         }
         wi.expectsMediaDataInRealTime = NO;
         if (!wi || !wr || ![wr canAddInput:wi]) { done(nil, @"Couldn't make the voice message"); return; }
