@@ -1,4 +1,5 @@
-// Messages26 1.5 - made by nano
+// Messages26 1.5.1 - made by nano
+// 1.5.1: Keep Unsent: switch reaches the background part through a file, imagent filter by bundle too, a log (Unsent Messages → top right)
 // 1.5: Keep Unsent Messages (see what someone unsent, photos / videos too)
 // 1.4.9: Camera with any app panel open no longer freezes; #images / Memoji / Digital Touch icons; only Apple's Stickers gets the stickers icon
 // 1.4.8: fixed Messages freezing when Camera was picked with Apple Cash / Audio still open
@@ -5193,6 +5194,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     }
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     SetOpt(FeatRows()[sw.tag - 1][0], sw.on);
+    @try { UnsentSyncFlag(); } @catch (__unused id e) {}
     NSArray *row = FeatRows()[sw.tag - 1];
     M26SheetIsland(self.navigationController.view ?: self.view, row[1], row[2], row[3], sw.on);
     // the row answers too: its icon hops and the row swells a little
@@ -5550,7 +5552,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.5 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.5.1 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

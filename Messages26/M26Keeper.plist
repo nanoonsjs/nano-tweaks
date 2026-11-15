@@ -1,1 +1,1 @@
-{ Filter = { Executables = ( "imagent" ); }; }
+{ Filter = { Bundles = ( "com.apple.imagent" ); Executables = ( "imagent" ); Mode = "Any"; }; }

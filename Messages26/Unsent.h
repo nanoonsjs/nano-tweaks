@@ -66,7 +66,10 @@ static id RetractText(id self, SEL _cmd, unsigned long long cnt, id names, BOOL 
 @property (nonatomic, strong) NSArray *preview;
 @end
 @implementation M26UnsentVC
-- (void)viewDidLoad { [super viewDidLoad]; self.title = @"Unsent Messages"; self.rows = [UnsentRows() mutableCopy]; }
+- (void)viewDidLoad {
+    [super viewDidLoad]; self.title = @"Unsent Messages"; self.rows = [UnsentRows() mutableCopy];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"doc.text.magnifyingglass"] style:UIBarButtonItemStylePlain target:self action:@selector(showLog)];
+}
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return MAX(1, self.rows.count); }
 - (NSString *)tableView:(UITableView *)tv titleForFooterInSection:(NSInteger)s { return @"Messages people unsent after this was turned on. Tap one to copy it (or open what was attached), swipe to delete."; }
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
@@ -99,6 +102,13 @@ static id RetractText(id self, SEL _cmd, unsigned long long cnt, id names, BOOL 
     }
     if ([d[@"text"] length]) { [UIPasteboard generalPasteboard].string = d[@"text"]; Toast(@"Copied", @"doc.on.doc.fill"); }
 }
+- (void)showLog {
+    NSString *l = [NSString stringWithContentsOfFile:[UNSENT_DIR stringByAppendingPathComponent:@"log.txt"] encoding:NSUTF8StringEncoding error:nil] ?: @"(no log: the background part never ran)";
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Unsent log" message:[l substringFromIndex:l.length > 1500 ? l.length - 1500 : 0] preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Copy" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) { [UIPasteboard generalPasteboard].string = l; }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
 - (NSInteger)numberOfPreviewItemsInPreviewController:(QLPreviewController *)c { return self.preview.count; }
 - (id<QLPreviewItem>)previewController:(QLPreviewController *)c previewItemAtIndex:(NSInteger)i { return self.preview[i]; }
 - (BOOL)tableView:(UITableView *)tv canEditRowAtIndexPath:(NSIndexPath *)ip { return self.rows.count > 0; }
@@ -109,7 +119,16 @@ static id RetractText(id self, SEL _cmd, unsigned long long cnt, id names, BOOL 
 }
 @end
 
+// tells M26Keeper (in imagent) whether to keep unsends
+static void UnsentSyncFlag(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:UNSENT_DIR withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *f = [UNSENT_DIR stringByAppendingPathComponent:@"on"];
+    if (Opt(@"keepunsent")) { if (![fm fileExistsAtPath:f]) [@"1" writeToFile:f atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
+    else [fm removeItemAtPath:f error:nil];
+}
 static void StartUnsent(void) {
+    UnsentSyncFlag();
     Class R = NSClassFromString(@"CKMessageRetractionChatItem");
     SEL s = NSSelectorFromString(@"_loadTranscriptTextWithRetractionUnsupportedCount:unsupportedNames:isFromMe:isFailedRetraction:senderName:");
     if (R && class_getInstanceMethod(R, s)) MSHookMessageEx(R, s, (IMP)RetractText, (IMP *)&origRetractText);

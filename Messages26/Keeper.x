@@ -9,7 +9,20 @@
 #define DIR @"/var/mobile/Library/SMS/M26Unsent"
 #define LIST DIR @"/unsent.plist"
 
+// a short log (last ~200 lines) so we can see what happened
+static void KLog(NSString *fmt, ...) {
+    va_list ap; va_start(ap, fmt); NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap]; va_end(ap);
+    NSString *p = DIR @"/log.txt";
+    [[NSFileManager defaultManager] createDirectoryAtPath:DIR withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *old = [NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:nil] ?: @"";
+    NSArray *ls = [old componentsSeparatedByString:@"\n"];
+    if (ls.count > 200) old = [[ls subarrayWithRange:NSMakeRange(ls.count - 150, 150)] componentsJoinedByString:@"\n"];
+    NSDateFormatter *f = [NSDateFormatter new]; f.dateFormat = @"MM-dd HH:mm:ss";
+    [[old stringByAppendingFormat:@"%@ %@\n", [f stringFromDate:[NSDate date]], s] writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+// Messages26 drops an "on" file here while the switch is on (prefs of another app can't always be read from here)
 static BOOL KeepOn(void) {
+    if ([[NSFileManager defaultManager] fileExistsAtPath:DIR @"/on"]) return YES;
     CFStringRef app = CFSTR("com.apple.MobileSMS");
     CFPreferencesAppSynchronize(app);
     NSNumber *on = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("m26.opt.keepunsent"), app));
@@ -21,9 +34,12 @@ static BOOL KeepOn(void) {
 }
 static id Get(id o, NSString *k) { @try { return [o valueForKey:k]; } @catch (__unused id e) { return nil; } }
 
+static void SaveMsg(id msg, NSString *guid, id chat);
 static void SaveUnsent(id param) {
-    if (!KeepOn()) return;
     NSString *guid = Get(param, @"editedMessageGUID");
+    KLog(@"edit command: guid=%@ type=%@ part=%@ body=%lu files=%lu on=%d", guid, Get(param, @"editType"), Get(param, @"editedMessagePartIndex"),
+         (unsigned long)[Get(param, @"editedMessagePartBody") length], (unsigned long)[Get(param, @"editedMessagePartFileTransferGUIDs") count], KeepOn());
+    if (!KeepOn()) return;
     if (![guid isKindOfClass:[NSString class]]) return;
     // an edit has new text; an unsend has none
     NSAttributedString *nb = Get(param, @"editedMessagePartBody");
@@ -34,7 +50,14 @@ static void SaveUnsent(id param) {
     id store = [MS respondsToSelector:@selector(sharedInstance)] ? [MS performSelector:@selector(sharedInstance)] : nil;
     id msg = nil;
     @try { msg = ((id (*)(id, SEL, id))objc_msgSend)(store, NSSelectorFromString(@"messageWithGUID:"), guid); } @catch (__unused id e) {}
-    if (!msg) return;
+    KLog(@"  message found=%d fromMe=%@", msg != nil, Get(msg, @"isFromMe"));
+    SaveMsg(msg, guid, Get(param, @"chat"));
+}
+// what both ways in end up doing: keep this message's text and attachments
+static void SaveMsg(id msg, NSString *guid, id chat) {
+    if (!msg || !guid) return;
+    NSDictionary *have = [NSDictionary dictionaryWithContentsOfFile:LIST];
+    if (have[guid]) return;
     if ([Get(msg, @"isFromMe") boolValue]) return;   // your own unsends aren't kept
     NSString *text = Get(msg, @"plainBody");
     if (![text isKindOfClass:[NSString class]]) { NSAttributedString *b = Get(msg, @"body"); text = [b isKindOfClass:[NSAttributedString class]] ? b.string : @""; }
@@ -59,7 +82,6 @@ static void SaveUnsent(id param) {
         }
     }
     if (!text.length && !files.count) return;
-    id chat = Get(param, @"chat");
     NSString *chatName = Get(chat, @"displayName");
     if (![chatName isKindOfClass:[NSString class]] || !chatName.length) chatName = Get(chat, @"chatIdentifier");
     NSString *who = Get(msg, @"sender"); if (![who isKindOfClass:[NSString class]]) who = Get(msg, @"handle");
@@ -69,7 +91,8 @@ static void SaveUnsent(id param) {
                   @"chat": [chatName isKindOfClass:[NSString class]] ? chatName : @"",
                   @"time": @([t isKindOfClass:[NSDate class]] ? t.timeIntervalSince1970 : [NSDate date].timeIntervalSince1970),
                   @"unsentAt": @([NSDate date].timeIntervalSince1970)};
-    [all writeToFile:LIST atomically:YES];
+    BOOL ok = [all writeToFile:LIST atomically:YES];
+    KLog(@"  kept: %lu chars, %lu files, written=%d", (unsigned long)text.length, (unsigned long)files.count, ok);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.nano.messages26/unsent"), NULL, NULL, YES);
 }
 
@@ -79,8 +102,23 @@ static id Run(id self, SEL _cmd, id input) {
     return origRun(self, _cmd, input);
 }
 
+// second way in: the message being marked as unsent (its text may still be there)
+static void (*origAddRetracted)(id, SEL, long long);
+static void AddRetracted(id self, SEL _cmd, long long idx) {
+    @try {
+        KLog(@"retract mark: guid=%@ part=%lld on=%d", Get(self, @"guid"), idx, KeepOn());
+        if (KeepOn() && ![Get(self, @"isFromMe") boolValue]) SaveMsg(self, Get(self, @"guid"), nil);
+    } @catch (__unused id e) {}
+    origAddRetracted(self, _cmd, idx);
+}
+
 %ctor {
+    KLog(@"loaded in %@ (pid %d)", [NSProcessInfo processInfo].processName, getpid());
     Class C = NSClassFromString(@"IMEditMessageCommandProcessingPipelineComponent");
     SEL s = NSSelectorFromString(@"runIndividuallyWithInput:");
-    if (C && class_getInstanceMethod(C, s)) MSHookMessageEx(C, s, (IMP)Run, (IMP *)&origRun);
+    if (C && class_getInstanceMethod(C, s)) { MSHookMessageEx(C, s, (IMP)Run, (IMP *)&origRun); KLog(@"hooked edit commands"); }
+    else KLog(@"edit command class missing: %@", C);
+    Class M = NSClassFromString(@"IMMessageItem");
+    SEL r = @selector(addRetractedPartIndex:);
+    if (M && class_getInstanceMethod(M, r)) MSHookMessageEx(M, r, (IMP)AddRetracted, (IMP *)&origAddRetracted);
 }
