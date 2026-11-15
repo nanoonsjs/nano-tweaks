@@ -1,4 +1,5 @@
-// Messages26 1.4.5 - made by nano
+// Messages26 1.4.6 - made by nano
+// 1.4.6: forwarded voice messages really stay voice messages; Video as Voice made like a recorded one + purple icon; Face ID to turn Chat Lock off or unlock a chat on the list
 // 1.4.5: forwarded voice messages stay voice messages (not a .caf file); Video as Voice Message (+ menu)
 // 1.4.4: Forward Messages: hold a message → Forward, then pick who gets it
 // 1.4.3: the glass always follows LiquidAss (NanoGlass isn't needed)
@@ -166,6 +167,7 @@ static void HookSendControl(UIView *v);
 static void LockPreview(UIView *avatar, NSString *key);
 
 #include "IconData.h"
+#include "VVIcon.h"
 #define DOM CFSTR("com.nano.messages26")
 static BOOL gBigPfp = YES;
 static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
@@ -387,7 +389,10 @@ static NSArray *MenuItems(void) {
     for (NSDictionary *a in apps) if ([[a[@"name"] lowercaseString] isEqualToString:@"photos"]) photos = a;
     if (photos) [items addObject:photos];
     [items addObject:@{@"name": @"Camera", @"icon": [UIImage systemImageNamed:@"camera.fill"], @"camera": @YES}];
-    if (Opt(@"vidvoice")) [items addObject:@{@"name": @"Video as Voice", @"icon": [UIImage systemImageNamed:@"waveform"], @"vidvoice": @YES}];
+    if (Opt(@"vidvoice")) {
+        UIImage *vi = [UIImage imageWithData:[NSData dataWithBytes:kVVIconPNG length:sizeof(kVVIconPNG)] scale:3] ?: [UIImage systemImageNamed:@"video.fill"];
+        [items addObject:@{@"name": @"Video as Voice", @"icon": vi, @"vidvoice": @YES}];
+    }
     for (NSDictionary *a in apps) if (a != photos && ![a[@"name"] isEqual:photos[@"name"]] && ![[a[@"name"] lowercaseString] containsString:@"app store"] && ![[a[@"name"] lowercaseString] isEqualToString:@"store"]) [items addObject:a];
     NSArray *order = SavedOrder();
     [items sortWithOptions:NSSortStable usingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
@@ -3764,6 +3769,14 @@ static void HookSendControl(UIView *v) {
 #define LOCK_TAG 0x4D32365C
 static BOOL gLockAsking = NO;
 static void (^gAuthReply)(NSInteger);
+// 1.4.6: Face ID / passcode before a lock comes off (Chat Lock switched off, or a chat taken off the list)
+static void AskAuth(void (^cb)(BOOL ok)) {
+    if (gAuthReply) return;
+    __block BOOL answered = NO;
+    gAuthReply = ^(NSInteger r) { answered = YES; if (r != 1) [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeError]; cb(r == 1); };
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.nano.messages26/auth.req"), NULL, NULL, YES);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (!answered) gAuthReply = nil; });
+}
 static NSInteger gLockFails = 0;
 static BOOL gLockAutoAsked = NO;
 static void LockPreview(UIView *avatar, NSString *key) {
@@ -4289,7 +4302,18 @@ static void StyleFeatures(UIWindow *w) {
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     [tv deselectRowAtIndexPath:ip animated:YES];
     NSMutableArray *a = [LockedKeys() mutableCopy]; NSString *k = self.convs[ip.row][1];
-    if ([a containsObject:k]) [a removeObject:k]; else [a addObject:k];
+    if ([a containsObject:k]) {
+        __weak UITableView *wtv = tv;
+        AskAuth(^(BOOL ok) {
+            if (!ok) return;
+            NSMutableArray *b = [LockedKeys() mutableCopy]; [b removeObject:k];
+            [[NSUserDefaults standardUserDefaults] setObject:b forKey:@"m26.locked"];
+            [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
+            [wtv reloadData];
+        });
+        return;
+    }
+    [a addObject:k];
     [[NSUserDefaults standardUserDefaults] setObject:a forKey:@"m26.locked"];
     [[[UISelectionFeedbackGenerator alloc] init] selectionChanged];
     [tv reloadRowsAtIndexPaths:@[ip] withRowAnimation:UITableViewRowAnimationNone];
@@ -5093,6 +5117,17 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     return c;
 }
 - (void)toggle:(UISwitch *)sw {
+    static BOOL authed;
+    if (!sw.on && !authed && [FeatRows()[sw.tag - 1][0] isEqualToString:@"lock"] && Opt(@"lock")) {
+        [sw setOn:YES animated:YES];
+        __weak UISwitch *ws = sw; __weak typeof(self) me = self;
+        AskAuth(^(BOOL ok) {
+            if (!ok || !ws) return;
+            [ws setOn:NO animated:YES];
+            authed = YES; [me toggle:ws]; authed = NO;
+        });
+        return;
+    }
     [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
     SetOpt(FeatRows()[sw.tag - 1][0], sw.on);
     NSArray *row = FeatRows()[sw.tag - 1];
@@ -5451,7 +5486,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.4.5 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.4.6 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

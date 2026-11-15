@@ -20,9 +20,10 @@ static id VVAudioComposition(id mo) {
     return ((id (*)(id, SEL, id))objc_msgSend)(C, s, mo);
 }
 static NSURL *VVTempURL(NSString *ext) {
-    NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"m26voice"];
+    // its own folder, named like the voice messages Messages records ("Audio Message.caf")
+    NSString *dir = [[NSTemporaryDirectory() stringByAppendingPathComponent:@"m26voice"] stringByAppendingPathComponent:[NSUUID UUID].UUIDString];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    return [NSURL fileURLWithPath:[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"Audio Message %@.%@", [NSUUID UUID].UUIDString, ext]]];
+    return [NSURL fileURLWithPath:[dir stringByAppendingPathComponent:[@"Audio Message." stringByAppendingString:ext]]];
 }
 
 #pragma mark - forwarding keeps it a voice message
@@ -59,6 +60,13 @@ static void ShowNewComp(id self, SEL _cmd, id rec, id comp, BOOL anim) {
     origShowNewComp(self, _cmd, rec, gOn ? VVFixForward(comp) : comp, anim);
 }
 
+// 1.4.6: the forward sheet builds its own composition when you hit send, so the fix is made right as the
+// message is created from it
+static id (*origMsgWithComp)(id, SEL, id);
+static id MsgWithComp(id self, SEL _cmd, id comp) { return origMsgWithComp(self, _cmd, gOn ? VVFixForward(comp) : comp); }
+static id (*origMsgsFromComp)(id, SEL, id);
+static id MsgsFromComp(id self, SEL _cmd, id comp) { return origMsgsFromComp(self, _cmd, gOn ? VVFixForward(comp) : comp); }
+
 #pragma mark - a video's sound as a voice message
 
 static UIViewController *VVChat(void) {
@@ -75,14 +83,19 @@ static void VVExtract(NSURL *video, void (^done)(NSURL *out, NSString *err)) {
         if (!track) { done(nil, @"That video has no sound"); return; }
         NSError *e = nil;
         AVAssetReader *rd = [AVAssetReader assetReaderWithAsset:asset error:&e];
-        AVAssetReaderTrackOutput *ro = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:track outputSettings:@{AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @44100, AVNumberOfChannelsKey: @1, AVLinearPCMBitDepthKey: @16, AVLinearPCMIsFloatKey: @NO, AVLinearPCMIsBigEndianKey: @NO, AVLinearPCMIsNonInterleaved: @NO}];
+        AVAssetReaderTrackOutput *ro = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:track outputSettings:@{AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @24000, AVNumberOfChannelsKey: @1, AVLinearPCMBitDepthKey: @16, AVLinearPCMIsFloatKey: @NO, AVLinearPCMIsBigEndianKey: @NO, AVLinearPCMIsNonInterleaved: @NO}];
         if (!rd || ![rd canAddOutput:ro]) { done(nil, @"Couldn't read the video"); return; }
         [rd addOutput:ro];
         NSURL *out = VVTempURL(@"caf");
         AVAssetWriter *wr = [AVAssetWriter assetWriterWithURL:out fileType:AVFileTypeCoreAudioFormat error:&e];
-        AVAssetWriterInput *wi = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:@{AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @44100, AVNumberOfChannelsKey: @1, AVEncoderBitRateKey: @64000}];
+        // Opus, like the voice messages Messages records; AAC if this phone can't write Opus
+        AVAssetWriterInput *wi = nil;
+        @try { wi = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:@{AVFormatIDKey: @(kAudioFormatOpus), AVSampleRateKey: @24000, AVNumberOfChannelsKey: @1, AVEncoderBitRateKey: @32000}]; } @catch (__unused id x) { wi = nil; }
+        if (!wi || !wr || ![wr canAddInput:wi]) {
+            @try { wi = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:@{AVFormatIDKey: @(kAudioFormatMPEG4AAC), AVSampleRateKey: @44100, AVNumberOfChannelsKey: @1, AVEncoderBitRateKey: @64000}]; } @catch (__unused id x) { wi = nil; }
+        }
         wi.expectsMediaDataInRealTime = NO;
-        if (!wr || ![wr canAddInput:wi]) { done(nil, @"Couldn't make the voice message"); return; }
+        if (!wi || !wr || ![wr canAddInput:wi]) { done(nil, @"Couldn't make the voice message"); return; }
         [wr addInput:wi];
         if (![rd startReading] || ![wr startWriting]) { done(nil, @"Couldn't make the voice message"); return; }
         [wr startSessionAtSourceTime:kCMTimeZero];
@@ -157,4 +170,8 @@ static void StartVidVoice(void) {
     SEL b = NSSelectorFromString(@"showNewMessageCompositionPanelWithRecipients:composition:animated:");
     if (MC && class_getInstanceMethod(MC, a)) MSHookMessageEx(MC, a, (IMP)FwdComp, (IMP *)&origFwdComp);
     if (MC && class_getInstanceMethod(MC, b)) MSHookMessageEx(MC, b, (IMP)ShowNewComp, (IMP *)&origShowNewComp);
+    Class CV = NSClassFromString(@"CKConversation");
+    SEL c = NSSelectorFromString(@"messageWithComposition:"), d = NSSelectorFromString(@"messagesFromComposition:");
+    if (CV && class_getInstanceMethod(CV, c)) MSHookMessageEx(CV, c, (IMP)MsgWithComp, (IMP *)&origMsgWithComp);
+    if (CV && class_getInstanceMethod(CV, d)) MSHookMessageEx(CV, d, (IMP)MsgsFromComp, (IMP *)&origMsgsFromComp);
 }
