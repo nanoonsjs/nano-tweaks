@@ -1,0 +1,4 @@
+#!/bin/sh
+# imagent (the Messages background service) keeps running through a respring: restart it so Keep Unsent Messages loads
+killall -9 imagent 2>/dev/null || true
+exit 0
