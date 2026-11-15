@@ -1,4 +1,5 @@
-// Messages26 1.4.8 - made by nano
+// Messages26 1.4.9 - made by nano
+// 1.4.9: Camera with any app panel open no longer freezes; #images / Memoji / Digital Touch icons; only Apple's Stickers gets the stickers icon
 // 1.4.8: fixed Messages freezing when Camera was picked with Apple Cash / Audio still open
 // 1.4.7: new glass icons in the + menu (Photos, Camera, Apple Cash, Stickers, Audio, Music)
 // 1.4.6: forwarded voice messages really stay voice messages; Video as Voice made like a recorded one + purple icon; Face ID to turn Chat Lock off or unlock a chat on the list
@@ -175,13 +176,17 @@ static void LockPreview(UIView *avatar, NSString *key);
 #define MI(n) [UIImage imageWithData:[NSData dataWithBytes:kIc_##n length:sizeof(kIc_##n)] scale:3]
 static UIImage *MenuIconFor(NSDictionary *it) {
     static NSDictionary *c; static dispatch_once_t o;
-    dispatch_once(&o, ^{ c = @{@"photos": MI(photos), @"camera": MI(camera), @"cash": MI(cash), @"stickers": MI(stickers), @"audio": MI(audio), @"music": MI(music)}; });
+    dispatch_once(&o, ^{ c = @{@"photos": MI(photos), @"camera": MI(camera), @"cash": MI(cash), @"stickers": MI(stickers), @"audio": MI(audio), @"music": MI(music),
+                                    @"images": MI(images), @"memoji": MI(memoji), @"touch": MI(touch)}; });
     if (it[@"camera"]) return c[@"camera"];
     NSString *n = [it[@"name"] lowercaseString];
     if (!n.length || [n containsString:@"google"] || [n containsString:@"spotify"]) return nil;
     if ([n isEqualToString:@"photos"]) return c[@"photos"];
     if ([n containsString:@"cash"]) return c[@"cash"];
-    if ([n containsString:@"sticker"]) return c[@"stickers"];
+    if ([n isEqualToString:@"stickers"]) return c[@"stickers"];   // Apple's only, not other sticker packs
+    if ([n isEqualToString:@"#images"] || [n isEqualToString:@"images"]) return c[@"images"];
+    if ([n hasPrefix:@"memoji"]) return c[@"memoji"];
+    if ([n isEqualToString:@"digital touch"]) return c[@"touch"];
     if ([n isEqualToString:@"audio"] || [n isEqualToString:@"audio message"]) return c[@"audio"];
     if ([n isEqualToString:@"music"] || [n isEqualToString:@"apple music"]) return c[@"music"];
     return nil;
@@ -397,6 +402,8 @@ static BOOL CloseOpenApp(void) {
         if (!ic) return NO;
         id plug = nil; @try { plug = [ic valueForKey:@"browserPlugin"]; } @catch (__unused id e) {}
         if (!plug) return NO;
+        SEL d2 = NSSelectorFromString(@"_dismissBrowserViewControllerAndReloadInputViews:");
+        if ([ic respondsToSelector:d2]) { ((void (*)(id, SEL, BOOL))objc_msgSend)(ic, d2, YES); return YES; }
         SEL d = NSSelectorFromString(@"dismissBrowserViewController");
         if (![ic respondsToSelector:d]) return NO;
         ((void (*)(id, SEL))objc_msgSend)(ic, d);
@@ -404,9 +411,23 @@ static BOOL CloseOpenApp(void) {
     } @catch (__unused id e) { return NO; }
 }
 static void OpenCamera(void) {
-    void (^go)(void) = ^{ WithStrip(^{ [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; }); };
-    if (CloseOpenApp()) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), go);
-    else go();
+    // 1.4.9: with an app's panel open, Apple's camera button behind it hangs Messages: the panel is put away
+    // and Messages' own camera is opened straight from the chat instead
+    UIViewController *chat = VVChat();
+    if (CloseOpenApp()) {
+        [gEntry.window endEditing:YES];
+        __weak UIViewController *wc = chat;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIViewController *c = wc;
+            SEL s = NSSelectorFromString(@"_showPhotoPickerWithSourceType:");
+            if (c && [c respondsToSelector:s] && [UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypeCamera]) {
+                @try { ((void (*)(id, SEL, long long))objc_msgSend)(c, s, (long long)UIImagePickerControllerSourceTypeCamera); return; } @catch (__unused id e) {}
+            }
+            WithStrip(^{ [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; });
+        });
+        return;
+    }
+    WithStrip(^{ [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; });
 }
 static NSDictionary *PhotosApp(void) {
     NSArray *apps = StripApps();
@@ -5523,7 +5544,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.4.8 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.4.9 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
