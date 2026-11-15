@@ -1,4 +1,5 @@
-// Messages26 1.4.4 - made by nano
+// Messages26 1.4.5 - made by nano
+// 1.4.5: forwarded voice messages stay voice messages (not a .caf file); Video as Voice Message (+ menu)
 // 1.4.4: Forward Messages: hold a message → Forward, then pick who gets it
 // 1.4.3: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.4.2: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
@@ -365,6 +366,7 @@ static void OpenStripAppNamed(NSString *name) {
         for (NSDictionary *a in StripApps()) if ([a[@"name"] isEqualToString:name]) { OpenStripApp(a[@"ip"]); return; }
     });
 }
+static void VidVoicePick(void);   // VidVoice.h
 static void OpenCamera(void) {
     WithStrip(^{ [(UIButton *)gPhotoBtn sendActionsForControlEvents:UIControlEventTouchUpInside]; });
 }
@@ -384,6 +386,7 @@ static NSArray *MenuItems(void) {
     for (NSDictionary *a in apps) if ([[a[@"name"] lowercaseString] isEqualToString:@"photos"]) photos = a;
     if (photos) [items addObject:photos];
     [items addObject:@{@"name": @"Camera", @"icon": [UIImage systemImageNamed:@"camera.fill"], @"camera": @YES}];
+    if (Opt(@"vidvoice")) [items addObject:@{@"name": @"Video as Voice", @"icon": [UIImage systemImageNamed:@"waveform"], @"vidvoice": @YES}];
     for (NSDictionary *a in apps) if (a != photos && ![a[@"name"] isEqual:photos[@"name"]] && ![[a[@"name"] lowercaseString] containsString:@"app store"] && ![[a[@"name"] lowercaseString] isEqualToString:@"store"]) [items addObject:a];
     NSArray *order = SavedOrder();
     [items sortWithOptions:NSSortStable usingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
@@ -568,6 +571,7 @@ static NSArray *MenuItems(void) {
     [[UISelectionFeedbackGenerator new] selectionChanged];
     [self closeThen:^{
         if (it[@"camera"]) OpenCamera();
+        else if (it[@"vidvoice"]) VidVoicePick();
         else if (it[@"name"]) OpenStripAppNamed(it[@"name"]);
     }];
 }
@@ -4999,7 +5003,8 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"spell", @"Spelling Fix", @"textformat.abc.dottedunderline", UIColor.systemBlueColor, @"While you type, a glass \"Fix typos\" chip shows up above the message box when something's misspelled. Works on your phone, nothing is sent anywhere."],
              @[@"save", @"Saved Messages", @"bookmark.fill", UIColor.systemOrangeColor, @"Hold a message → Save Message. Find them all here."],
              @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."],
-             @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."]];
+             @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."],
+             @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"\"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
@@ -5445,7 +5450,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.4.4 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.4.5 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -5515,6 +5520,7 @@ static void MsgAuthFail(CFNotificationCenterRef c, void *o, CFNotificationName n
 static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName n, const void *obj, CFDictionaryRef u) { dispatch_async(dispatch_get_main_queue(), ^{ void (^r)(NSInteger) = gAuthReply; gAuthReply = nil; if (r) r(-1); }); }
 #include "MsgViewer.h"
 #include "MsgAudio.h"
+#include "VidVoice.h"
 #include "M26Contact.h"
 #include "../shared/NanoSettings.h"
 #include "M26Settings.h"
@@ -5548,6 +5554,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         MSHookMessageEx([UITextView class], @selector(setTextContainerInset:), (IMP)TVInset, (IMP *)&origTVInset);
         @try { HookThemes(); } @catch (__unused id ex) {}
         @try { HookDetailsTable(); } @catch (__unused id ex) {}
+        @try { StartVidVoice(); } @catch (__unused id ex) {}
         { Class CC = NSClassFromString(@"CKChatController"); SEL mm = NSSelectorFromString(@"_menuForChatItem:");
           if (CC && class_getInstanceMethod(CC, mm)) MSHookMessageEx(CC, mm, (IMP)MsgMenu, (IMP *)&origMsgMenu);
           Class AB = NSClassFromString(@"CKAggregateAcknowledgmentBalloonView"); SEL ac = NSSelectorFromString(@"configureForAggregateAcknowledgmentChatItem:");
