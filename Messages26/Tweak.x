@@ -1,4 +1,5 @@
-// Messages26 1.4.3 - made by nano
+// Messages26 1.4.4 - made by nano
+// 1.4.4: Forward Messages: hold a message → Forward, then pick who gets it
 // 1.4.3: the glass always follows LiquidAss (NanoGlass isn't needed)
 // 1.4.2: glass is LiquidAss's own (its blur setting applies); NanoGlass switch turns it on or off
 // 1.4.1: glass follows the NanoGlass slider (clear to frosted); no more blurry icons where LiquidAss already has its own glass
@@ -4430,8 +4431,29 @@ static void RemindMessage(id item) {
 static id (*origMsgMenu)(id, SEL, id);
 static id MsgMenu(id self, SEL _cmd, id item) {
     UIMenu *m = origMsgMenu(self, _cmd, item);
-    if (![m isKindOfClass:[UIMenu class]] || (!Opt(@"save") && !Opt(@"remind"))) return m;
+    if (![m isKindOfClass:[UIMenu class]] || (!Opt(@"save") && !Opt(@"remind") && !Opt(@"fwd"))) return m;
     NSMutableArray *extra = [NSMutableArray array];
+    if (Opt(@"fwd")) {
+        BOOL can = YES;
+        @try { if ([item respondsToSelector:@selector(canForward)]) can = ((BOOL (*)(id, SEL))objc_msgSend)(item, @selector(canForward)); } @catch (__unused id e) {}
+        // Apple's own Forward: opens a new message with this one in it, with the To: field to pick who gets it
+        __weak id chat = self;
+        if (can) [extra addObject:[UIAction actionWithTitle:@"Forward" image:[UIImage systemImageNamed:@"arrowshape.turn.up.right"] identifier:nil handler:^(__unused UIAction *a) {
+            id c = chat; if (!c || !item) return;
+            @try {
+                SEL fa = NSSelectorFromString(@"_forwardActionForChatItem:");
+                if ([c respondsToSelector:fa]) {
+                    id act = ((id (*)(id, SEL, id))objc_msgSend)(c, fa, item);
+                    if ([act isKindOfClass:[UIAction class]] && [act respondsToSelector:NSSelectorFromString(@"handler")]) {
+                        void (^h)(UIAction *) = [act valueForKey:@"handler"];
+                        if (h) { h(act); return; }
+                    }
+                }
+                SEL fs = NSSelectorFromString(@"actionManager:forwardChatItems:");
+                if ([c respondsToSelector:fs]) ((void (*)(id, SEL, id, id))objc_msgSend)(c, fs, nil, @[item]);
+            } @catch (__unused id e) {}
+        }]];
+    }
     if (Opt(@"save")) [extra addObject:[UIAction actionWithTitle:@"Save Message" image:[UIImage systemImageNamed:@"bookmark"] identifier:nil handler:^(__unused UIAction *a) { SaveMessage(item); }]];
     if (Opt(@"remind")) [extra addObject:[UIAction actionWithTitle:@"Remind Me" image:[UIImage systemImageNamed:@"bell"] identifier:nil handler:^(__unused UIAction *a) { RemindMessage(item); }]];
     UIMenu *grp = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:extra];
@@ -4976,7 +4998,8 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"mood", @"Mood Detection", @"face.smiling.fill", UIColor.systemYellowColor, @"A small mood pill under their name (😊 Happy, 😐 Neutral, 😢 Upset…) from their latest messages, worked out on your phone."],
              @[@"spell", @"Spelling Fix", @"textformat.abc.dottedunderline", UIColor.systemBlueColor, @"While you type, a glass \"Fix typos\" chip shows up above the message box when something's misspelled. Works on your phone, nothing is sent anywhere."],
              @[@"save", @"Saved Messages", @"bookmark.fill", UIColor.systemOrangeColor, @"Hold a message → Save Message. Find them all here."],
-             @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."]];
+             @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."],
+             @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
@@ -5422,7 +5445,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.4.3 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.4.4 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
