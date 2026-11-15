@@ -4407,6 +4407,7 @@ static void Toast(NSString *msg, NSString *icon) {
     [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0 options:0 animations:^{ t.transform = CGAffineTransformIdentity; } completion:^(__unused BOOL f) {
         [UIView animateWithDuration:0.35 delay:1.4 options:0 animations:^{ t.transform = CGAffineTransformMakeTranslation(0, -80); } completion:^(__unused BOOL f2) { [t removeFromSuperview]; }]; }];
 }
+#include "Unsent.h"   // 1.5 (needs Toast; used by the settings screen below)
 static void SaveMessage(id item) {
     NSMutableArray *a = [SavedMsgs() mutableCopy];
     [a insertObject:MsgInfo(item) atIndex:0];
@@ -5620,7 +5621,6 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
 #include "MsgViewer.h"
 #include "MsgAudio.h"
 #include "VidVoice.h"
-#include "Unsent.h"
 #include "M26Contact.h"
 #include "../shared/NanoSettings.h"
 #include "M26Settings.h"
