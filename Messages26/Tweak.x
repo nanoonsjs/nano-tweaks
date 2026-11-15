@@ -1,4 +1,5 @@
-// Messages26 1.5.3 - made by nano
+// Messages26 1.6 - made by nano
+// 1.6: Voice Recorder: tap the mic, record in high quality, preview (play / scrub), send or X
 // 1.5.3: Video as Voice in high quality (48 kHz stereo)
 // 1.5.2: installing restarts the Messages background service so Keep Unsent Messages loads right away
 // 1.5.1: Keep Unsent: switch reaches the background part through a file, imagent filter by bundle too, a log (Unsent Messages → top right)
@@ -396,6 +397,7 @@ static void OpenStripAppNamed(NSString *name) {
     });
 }
 static void VidVoicePick(void);   // VidVoice.h
+static void RecAttach(UIView *entry);   // AudioRec.h
 static BOOL Opt(NSString *k);
 static UIViewController *VVChat(void);   // VidVoice.h
 // 1.4.8: an app (Apple Cash, Audio...) still open under the field froze Messages when Camera was picked:
@@ -1032,6 +1034,7 @@ static void EntryLayout(UIView *self, SEL _cmd) {
     origEntryLayout(self, _cmd);
     if (!gOn && ![self viewWithTag:PLUS_TAG]) return;
     @try { StyleEntry(self); } @catch (__unused id e) {}
+    @try { RecAttach(self); } @catch (__unused id e) {}
 }
 
 #pragma mark - conversation top bar
@@ -5093,6 +5096,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."],
              @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."],
              @[@"keepunsent", @"Keep Unsent Messages", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"When someone unsends a message, you still see what it said under \"unsent a message\". Photos and videos they unsend are kept too (open them from here)."],
+             @[@"newaudio", @"Voice Recorder", @"mic.fill", UIColor.systemRedColor, @"Tap the mic instead of holding it: record in high quality, play it back, then send it or tap X to delete it."],
              @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"\"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
@@ -5554,7 +5558,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.5.3 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.6 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -5625,6 +5629,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
 #include "MsgViewer.h"
 #include "MsgAudio.h"
 #include "VidVoice.h"
+#include "AudioRec.h"
 #include "M26Contact.h"
 #include "../shared/NanoSettings.h"
 #include "M26Settings.h"
@@ -5659,6 +5664,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         @try { HookThemes(); } @catch (__unused id ex) {}
         @try { HookDetailsTable(); } @catch (__unused id ex) {}
         @try { StartVidVoice(); } @catch (__unused id ex) {}
+        @try { StartAudioRec(); } @catch (__unused id ex) {}
         @try { StartUnsent(); } @catch (__unused id ex) {}
         { Class CC = NSClassFromString(@"CKChatController"); SEL mm = NSSelectorFromString(@"_menuForChatItem:");
           if (CC && class_getInstanceMethod(CC, mm)) MSHookMessageEx(CC, mm, (IMP)MsgMenu, (IMP *)&origMsgMenu);
