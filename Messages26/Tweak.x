@@ -1,4 +1,5 @@
-// Messages26 1.6.2 - made by nano
+// Messages26 1.7 - made by nano
+// 1.7: Conversation Insights (swipe up on the search pill)
 // 1.6.2: the keyboard goes away when the recorder opens (it stayed on top)
 // 1.6.1: Voice Recorder is a new panel replacing Apple's Audio app (+ menu Audio and the mic open it)
 // 1.6: Voice Recorder: tap the mic, record in high quality, preview (play / scrub), send or X
@@ -1680,6 +1681,7 @@ static void PaintCapsule(UIButton *b, BOOL dark) {
     RimFit(b, dark);
 }
 __attribute__((unused)) static UIBarButtonItem *GearItem(void);
+#include "InsightsUI.h"   // 1.7
 static void StyleSearchPill(UIWindow *w) {
     if (!w) return;
     UIButton *pill = (UIButton *)[w viewWithTag:SEARCH_TAG], *comp = (UIButton *)[w viewWithTag:SCOMPOSE_TAG];
@@ -1724,6 +1726,7 @@ static void StyleSearchPill(UIWindow *w) {
         [pill addSubview:tf];
         pill.alpha = 0; [w addSubview:pill];
     }
+    InsAttach(pill);
     if (!comp) {
         comp = GlassCapsule(SCOMPOSE_TAG, @selector(composeTap:), @selector(down:));
         comp.alpha = 0; [w addSubview:comp];
@@ -5100,6 +5103,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."],
              @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."],
              @[@"keepunsent", @"Keep Unsent Messages", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"When someone unsends a message, you still see what it said under \"unsent a message\". Photos and videos they unsend are kept too (open them from here)."],
+             @[@"insights", @"Conversation Insights", @"chart.bar.xaxis", UIColor.systemIndigoColor, @"Swipe up on the search pill: total messages, your top emojis and words, busiest days, photos, videos, voice messages, and who you text most. Counted on your iPhone."],
              @[@"newaudio", @"Voice Recorder", @"mic.fill", UIColor.systemRedColor, @"Audio (+ menu) and the mic open a new recorder: tap to record in high quality, play it back, then send it or tap X to start over."],
              @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"\"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."]];
 }
@@ -5562,7 +5566,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.6.2 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.7 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

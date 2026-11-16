@@ -11,7 +11,8 @@ Messages26_FRAMEWORKS = UIKit QuartzCore PhotosUI Photos QuickLook LocalAuthenti
 Messages26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 
 # Keep Unsent Messages: saves a message in imagent right before an unsend wipes it
-M26Keeper_FILES = Keeper.x
+M26Keeper_FILES = Keeper.x Insights.m
+M26Keeper_LIBRARIES = sqlite3
 M26Keeper_FRAMEWORKS = Foundation
 M26Keeper_CFLAGS = -fobjc-arc -Wno-error
 
