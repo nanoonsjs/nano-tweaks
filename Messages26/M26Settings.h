@@ -355,12 +355,22 @@ static Class M26PreviewClass(void) {
 @interface M26InsDemo : UIView
 @end
 @implementation M26InsDemo {
-    UIView *_screen, *_pill, *_island, *_content, *_dot;
+    UIView *_screen, *_pill, *_island, *_content, *_dot, *_drop, *_neck;
     NSUInteger _gen;
     CGRect _pillR, _bigR;
 }
 static UIView *M26IBox(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
-    UIView *v = [[UIView alloc] initWithFrame:r]; v.backgroundColor = c; v.layer.cornerRadius = rad; v.layer.cornerCurve = kCACornerCurveContinuous; [in addSubview:v]; return v;
+    UIView *v = [[UIView alloc] initWithFrame:r]; v.backgroundColor = c; v.layer.cornerRadius = rad;
+    // capsules and circles stay round (a continuous curve at half the height turns them into lenses)
+    v.layer.cornerCurve = rad >= MIN(r.size.width, r.size.height) / 2 - 0.5 ? kCACornerCurveCircular : kCACornerCurveContinuous;
+    [in addSubview:v]; return v;
+}
+// the search pill's glass: dark, with a bright rim along the top (like the real one)
+static void M26IGlass(UIView *v) {
+    v.layer.borderWidth = 0.6; v.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
+    CAGradientLayer *hi = [CAGradientLayer layer]; hi.frame = v.bounds; hi.cornerRadius = v.layer.cornerRadius;
+    hi.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.16].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+    hi.endPoint = CGPointMake(0.5, 0.45); [v.layer insertSublayer:hi atIndex:0];
 }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
@@ -379,14 +389,24 @@ static UIView *M26IBox(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
         M26IBox(_screen, CGRectMake(32, y + 2, 34 + (i * 7) % 20, 5), 2.5, [UIColor colorWithWhite:1 alpha:0.75]);
         M26IBox(_screen, CGRectMake(32, y + 10, 48 - (i * 5) % 16, 4), 2, [UIColor colorWithWhite:1 alpha:0.3]);
     }
-    // the search pill and compose
-    _pillR = CGRectMake(8, sh - 30, sw - 40, 20);
-    _pill = M26IBox(_screen, _pillR, 10, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
-    _pill.layer.borderWidth = 0.6; _pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
-    UIImageView *mag = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:8 weight:UIImageSymbolWeightBold]]];
-    mag.tintColor = [UIColor colorWithWhite:1 alpha:0.55]; mag.frame = CGRectMake(7, 5, 10, 10); [_pill addSubview:mag];
-    [self label:@"Search" in:_pill frame:CGRectMake(19, 3, 40, 14) size:8 weight:UIFontWeightRegular].textColor = [UIColor colorWithWhite:1 alpha:0.55];
-    M26IBox(_screen, CGRectMake(sw - 28, sh - 30, 20, 20), 10, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
+    // the search pill and the compose button, like the real ones
+    _pillR = CGRectMake(9, sh - 31, sw - 18 - 27, 21);
+    _pill = M26IBox(_screen, _pillR, _pillR.size.height / 2, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
+    M26IGlass(_pill);
+    UIImageView *mag = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:8 weight:UIImageSymbolWeightSemibold]]];
+    mag.tintColor = [UIColor colorWithWhite:1 alpha:0.6]; mag.contentMode = UIViewContentModeCenter; mag.frame = CGRectMake(5, 0, 12, 21); [_pill addSubview:mag];
+    UILabel *sl = [self label:@"Search" in:_pill frame:CGRectMake(18, 0, 40, 21) size:8.5 weight:UIFontWeightRegular]; sl.textColor = [UIColor colorWithWhite:1 alpha:0.55];
+    UIImageView *mic = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"mic" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:8 weight:UIImageSymbolWeightRegular]]];
+    mic.tintColor = [UIColor colorWithWhite:1 alpha:0.8]; mic.contentMode = UIViewContentModeCenter; mic.frame = CGRectMake(_pillR.size.width - 16, 0, 12, 21); [_pill addSubview:mic];
+    UIView *comp = M26IBox(_screen, CGRectMake(sw - 9 - 21, sh - 31, 21, 21), 10.5, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
+    M26IGlass(comp);
+    UIImageView *pen = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"square.and.pencil" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:8.5 weight:UIImageSymbolWeightSemibold]]];
+    pen.tintColor = UIColor.whiteColor; pen.contentMode = UIViewContentModeCenter; pen.frame = comp.bounds; [comp addSubview:pen];
+    // the liquid drop (neck + ball) that pulls out of the pill
+    _neck = M26IBox(_screen, CGRectZero, 0, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
+    _drop = M26IBox(_screen, CGRectMake(0, 0, 14, 14), 7, [UIColor colorWithRed:0.07 green:0.07 blue:0.075 alpha:1]);
+    _drop.layer.borderWidth = 0.6; _drop.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.2].CGColor;
+    [_screen bringSubviewToFront:_pill];
     // the island (hidden until it opens)
     _bigR = CGRectMake(4, 18, sw - 8, sh - 18 - 6);
     _island = M26IBox(_screen, _pillR, 10, [UIColor colorWithWhite:0.06 alpha:1]);
@@ -428,38 +448,60 @@ static UIView *M26IBox(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
         pill.alpha = 1; pill.transform = CGAffineTransformIdentity;
         dot.center = CGPointMake(CGRectGetMidX(P), CGRectGetMidY(P) + 6); dot.alpha = 0; dot.transform = CGAffineTransformIdentity;
     }];
-    // a finger comes down on the pill and swipes up: the pill stretches with it
-    [UIView animateWithDuration:0.25 delay:0.5 options:0 animations:^{ dot.alpha = 1; dot.center = CGPointMake(CGRectGetMidX(P), CGRectGetMidY(P)); dot.transform = CGAffineTransformMakeScale(0.85, 0.85); } completion:nil];
+    UIView *drop = _drop, *neck = _neck;
+    CGFloat dx = CGRectGetMidX(P) - 6, top = CGRectGetMinY(P);
+    [UIView performWithoutAnimation:^{
+        drop.alpha = 0; drop.bounds = CGRectMake(0, 0, 8, 8); drop.layer.cornerRadius = 4; drop.center = CGPointMake(dx, top + 2);
+        neck.alpha = 0; neck.frame = CGRectMake(dx - 4, top, 8, 2); neck.layer.cornerRadius = 0;
+    }];
+    // a finger comes down on the pill and pulls up: a drop of the pill's glass stretches out on a neck
+    [UIView animateWithDuration:0.25 delay:0.5 options:0 animations:^{ dot.alpha = 1; dot.center = CGPointMake(dx, CGRectGetMidY(P)); dot.transform = CGAffineTransformMakeScale(0.85, 0.85); } completion:nil];
     [self after:0.85 gen:g do:^{
-        [UIView animateWithDuration:0.32 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
-            dot.center = CGPointMake(CGRectGetMidX(P), CGRectGetMidY(P) - 34);
-            pill.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.97, 1.35), CGAffineTransformMakeTranslation(0, -8));
+        drop.alpha = 1; neck.alpha = 1;
+        [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.5 options:0 animations:^{
+            dot.center = CGPointMake(dx, top - 26);
+            drop.bounds = CGRectMake(0, 0, 16, 17); drop.layer.cornerRadius = 8; drop.center = CGPointMake(dx, top - 22);
+            neck.frame = CGRectMake(dx - 2.5, top - 16, 5, 17); neck.layer.cornerRadius = 2.5;
         } completion:nil];
     }];
-    // let go: the island grows out of the pill on one spring
-    [self after:1.2 gen:g do:^{
+    // the neck snaps and the island grows out of the drop
+    [self after:1.45 gen:g do:^{
         [UIView animateWithDuration:0.2 animations:^{ dot.alpha = 0; }];
-        [UIView performWithoutAnimation:^{ isl.frame = CGRectOffset(CGRectInset(P, 0, -3), 0, -8); isl.alpha = 1; pill.alpha = 0; pill.transform = CGAffineTransformIdentity; }];
-        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.35 options:0 animations:^{
-            isl.frame = B; isl.layer.cornerRadius = 16;
-            ct.transform = CGAffineTransformIdentity; ct.center = CGPointMake(B.size.width / 2, B.size.height / 2);
-        } completion:nil];
-        [UIView animateWithDuration:0.18 delay:0.04 options:0 animations:^{ ct.alpha = 1; } completion:nil];
+        [UIView animateWithDuration:0.12 animations:^{ neck.frame = CGRectMake(dx - 1, top - 3, 2, 3); neck.alpha = 0; }];
+        CGRect c = [drop convertRect:drop.bounds toView:self->_screen];
+        [UIView performWithoutAnimation:^{ isl.frame = c; isl.layer.cornerRadius = c.size.width / 2; isl.alpha = 1; drop.alpha = 0; ct.center = CGPointMake(c.size.width / 2, c.size.height / 2); }];
+        CGRect tall = CGRectMake(CGRectGetMidX(c) - 10, CGRectGetMaxY(c) - 44, 20, 44);
+        [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ isl.frame = tall; isl.layer.cornerRadius = 10; ct.center = CGPointMake(10, 22); } completion:^(__unused BOOL f) {
+            [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.8 options:0 animations:^{
+                isl.frame = B; isl.layer.cornerRadius = 16;
+                ct.transform = CGAffineTransformIdentity; ct.center = CGPointMake(B.size.width / 2, B.size.height / 2);
+            } completion:nil];
+        }];
+        [UIView animateWithDuration:0.18 delay:0.07 options:0 animations:^{ ct.alpha = 1; } completion:nil];
+        [self after:0.3 gen:g do:^{ pill.alpha = 0; }];
     }];
-    // a moment later it closes like the Dynamic Island: top first, then the sides, and lands with a squish
-    [self after:3.6 gen:g do:^{
-        CGRect mid = CGRectMake(B.origin.x + 4, CGRectGetMinY(P) - 46, B.size.width - 8, 46 + P.size.height);
+    // a moment later it closes like the Dynamic Island, into a drop above the pill that's sucked back in
+    [self after:3.8 gen:g do:^{
+        CGRect dr = CGRectMake(dx - 8, top - 30, 16, 16);
+        CGRect mid = CGRectMake(B.origin.x + 4, CGRectGetMinY(dr) - 40, B.size.width - 8, 56);
         [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
             isl.frame = mid; isl.layer.cornerRadius = 14; ct.alpha = 0; ct.transform = CGAffineTransformMakeScale(0.5, 0.5); ct.center = CGPointMake(mid.size.width / 2, mid.size.height / 2);
         } completion:^(__unused BOOL f) {
-            [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ isl.frame = P; isl.layer.cornerRadius = P.size.height / 2; } completion:^(__unused BOOL f2) {
+            [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ isl.frame = dr; isl.layer.cornerRadius = 8; } completion:^(__unused BOOL f2) {
                 pill.alpha = 1; isl.alpha = 0;
-                pill.transform = CGAffineTransformMakeScale(1.07, 0.84);
-                [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.42 initialSpringVelocity:0.6 options:0 animations:^{ pill.transform = CGAffineTransformIdentity; } completion:nil];
+                [UIView performWithoutAnimation:^{ drop.alpha = 1; drop.bounds = CGRectMake(0, 0, 16, 16); drop.layer.cornerRadius = 8; drop.center = CGPointMake(CGRectGetMidX(dr), CGRectGetMidY(dr)); neck.alpha = 1; neck.frame = CGRectMake(dx - 2.5, CGRectGetMidY(dr), 5, top - CGRectGetMidY(dr)); }];
+                [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+                    drop.bounds = CGRectMake(0, 0, 6, 6); drop.layer.cornerRadius = 3; drop.center = CGPointMake(dx, top + 2);
+                    neck.frame = CGRectMake(dx - 4, top, 8, 2);
+                } completion:^(__unused BOOL f3) {
+                    drop.alpha = 0; neck.alpha = 0;
+                    pill.transform = CGAffineTransformMakeScale(1.07, 0.84);
+                    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.42 initialSpringVelocity:0.6 options:0 animations:^{ pill.transform = CGAffineTransformIdentity; } completion:nil];
+                }];
             }];
         }];
     }];
-    [self after:5.6 gen:g do:^{ [self loop:g]; }];
+    [self after:6.2 gen:g do:^{ [self loop:g]; }];
 }
 @end
 static void M26InsDemoLayout(UITableViewCell *self, SEL _cmd) {

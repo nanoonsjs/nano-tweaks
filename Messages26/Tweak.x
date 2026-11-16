@@ -1,4 +1,5 @@
-// Messages26 1.7.2 - made by nano
+// Messages26 1.7.3 - made by nano
+// 1.7.3: Insights opens with MusicPill's liquid drop (same physics) and closes back into a drop sucked into the pill; settings button hidden over it; demo pill / compose look right and show the drop
 // 1.7.2: Insights opens like MusicPill's Dynamic Pill (stretch, island spring, Dynamic Island close + bounce); its switch and a live demo are in Settings → Messages26
 // 1.7.1: Insights grows out of the search pill (same glass), everything else fades away
 // 1.7: Conversation Insights (swipe up on the search pill)
@@ -5282,7 +5283,7 @@ static void StyleGear(UIWindow *w) {
     UIViewController *vc = gOn ? ListVC(w.rootViewController, 0) : nil;
     UINavigationController *nc = vc.navigationController;
     UISearchController *sc = vc.navigationItem.searchController;
-    BOOL show = vc && (!nc || nc.topViewController == vc) && !vc.presentedViewController && !vc.isEditing && !gEntry.window && !sc.active && !nc.navigationBarHidden;
+    BOOL show = vc && (!nc || nc.topViewController == vc) && !vc.presentedViewController && !vc.isEditing && !gEntry.window && !sc.active && !nc.navigationBarHidden && !gIns.superview;   // 1.7.3: not over Insights
     if (!b) {
         b = [UIButton buttonWithType:UIButtonTypeCustom]; b.tag = FGEAR_TAG;
         [b setImage:[UIImage systemImageNamed:@"line.3.horizontal.decrease" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
@@ -5570,7 +5571,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.7.2 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.7.3 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
