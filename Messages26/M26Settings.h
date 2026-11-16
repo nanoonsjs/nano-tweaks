@@ -359,58 +359,58 @@ static Class M26PreviewClass(void) {
     NSUInteger _gen;
     CGRect _pillR, _bigR;
 }
-static UIView *M26Box(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
+static UIView *M26IBox(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
     UIView *v = [[UIView alloc] initWithFrame:r]; v.backgroundColor = c; v.layer.cornerRadius = rad; v.layer.cornerCurve = kCACornerCurveContinuous; [in addSubview:v]; return v;
 }
 - (instancetype)initWithFrame:(CGRect)f {
     if (!(self = [super initWithFrame:f])) return nil;
     self.userInteractionEnabled = NO;
     CGFloat W = f.size.width, H = f.size.height;
-    UIView *body = M26Box(self, self.bounds, 22, [UIColor colorWithWhite:0.1 alpha:1]);
+    UIView *body = M26IBox(self, self.bounds, 22, [UIColor colorWithWhite:0.1 alpha:1]);
     body.layer.borderWidth = 2; body.layer.borderColor = [UIColor colorWithWhite:0.35 alpha:1].CGColor;
-    _screen = M26Box(body, CGRectInset(body.bounds, 4, 4), 18, UIColor.blackColor); _screen.clipsToBounds = YES;
+    _screen = M26IBox(body, CGRectInset(body.bounds, 4, 4), 18, UIColor.blackColor); _screen.clipsToBounds = YES;
     CGFloat sw = _screen.bounds.size.width, sh = _screen.bounds.size.height;
-    M26Box(_screen, CGRectMake((sw - 30) / 2, 5, 30, 8), 4, [UIColor colorWithWhite:0 alpha:1]).layer.borderWidth = 0;
+    M26IBox(_screen, CGRectMake((sw - 30) / 2, 5, 30, 8), 4, [UIColor colorWithWhite:0 alpha:1]).layer.borderWidth = 0;
     [self label:@"Messages" in:_screen frame:CGRectMake(9, 18, sw, 14) size:11 weight:UIFontWeightBold];
     // the chat list
     for (int i = 0; i < 6; i++) {
         CGFloat y = 40 + i * 27;
-        M26Box(_screen, CGRectMake(9, y, 18, 18), 9, [UIColor colorWithHue:0.1 + i * 0.13 saturation:0.45 brightness:0.8 alpha:1]);
-        M26Box(_screen, CGRectMake(32, y + 2, 34 + (i * 7) % 20, 5), 2.5, [UIColor colorWithWhite:1 alpha:0.75]);
-        M26Box(_screen, CGRectMake(32, y + 10, 48 - (i * 5) % 16, 4), 2, [UIColor colorWithWhite:1 alpha:0.3]);
+        M26IBox(_screen, CGRectMake(9, y, 18, 18), 9, [UIColor colorWithHue:0.1 + i * 0.13 saturation:0.45 brightness:0.8 alpha:1]);
+        M26IBox(_screen, CGRectMake(32, y + 2, 34 + (i * 7) % 20, 5), 2.5, [UIColor colorWithWhite:1 alpha:0.75]);
+        M26IBox(_screen, CGRectMake(32, y + 10, 48 - (i * 5) % 16, 4), 2, [UIColor colorWithWhite:1 alpha:0.3]);
     }
     // the search pill and compose
     _pillR = CGRectMake(8, sh - 30, sw - 40, 20);
-    _pill = M26Box(_screen, _pillR, 10, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
+    _pill = M26IBox(_screen, _pillR, 10, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
     _pill.layer.borderWidth = 0.6; _pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
     UIImageView *mag = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:8 weight:UIImageSymbolWeightBold]]];
     mag.tintColor = [UIColor colorWithWhite:1 alpha:0.55]; mag.frame = CGRectMake(7, 5, 10, 10); [_pill addSubview:mag];
     [self label:@"Search" in:_pill frame:CGRectMake(19, 3, 40, 14) size:8 weight:UIFontWeightRegular].textColor = [UIColor colorWithWhite:1 alpha:0.55];
-    M26Box(_screen, CGRectMake(sw - 28, sh - 30, 20, 20), 10, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
+    M26IBox(_screen, CGRectMake(sw - 28, sh - 30, 20, 20), 10, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
     // the island (hidden until it opens)
     _bigR = CGRectMake(4, 18, sw - 8, sh - 18 - 6);
-    _island = M26Box(_screen, _pillR, 10, [UIColor colorWithWhite:0.06 alpha:1]);
+    _island = M26IBox(_screen, _pillR, 10, [UIColor colorWithWhite:0.06 alpha:1]);
     _island.layer.borderWidth = 0.6; _island.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor; _island.clipsToBounds = YES; _island.alpha = 0;
     _content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, _bigR.size.width, _bigR.size.height)];
     [_island addSubview:_content];
     CGFloat cw = _bigR.size.width;
     [self label:@"Insights" in:_content frame:CGRectMake(9, 8, cw, 16) size:13 weight:UIFontWeightHeavy];
     [self label:@"12,480" in:_content frame:CGRectMake(9, 28, cw, 18) size:15 weight:UIFontWeightBold];
-    UIView *bar = M26Box(_content, CGRectMake(9, 50, cw - 18, 4), 2, [UIColor colorWithWhite:1 alpha:0.15]);
-    M26Box(bar, CGRectMake(0, 0, (cw - 18) * 0.46, 4), 2, UIColor.systemBlueColor);
+    UIView *bar = M26IBox(_content, CGRectMake(9, 50, cw - 18, 4), 2, [UIColor colorWithWhite:1 alpha:0.15]);
+    M26IBox(bar, CGRectMake(0, 0, (cw - 18) * 0.46, 4), 2, UIColor.systemBlueColor);
     NSArray *tc = @[UIColor.systemOrangeColor, UIColor.systemPinkColor, UIColor.systemRedColor, UIColor.systemPurpleColor];
     CGFloat tw = (cw - 18 - 5) / 2;
     for (int i = 0; i < 4; i++) {
-        UIView *tile = M26Box(_content, CGRectMake(9 + (i % 2) * (tw + 5), 60 + (i / 2) * 25, tw, 21), 6, [UIColor colorWithWhite:1 alpha:0.08]);
-        M26Box(tile, CGRectMake(4, 5, 11, 11), 3, tc[i]);
-        M26Box(tile, CGRectMake(19, 8, 16 + i * 3, 5), 2.5, [UIColor colorWithWhite:1 alpha:0.7]);
+        UIView *tile = M26IBox(_content, CGRectMake(9 + (i % 2) * (tw + 5), 60 + (i / 2) * 25, tw, 21), 6, [UIColor colorWithWhite:1 alpha:0.08]);
+        M26IBox(tile, CGRectMake(4, 5, 11, 11), 3, tc[i]);
+        M26IBox(tile, CGRectMake(19, 8, 16 + i * 3, 5), 2.5, [UIColor colorWithWhite:1 alpha:0.7]);
     }
-    UIView *wk = M26Box(_content, CGRectMake(9, 114, cw - 18, 50), 7, [UIColor colorWithWhite:1 alpha:0.08]);
+    UIView *wk = M26IBox(_content, CGRectMake(9, 114, cw - 18, 50), 7, [UIColor colorWithWhite:1 alpha:0.08]);
     CGFloat hs[] = {0.4, 0.55, 0.35, 0.7, 1, 0.8, 0.5};
     CGFloat bw = (wk.bounds.size.width - 12) / 7;
-    for (int i = 0; i < 7; i++) M26Box(wk, CGRectMake(6 + i * bw + bw * 0.22, 44 - 36 * hs[i], bw * 0.56, 36 * hs[i]), 2, i == 4 ? UIColor.systemBlueColor : [UIColor colorWithWhite:1 alpha:0.22]);
+    for (int i = 0; i < 7; i++) M26IBox(wk, CGRectMake(6 + i * bw + bw * 0.22, 44 - 36 * hs[i], bw * 0.56, 36 * hs[i]), 2, i == 4 ? UIColor.systemBlueColor : [UIColor colorWithWhite:1 alpha:0.22]);
     UILabel *em = [self label:@"😂 🔥 ❤️ 💀 😭" in:_content frame:CGRectMake(9, 170, cw, 16) size:11 weight:UIFontWeightRegular]; (void)em;
-    _dot = M26Box(_screen, CGRectMake(0, 0, 16, 16), 8, [UIColor colorWithWhite:1 alpha:0.75]);
+    _dot = M26IBox(_screen, CGRectMake(0, 0, 16, 16), 8, [UIColor colorWithWhite:1 alpha:0.75]);
     _dot.layer.borderWidth = 1.5; _dot.layer.borderColor = [UIColor colorWithWhite:0.6 alpha:0.9].CGColor; _dot.alpha = 0;
     return self;
 }
