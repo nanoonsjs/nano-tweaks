@@ -1,4 +1,5 @@
-// Messages26 1.8.3 - made by nano
+// Messages26 1.8.4 - made by nano
+// 1.8.4: speed chip only while playing (above the time); Confirm Before Calling on contact pages too; Mark All as Read removed
 // 1.8.3: Voice Message Speed (1x / 1.5x / 2x), Confirm Before Calling, Mark All as Read (hold the top-right button), new File as Voice icon, Pro thank-you is a support message
 // 1.8.2: Pro is $5.99; Video as Voice is Pro; new File as Voice (Pro): an mp3 / m4a / wav... sent as a voice message
 // 1.8.1: Pro's secret word comes from the build, not the public code (1.8 unlocks are moved over after a Gumroad check)
@@ -2214,6 +2215,42 @@ static CGFloat (*origHeadH)(id, SEL, id, NSInteger);
 static CGFloat DetHeadH(id self, SEL _cmd, UITableView *tv, NSInteger sct) { return HideRowSection(sct) ? 0.01 : origHeadH(self, _cmd, tv, sct); }
 static NSString *(*origFootT)(id, SEL, id, NSInteger);
 static NSString *DetFootT(id self, SEL _cmd, UITableView *tv, NSInteger sct) { if (HideRowSection(sct)) return nil; NSString *t = origFootT(self, _cmd, tv, sct); return [t hasPrefix:@"Content shared"] ? nil : t; }
+// 1.8.4: Confirm Before Calling on the contact page too (its call / video buttons)
+static __weak UIView *gCallTile, *gVideoTile;
+static UIViewController *DetailsVC(UIViewController *vc, int depth);
+static BOOL ConfirmCall(UIViewController *ctl, BOOL video, void (^go)(void)) {
+    if (!Opt(@"confirmcall")) return NO;
+    NSString *who = nil; @try { who = [ctl valueForKeyPath:@"conversation.displayName"]; } @catch (__unused id e) {}
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"Call %@?", who.length ? who : @"them"] message:video ? @"FaceTime Video" : @"Phone call" preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Call" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *x) { go(); }]];
+    UIViewController *top = ctl; while (top.presentedViewController && !top.presentedViewController.isBeingDismissed) top = top.presentedViewController;
+    [top presentViewController:ac animated:YES completion:nil];
+    return YES;
+}
+static void (*origDetPhone)(id, SEL, id), (*origDetVideo)(id, SEL, id), (*origDetHeader)(id, SEL, id), (*origDetGPhone)(id, SEL, id), (*origDetGVideo)(id, SEL, id);
+static void DetPhone(id self, SEL _cmd, id a) { if (!ConfirmCall(self, NO, ^{ origDetPhone(self, _cmd, a); })) origDetPhone(self, _cmd, a); }
+static void DetVideo(id self, SEL _cmd, id a) { if (!ConfirmCall(self, YES, ^{ origDetVideo(self, _cmd, a); })) origDetVideo(self, _cmd, a); }
+static void DetGPhone(id self, SEL _cmd, id a) { if (!ConfirmCall(self, NO, ^{ origDetGPhone(self, _cmd, a); })) origDetGPhone(self, _cmd, a); }
+static void DetGVideo(id self, SEL _cmd, id a) { if (!ConfirmCall(self, YES, ^{ origDetGVideo(self, _cmd, a); })) origDetGVideo(self, _cmd, a); }
+static void DetHeader(id self, SEL _cmd, id a) {
+    UIView *b = [a isKindOfClass:[UIView class]] ? a : nil;
+    BOOL call = b && gCallTile && ([b isDescendantOfView:gCallTile] || [gCallTile isDescendantOfView:b]);
+    BOOL video = b && gVideoTile && ([b isDescendantOfView:gVideoTile] || [gVideoTile isDescendantOfView:b]);
+    if ((call || video) && ConfirmCall(self, video, ^{ origDetHeader(self, _cmd, a); })) return;
+    origDetHeader(self, _cmd, a);
+}
+static void HookConfirmDetails(void) {
+    Class D = NSClassFromString(@"CKDetailsController"); if (!D) return;
+    struct { const char *s; IMP n; IMP *o; } hs[] = {
+        {"contactsCellDidTapPhoneButton:", (IMP)DetPhone, (IMP *)&origDetPhone},
+        {"contactsCellDidTapFaceTimeVideoButton:", (IMP)DetVideo, (IMP *)&origDetVideo},
+        {"groupCellDidTapPhoneButton:", (IMP)DetGPhone, (IMP *)&origDetGPhone},
+        {"groupCellDidTapFaceTimeVideoButton:", (IMP)DetGVideo, (IMP *)&origDetGVideo},
+        {"headerViewControllerDidTapActionButton:", (IMP)DetHeader, (IMP *)&origDetHeader},
+    };
+    for (int i = 0; i < 5; i++) { SEL s = sel_registerName(hs[i].s); if (class_getInstanceMethod(D, s)) MSHookMessageEx(D, s, hs[i].n, hs[i].o); }
+}
 static void HookDetailsTable(void) {
     Class D = NSClassFromString(@"CKDetailsController");
     if (!D) return;
@@ -2392,6 +2429,7 @@ static void StyleDetails(UIWindow *w) {
         }
     } else if (tiles[@"info"] && ![ni.rightBarButtonItem.title isEqualToString:@"Edit"]) ni.rightBarButtonItem = GlassTextItem(@"Edit", [M26Details shared], @selector(edit:));
     gInfoTile = tiles[@"info"][@"tile"];
+    gCallTile = tiles[@"call"][@"tile"]; gVideoTile = tiles[@"video"][@"tile"];
     @try { ChatSearchTitle(vc); } @catch (__unused id e) {}
     { UIView *any = ((NSDictionary *)tiles.allValues.firstObject)[@"tile"];
       UIView *cell = any; while (cell && ![cell isKindOfClass:[UICollectionViewCell class]] && ![cell isKindOfClass:[UICollectionReusableView class]]) cell = cell.superview;
@@ -5125,8 +5163,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"newaudio", @"Voice Recorder", @"mic.fill", UIColor.systemRedColor, @"Audio (+ menu) and the mic open a new recorder: tap to record in high quality, play it back, then send it or tap X to start over."],
              @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"PRO · \"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."],
              @[@"vspeed", @"Voice Message Speed", @"gauge.with.dots.needle.67percent", UIColor.systemTealColor, @"A 1× / 1.5× / 2× button on voice messages. Tap it to change the speed (voices keep their pitch)."],
-             @[@"confirmcall", @"Confirm Before Calling", @"phone.fill.arrow.up.right", UIColor.systemGreenColor, @"FaceTime Audio / Video asks \"Call Camy?\" first, so a stray tap doesn't ring anyone."],
-             @[@"markall", @"Mark All as Read", @"envelope.open.fill", UIColor.systemBlueColor, @"Hold the button at the top right of your chat list → Mark All as Read."],
+             @[@"confirmcall", @"Confirm Before Calling", @"phone.fill.arrow.up.right", UIColor.systemGreenColor, @"Calling from a chat or a contact page asks \"Call Camy?\" first, so a stray tap doesn't ring anyone."],
              @[@"filevoice", @"File as Voice Message", @"music.note", UIColor.systemOrangeColor, @"PRO · \"File as Voice\" in the + menu: pick an audio file (mp3, m4a, wav...) from Files and it's sent as a voice message."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
@@ -5304,20 +5341,6 @@ __attribute__((unused)) static UIBarButtonItem *GearItem(void) {
 
 // Settings: a glass circle (filter icon) at the top right of the list, level with Edit
 #define FGEAR_TAG 0x4D32365B
-// 1.8.3: every unread chat read at once
-static void MarkAllRead(void) {
-    Class CL = NSClassFromString(@"CKConversationList"); SEL sh = NSSelectorFromString(@"sharedConversationList");
-    id list = [CL respondsToSelector:sh] ? ((id (*)(id, SEL))objc_msgSend)(CL, sh) : nil;
-    NSArray *convs = nil; @try { convs = [list valueForKey:@"conversations"]; } @catch (__unused id e) {}
-    NSUInteger n = 0;
-    for (id c in convs) {
-        NSUInteger u = 0; @try { u = [[c valueForKey:@"unreadCount"] unsignedIntegerValue]; } @catch (__unused id e) {}
-        if (!u || ![c respondsToSelector:@selector(markAllMessagesAsRead)]) continue;
-        @try { [c performSelector:@selector(markAllMessagesAsRead)]; n++; } @catch (__unused id e) {}
-    }
-    [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
-    Toast(n ? [NSString stringWithFormat:@"Marked %lu chat%@ as read", (unsigned long)n, n == 1 ? @"" : @"s"] : @"Everything's already read", @"envelope.open.fill");
-}
 static void StyleGear(UIWindow *w) {
     UIButton *b = (UIButton *)[w viewWithTag:FGEAR_TAG];
     UIViewController *vc = gOn ? ListVC(w.rootViewController, 0) : nil;
@@ -5333,12 +5356,6 @@ static void StyleGear(UIWindow *w) {
         [b addTarget:[M26Search shared] action:@selector(down:) forControlEvents:UIControlEventTouchDown];
         [b addTarget:[M26Search shared] action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchUpInside];
         b.alpha = 0; [w addSubview:b];
-    }
-    // 1.8.3: hold the button: Mark All as Read
-    BOOL wantMenu = Opt(@"markall");
-    if ((b.menu != nil) != wantMenu) {
-        b.showsMenuAsPrimaryAction = NO;
-        b.menu = wantMenu ? [UIMenu menuWithChildren:@[[UIAction actionWithTitle:@"Mark All as Read" image:[UIImage systemImageNamed:@"envelope.open"] identifier:nil handler:^(__unused UIAction *a) { MarkAllRead(); }]]] : nil;
     }
     CGFloat d = 50;
     UINavigationBar *nb = nc.navigationBar;
@@ -5617,7 +5634,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.8.3 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.8.4 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
@@ -5722,6 +5739,7 @@ static void MsgAuthCancel(CFNotificationCenterRef c, void *o, CFNotificationName
         MSHookMessageEx([UITextView class], @selector(setTextContainerInset:), (IMP)TVInset, (IMP *)&origTVInset);
         @try { HookThemes(); } @catch (__unused id ex) {}
         @try { HookDetailsTable(); } @catch (__unused id ex) {}
+        @try { HookConfirmDetails(); } @catch (__unused id ex) {}
         @try { StartVidVoice(); } @catch (__unused id ex) {}
         @try { StartAudioRec(); } @catch (__unused id ex) {}
         @try { StartUnsent(); } @catch (__unused id ex) {}

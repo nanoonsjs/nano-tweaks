@@ -156,8 +156,10 @@ static void AudioLayout(UIView *self, SEL _cmd) {
         if (play) { CGFloat d = 38; play.transform = CGAffineTransformMakeScale(d / MAX(1, play.bounds.size.width), d / MAX(1, play.bounds.size.height)); play.center = CGPointMake(L + 8 + d / 2, cy); }
         if (time) { [time sizeToFit]; time.font = [UIFont monospacedDigitSystemFontOfSize:16 weight:UIFontWeightMedium]; [time sizeToFit]; time.center = CGPointMake(W - R - 10 - time.bounds.size.width / 2, cy); }
         // 1.8.3: a little speed chip (1× / 1.5× / 2×) before the time
+        // 1.8.4: only while it plays, stacked above the time at the right
         M26SpeedChip *chip = (M26SpeedChip *)[self viewWithTag:SPEED_TAG];
-        if (Opt(@"vspeed") && time) {
+        BOOL playing = NO; @try { playing = [[self valueForKey:@"playing"] boolValue]; } @catch (__unused id e) {}
+        if (Opt(@"vspeed") && time && playing) {
             if (!chip) {
                 chip = [M26SpeedChip buttonWithType:UIButtonTypeCustom]; chip.tag = SPEED_TAG;
                 chip.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
@@ -168,11 +170,19 @@ static void AudioLayout(UIView *self, SEL _cmd) {
             UIColor *tc = time.textColor ?: UIColor.labelColor;
             [chip setTitleColor:tc forState:UIControlStateNormal];
             chip.backgroundColor = [tc colorWithAlphaComponent:0.18];
-            chip.bounds = CGRectMake(0, 0, 38, 22); chip.layer.cornerRadius = 11;
-            chip.center = CGPointMake(CGRectGetMinX(time.frame) - 8 - 19, cy);
-        } else [chip removeFromSuperview];
+            chip.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+            CGFloat cw = MAX(44, time.bounds.size.width * 0.82), chh = 26;
+            CGFloat rx = CGRectGetMaxX(time.frame);
+            chip.bounds = CGRectMake(0, 0, cw, chh); chip.layer.cornerRadius = chh / 2;
+            chip.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2];
+            [chip setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+            chip.center = CGPointMake(rx - time.bounds.size.width / 2, cy - 12);
+            time.center = CGPointMake(time.center.x, cy + 15);
+            time.alpha = 0.75;
+            if (chip.alpha < 1 && ![chip.layer animationForKey:@"opacity"]) { chip.alpha = 0; chip.transform = CGAffineTransformMakeScale(0.6, 0.6); [UIView animateWithDuration:0.35 delay:0 usingSpringWithDamping:0.7 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{ chip.alpha = 1; chip.transform = CGAffineTransformIdentity; } completion:nil]; }
+        } else { [chip removeFromSuperview]; if (time) time.alpha = 1; }
         if (wave && play && time) {
-            CGFloat x0 = CGRectGetMaxX(play.frame) + 14, x1 = (chip.superview ? CGRectGetMinX(chip.frame) : CGRectGetMinX(time.frame)) - 14;
+            CGFloat x0 = CGRectGetMaxX(play.frame) + 14, x1 = CGRectGetMinX(time.frame) - 14;
             if (x1 - x0 > 40) { wave.frame = CGRectMake(x0, cy - wave.bounds.size.height / 2, x1 - x0, wave.bounds.size.height); [wave setNeedsLayout]; [wave setNeedsDisplay]; }
         }
         // the speaker icon beside the bubble and "Raise to listen" under it go away
@@ -197,6 +207,13 @@ static void StartAudioBubbles(void) {
     if (A) {
         for (NSString *n in @[@"sizeThatFits:", @"sizeThatFits:textAlignmentInsets:", @"sizeThatFits:textAlignmentInsets:tailInsets:"]) MAHookSize(A, n);
         MSHookMessageEx(A, @selector(layoutSubviews), (IMP)AudioLayout, (IMP *)&origAudioLayout);
+    }
+    // the speed chip comes and goes with playing
+    Class AB = NSClassFromString(@"CKAudioBalloonView");
+    if (AB && class_getInstanceMethod(AB, @selector(setPlaying:))) {
+        static void (*origSetPlaying)(id, SEL, BOOL);
+        IMP rep = imp_implementationWithBlock(^(UIView *me, BOOL p) { origSetPlaying(me, @selector(setPlaying:), p); [me setNeedsLayout]; });
+        origSetPlaying = (void (*)(id, SEL, BOOL))method_setImplementation(class_getInstanceMethod(AB, @selector(setPlaying:)), rep);
     }
     Class IP = NSClassFromString(@"CKInternalAudioPlayer");
     if (IP && class_getInstanceMethod(IP, @selector(prepareToPlay))) MSHookMessageEx(IP, @selector(prepareToPlay), (IMP)IPPrepare, (IMP *)&origIPPrepare);
