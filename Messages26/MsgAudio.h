@@ -109,6 +109,6 @@ static void StartAudioBubbles(void) {
         for (NSString *n in @[@"sizeThatFits:", @"sizeThatFits:textAlignmentInsets:", @"sizeThatFits:textAlignmentInsets:tailInsets:"]) MAHookSize(A, n);
         MSHookMessageEx(A, @selector(layoutSubviews), (IMP)AudioLayout, (IMP *)&origAudioLayout);
     }
-    Class I = NSClassFromString(@"CKAudioMessageChatItem");
-    if (I) for (NSString *n in @[@"loadSizeThatFits:textAlignmentInsets:", @"loadSizeThatFits:textAlignmentInsets:fittingSize:", @"sizeThatFits:"]) MAHookSize(I, n);
+    Class AIC = NSClassFromString(@"CKAudioMessageChatItem");
+    if (AIC) for (NSString *n in @[@"loadSizeThatFits:textAlignmentInsets:", @"loadSizeThatFits:textAlignmentInsets:fittingSize:", @"sizeThatFits:"]) MAHookSize(AIC, n);
 }
