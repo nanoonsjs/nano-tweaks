@@ -1,4 +1,5 @@
-// Messages26 1.7 - made by nano
+// Messages26 1.7.1 - made by nano
+// 1.7.1: Insights grows out of the search pill (same glass), everything else fades away
 // 1.7: Conversation Insights (swipe up on the search pill)
 // 1.6.2: the keyboard goes away when the recorder opens (it stayed on top)
 // 1.6.1: Voice Recorder is a new panel replacing Apple's Audio app (+ menu Audio and the mic open it)
@@ -1768,6 +1769,7 @@ static void StyleSearchPill(UIWindow *w) {
     BOOL showComp = show && hasComp;
     for (UIView *v in @[pill, comp]) {
         BOOL on = v == pill ? show : showComp;
+        if (gIns.superview) continue;   // Insights is open: the pill is part of it (and stays under it)
         CGFloat a = on ? 1 : 0;
         v.userInteractionEnabled = on;
         if (fabs(v.alpha - a) > 0.01 && ![v.layer animationForKey:@"opacity"]) [UIView animateWithDuration:0.25 animations:^{ v.alpha = a; }];
@@ -5566,7 +5568,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.7 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.7.1 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

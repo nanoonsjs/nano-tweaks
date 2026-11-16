@@ -1,5 +1,5 @@
 // ===================== Messages26: Conversation Insights =====================
-// 1.7: swipe up on the search pill (conversation list) and Insights pulls up with your finger: messages, emojis,
+// 1.7: swipe up on the search pill (conversation list) and the pill grows into Insights with your finger: messages, emojis,
 // busiest days, photos / videos, voice messages, most-used words, and the people you text most (tap one for
 // that conversation). Counted on the phone by M26Keeper (Insights.m) in the Messages background service.
 // Included from Tweak.x after the search pill code.
@@ -48,54 +48,66 @@ static NSString *InsNum(long n) { NSNumberFormatter *f = [NSNumberFormatter new]
 #pragma mark - the sheet
 
 @interface M26Insights : UIView <UIGestureRecognizerDelegate>
-@property (nonatomic, strong) UIView *dim, *sheet, *grab;
-@property (nonatomic, strong) UIVisualEffectView *glass;
+@property (nonatomic, strong) UIView *sheet, *grab, *ghost;
 @property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) UIActivityIndicatorView *spin;
 @property (nonatomic, strong) UILabel *loading;
 @property (nonatomic, strong) NSDictionary *allData;
-@property (nonatomic) CGFloat openY, dragStart;
+@property (nonatomic, weak) UIView *pill;
+@property (nonatomic) CGFloat openY, progress;
 @property (nonatomic) BOOL dark;
 @end
 static __weak M26Insights *gIns;
 
+// 1.7.1: the search pill itself grows into Insights (like MusicPill): same glass, the rest of the screen fades away
 @implementation M26Insights
-- (instancetype)initWithFrame:(CGRect)f {
+- (CGRect)fullRect { return CGRectMake(8, self.openY, self.bounds.size.width - 16, self.bounds.size.height - self.openY - 8); }
+- (CGRect)pillRect {
+    UIView *p = self.pill;
+    if (p.window) return [p convertRect:p.bounds toView:self];
+    CGFloat W = self.bounds.size.width; return CGRectMake(20, self.bounds.size.height - 90, W - 100, 50);
+}
+- (instancetype)initWithFrame:(CGRect)f pill:(UIView *)pill {
     if (!(self = [super initWithFrame:f])) return nil;
+    self.pill = pill;
     self.dark = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight;
-    self.dim = [[UIView alloc] initWithFrame:self.bounds];
-    self.dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35]; self.dim.alpha = 0;
-    self.dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self.dim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(close)]];
-    [self addSubview:self.dim];
+    self.backgroundColor = UIColor.clearColor;
+    UIWindow *w = pill.window;
+    self.openY = MAX(50, (w ? w.safeAreaInsets.top : 47) + 6);
 
-    CGFloat top = MAX(54, self.safeAreaInsets.top + 10);
-    self.openY = top;
-    self.sheet = [[UIView alloc] initWithFrame:CGRectMake(0, top, f.size.width, f.size.height - top + 40)];
-    self.sheet.layer.shadowColor = UIColor.blackColor.CGColor; self.sheet.layer.shadowOpacity = 0.3; self.sheet.layer.shadowRadius = 24;
+    // the pill's own look: solid dark glass, bright rim
+    self.sheet = [UIView new];
+    self.sheet.backgroundColor = self.dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.97 alpha:0.97];
+    self.sheet.layer.cornerCurve = kCACornerCurveContinuous; self.sheet.clipsToBounds = YES;
+    self.sheet.layer.borderWidth = 0.75; self.sheet.layer.borderColor = [UIColor colorWithWhite:1 alpha:self.dark ? 0.14 : 0.6].CGColor;
     [self addSubview:self.sheet];
-    self.glass = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:self.dark ? UIBlurEffectStyleSystemChromeMaterialDark : UIBlurEffectStyleSystemChromeMaterialLight]];
-    self.glass.frame = self.sheet.bounds; self.glass.layer.cornerRadius = 36; self.glass.layer.cornerCurve = kCACornerCurveContinuous; self.glass.clipsToBounds = YES;
-    self.glass.layer.borderWidth = 0.75; self.glass.layer.borderColor = [UIColor colorWithWhite:1 alpha:self.dark ? 0.14 : 0.6].CGColor;
-    [self.sheet addSubview:self.glass];
 
-    self.grab = [[UIView alloc] initWithFrame:CGRectMake((f.size.width - 40) / 2, 8, 40, 5)];
+    // what the pill showed, fading as it grows
+    UIImageView *mag = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightMedium]]];
+    mag.tintColor = UIColor.secondaryLabelColor; mag.frame = CGRectMake(16, 0, 24, 50); mag.contentMode = UIViewContentModeCenter;
+    UILabel *st = [[UILabel alloc] initWithFrame:CGRectMake(46, 0, 200, 50)]; st.text = @"Search"; st.font = [UIFont systemFontOfSize:19]; st.textColor = UIColor.secondaryLabelColor;
+    self.ghost = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 260, 50)]; [self.ghost addSubview:mag]; [self.ghost addSubview:st];
+    self.ghost.userInteractionEnabled = NO;
+    [self.sheet addSubview:self.ghost];
+
+    CGRect full = [self fullRect];
+    self.grab = [[UIView alloc] initWithFrame:CGRectMake((full.size.width - 40) / 2, 8, 40, 5)];
     self.grab.backgroundColor = [UIColor colorWithWhite:self.dark ? 1 : 0 alpha:0.28]; self.grab.layer.cornerRadius = 2.5;
     [self.sheet addSubview:self.grab];
-
-    self.scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 20, f.size.width, self.sheet.bounds.size.height - 20 - 40)];
+    // the content stays put on screen while the pill opens up around it
+    self.scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(-8, 20, f.size.width, full.size.height - 20)];
     self.scroll.alwaysBounceVertical = YES; self.scroll.showsVerticalScrollIndicator = NO;
     [self.sheet addSubview:self.scroll];
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(sheetPan:)];
     pan.delegate = self; [self.sheet addGestureRecognizer:pan];
 
     self.spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
-    self.spin.center = CGPointMake(f.size.width / 2, 170); [self.spin startAnimating];
-    [self.sheet addSubview:self.spin];
-    self.loading = [[UILabel alloc] initWithFrame:CGRectMake(20, 200, f.size.width - 40, 22)];
+    [self.spin startAnimating]; [self.sheet addSubview:self.spin];
+    self.loading = [UILabel new];
     self.loading.text = @"Counting your messages…"; self.loading.textAlignment = NSTextAlignmentCenter;
     self.loading.textColor = UIColor.secondaryLabelColor; self.loading.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
     [self.sheet addSubview:self.loading];
+    [self setProgress:0];
     return self;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return YES; }
@@ -103,28 +115,54 @@ static __weak M26Insights *gIns;
     CGPoint v = [g velocityInView:self];
     return v.y > fabs(v.x) && (self.scroll.contentOffset.y <= 0 || [g locationInView:self.sheet].y < 40);
 }
-// pulled down from the top of the list: the sheet follows, and closes past a point
 - (void)sheetPan:(UIPanGestureRecognizer *)g {
-    CGFloat dy = MAX(0, [g translationInView:self].y);
+    CGFloat dy = MAX(0, [g translationInView:self].y), H = self.bounds.size.height;
     if (g.state == UIGestureRecognizerStateChanged) {
         if (self.scroll.contentOffset.y > 0 && [g locationInView:self.sheet].y > 40) return;
         self.scroll.contentOffset = CGPointZero;
-        [self setPull:dy];
+        [self setProgress:1 - dy / (H * 0.7)];
     } else if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
-        if (dy > 140 || [g velocityInView:self].y > 900) [self close]; else [self settle];
+        if (dy > 130 || [g velocityInView:self].y > 900) [self close]; else [self settle];
     }
 }
-- (void)setPull:(CGFloat)dy {   // dy = how far below fully open
-    CGFloat H = self.bounds.size.height;
-    self.sheet.transform = CGAffineTransformMakeTranslation(0, dy);
-    self.dim.alpha = MAX(0, MIN(1, 1 - dy / (H - self.openY)));
+static CGFloat InsLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; }
+// 0 = the search pill, 1 = Insights filling the screen (anything in between follows the finger)
+- (void)setProgress:(CGFloat)p {
+    p = MAX(0, MIN(1, p)); _progress = p;
+    CGRect a = [self pillRect], b = [self fullRect];
+    CGRect r = CGRectMake(InsLerp(a.origin.x, b.origin.x, p), InsLerp(a.origin.y, b.origin.y, p), InsLerp(a.size.width, b.size.width, p), InsLerp(a.size.height, b.size.height, p));
+    self.sheet.frame = r;
+    self.sheet.layer.cornerRadius = InsLerp(a.size.height / 2, 44, MIN(1, p * 1.4));
+    // content pinned to the screen, revealed by the growing glass
+    self.scroll.frame = CGRectMake(b.origin.x - r.origin.x - 8, b.origin.y - r.origin.y + 20, self.bounds.size.width, b.size.height - 20);
+    self.grab.center = CGPointMake(r.size.width / 2, 10.5);
+    self.spin.center = CGPointMake(self.bounds.size.width / 2 - r.origin.x, b.origin.y - r.origin.y + 170);
+    self.loading.frame = CGRectMake(-r.origin.x, b.origin.y - r.origin.y + 200, self.bounds.size.width, 22);
+    CGFloat c = MAX(0, MIN(1, (p - 0.25) / 0.6));
+    self.scroll.alpha = c; self.spin.alpha = c; self.loading.alpha = c; self.grab.alpha = c;
+    self.ghost.alpha = MAX(0, 1 - p * 4);
+    self.ghost.frame = CGRectMake(0, 0, 260, a.size.height);
+    // everything else steps back; only Insights is left
+    self.backgroundColor = [(self.dark ? UIColor.blackColor : UIColor.whiteColor) colorWithAlphaComponent:MIN(1, p * 1.15)];
+    self.pill.alpha = p > 0.001 ? 0 : 1;
+    UIView *comp = [self.window viewWithTag:SCOMPOSE_TAG];
+    comp.alpha = 1 - MIN(1, p * 3);
+    comp.transform = CGAffineTransformMakeScale(1 - 0.4 * MIN(1, p * 3), 1 - 0.4 * MIN(1, p * 3));
+    UIView *root = self.window.rootViewController.view;
+    root.alpha = 1 - MIN(1, p * 1.3);
+    root.transform = CGAffineTransformMakeScale(1 - 0.06 * p, 1 - 0.06 * p);
 }
 - (void)settle {
-    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.4 options:UIViewAnimationOptionAllowUserInteraction animations:^{ [self setPull:0]; } completion:nil];
+    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ [self setProgress:1]; } completion:nil];
 }
 - (void)close {
     gInsCB = nil;
-    [UIView animateWithDuration:0.32 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{ [self setPull:self.bounds.size.height - self.openY + 40]; } completion:^(BOOL f) { [self removeFromSuperview]; }];
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ [self setProgress:0]; } completion:^(BOOL f) {
+        UIView *root = self.window.rootViewController.view; root.alpha = 1; root.transform = CGAffineTransformIdentity;
+        UIView *comp = [self.window viewWithTag:SCOMPOSE_TAG]; comp.alpha = 1; comp.transform = CGAffineTransformIdentity;
+        self.pill.alpha = 1;
+        [self removeFromSuperview];
+    }];
 }
 
 #pragma mark building the cards
@@ -322,12 +360,12 @@ static __weak M26Insights *gIns;
 
 #pragma mark - pulled up from the search pill
 
-static M26Insights *InsMake(UIWindow *w) {
-    M26Insights *s = [[M26Insights alloc] initWithFrame:w.bounds];
+static M26Insights *InsMake(UIView *pill) {
+    UIWindow *w = pill.window;
+    M26Insights *s = [[M26Insights alloc] initWithFrame:w.bounds pill:pill];
     s.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [w addSubview:s];
     gIns = s;
-    [s setPull:w.bounds.size.height - s.openY + 40];
     [s load:@"*" name:nil];
     return s;
 }
@@ -342,19 +380,16 @@ static M26Insights *InsMake(UIWindow *w) {
 - (void)pan:(UIPanGestureRecognizer *)g {
     UIWindow *w = g.view.window; if (!w) return;
     M26Insights *s = gIns;
-    CGFloat H = w.bounds.size.height;
     if (g.state == UIGestureRecognizerStateBegan) {
-        if (!s.superview) s = InsMake(w);
+        if (!s.superview) s = InsMake(g.view);
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
         if ([g.view isKindOfClass:[UIControl class]]) [(UIControl *)g.view cancelTrackingWithEvent:nil];
     }
     if (!s) return;
-    CGFloat up = -[g translationInView:w].y, closed = H - s.openY + 40;
-    if (g.state == UIGestureRecognizerStateChanged) {
-        // follows the finger (a little faster than it, so a short swipe goes a long way)
-        [s setPull:MAX(0, closed - up * 1.6)];
-    } else if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
-        if (up > 70 || [g velocityInView:w].y < -500) { [s settle]; [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred]; }
+    CGFloat up = -[g translationInView:w].y;
+    if (g.state == UIGestureRecognizerStateChanged) [s setProgress:up / (w.bounds.size.height * 0.5)];
+    else if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        if (up > 60 || [g velocityInView:w].y < -500) { [s settle]; [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred]; }
         else [s close];
     }
 }
