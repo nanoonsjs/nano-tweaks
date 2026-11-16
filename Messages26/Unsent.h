@@ -38,7 +38,7 @@ static void UnsentRemove(NSString *guid) {
 static id (*origRetractText)(id, SEL, unsigned long long, id, BOOL, BOOL, id);
 static id RetractText(id self, SEL _cmd, unsigned long long cnt, id names, BOOL fromMe, BOOL failed, id sender) {
     id s = origRetractText(self, _cmd, cnt, names, fromMe, failed, sender);
-    if (fromMe || failed || !Opt(@"keepunsent") || ![s isKindOfClass:[NSAttributedString class]]) return s;
+    if (fromMe || failed || !Opt(@"keepunsent") || !ProUnlocked() || ![s isKindOfClass:[NSAttributedString class]]) return s;
     @try {
         id im = [self valueForKey:@"imMessageRetractionChatItem"];
         NSString *guid = [im valueForKey:@"messageGUID"];
@@ -124,7 +124,7 @@ static void UnsentSyncFlag(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
     [fm createDirectoryAtPath:UNSENT_DIR withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *f = [UNSENT_DIR stringByAppendingPathComponent:@"on"];
-    if (Opt(@"keepunsent")) { if (![fm fileExistsAtPath:f]) [@"1" writeToFile:f atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
+    if (Opt(@"keepunsent") && ProUnlocked()) { if (![fm fileExistsAtPath:f]) [@"1" writeToFile:f atomically:YES encoding:NSUTF8StringEncoding error:nil]; }
     else [fm removeItemAtPath:f error:nil];
 }
 static void StartUnsent(void) {

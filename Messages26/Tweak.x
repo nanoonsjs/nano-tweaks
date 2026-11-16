@@ -1,4 +1,5 @@
-// Messages26 1.7.5 - made by nano
+// Messages26 1.8 - made by nano
+// 1.8: Messages26 Pro ($2.99 once, Gumroad key, one iPhone per key): Keep Unsent Messages + Conversation Insights
 // 1.7.5: no line across the drop's neck: the pill's glass moves under the drop while you pull (like MusicPill)
 // 1.7.4: the Insights drop is MusicPill 1.8.2's real liquid glass (shader, smooth neck, foot melting into the pill)
 // 1.7.3: Insights opens with MusicPill's liquid drop (same physics) and closes back into a drop sucked into the pill; settings button hidden over it; demo pill / compose look right and show the drop
@@ -140,6 +141,8 @@
 #import <substrate.h>
 #include "../shared/LGCompat.h"
 #include "../shared/NanoGlass.h"
+#include "M26Pro.h"   // 1.8: Messages26 Pro (Keep Unsent + Insights)
+static UIViewController *TopVC(UIWindow *w);
 #include "../MusicPill/LiquidGlass.h"   // 1.7.4: MusicPill's liquid glass shader, for the Insights drop
 #import <PhotosUI/PhotosUI.h>
 #import <Photos/Photos.h>
@@ -5111,7 +5114,7 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"save", @"Saved Messages", @"bookmark.fill", UIColor.systemOrangeColor, @"Hold a message → Save Message. Find them all here."],
              @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."],
              @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."],
-             @[@"keepunsent", @"Keep Unsent Messages", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"When someone unsends a message, you still see what it said under \"unsent a message\". Photos and videos they unsend are kept too (open them from here)."],
+             @[@"keepunsent", @"Keep Unsent Messages", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"PRO · When someone unsends a message, you still see what it said under \"unsent a message\". Photos and videos they unsend are kept too (open them from here)."],
              @[@"newaudio", @"Voice Recorder", @"mic.fill", UIColor.systemRedColor, @"Audio (+ menu) and the mic open a new recorder: tap to record in high quality, play it back, then send it or tap X to start over."],
              @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"\"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."]];
 }
@@ -5203,6 +5206,13 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
     return c;
 }
 - (void)toggle:(UISwitch *)sw {
+    // 1.8: Keep Unsent Messages is Pro
+    if (sw.on && [FeatRows()[sw.tag - 1][0] isEqualToString:@"keepunsent"] && !ProUnlocked()) {
+        [sw setOn:NO animated:YES];
+        __weak UISwitch *ws = sw; __weak typeof(self) me = self;
+        ProPaywall(self, @"Keep Unsent Messages", ^(BOOL ok) { if (ok && ws) { [ws setOn:YES animated:YES]; [me toggle:ws]; } });
+        return;
+    }
     static BOOL authed;
     if (!sw.on && !authed && [FeatRows()[sw.tag - 1][0] isEqualToString:@"lock"] && Opt(@"lock")) {
         [sw setOn:YES animated:YES];
@@ -5574,7 +5584,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.7.5 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.8 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

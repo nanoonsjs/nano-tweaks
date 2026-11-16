@@ -521,13 +521,92 @@ static Class M26InsDemoClass(void) {
     return c;
 }
 
+
+#pragma mark - Messages26 Pro card (Settings app)
+
+static UIViewController *M26VCOf(UIView *v) { for (UIResponder *r = v; r; r = r.nextResponder) if ([r isKindOfClass:[UIViewController class]]) return (UIViewController *)r; return nil; }
+@interface M26ProCard : UIView
+- (void)refresh;
+@end
+@implementation M26ProCard { UILabel *_title, *_sub; UIButton *_buy, *_key; UIImageView *_badge; }
+- (instancetype)initWithFrame:(CGRect)f {
+    if (!(self = [super initWithFrame:f])) return nil;
+    CAGradientLayer *g = [CAGradientLayer layer]; g.frame = self.bounds; g.cornerRadius = 22;
+    g.colors = @[(id)[UIColor colorWithRed:0.36 green:0.25 blue:0.95 alpha:1].CGColor, (id)[UIColor colorWithRed:0.85 green:0.25 blue:0.6 alpha:1].CGColor];
+    g.startPoint = CGPointMake(0, 0); g.endPoint = CGPointMake(1, 1); g.name = @"bg";
+    [self.layer addSublayer:g];
+    _badge = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"sparkles" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightBold]]];
+    _badge.tintColor = UIColor.whiteColor; _badge.contentMode = UIViewContentModeCenter; [self addSubview:_badge];
+    _title = [UILabel new]; _title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightHeavy]; _title.textColor = UIColor.whiteColor; [self addSubview:_title];
+    _sub = [UILabel new]; _sub.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium]; _sub.textColor = [UIColor colorWithWhite:1 alpha:0.85]; _sub.numberOfLines = 0; [self addSubview:_sub];
+    _buy = [UIButton buttonWithType:UIButtonTypeSystem]; _buy.backgroundColor = UIColor.whiteColor; _buy.tintColor = [UIColor colorWithRed:0.36 green:0.25 blue:0.95 alpha:1];
+    _buy.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold]; [_buy setTitle:@"Buy Pro · $2.99" forState:UIControlStateNormal];
+    [_buy addTarget:self action:@selector(buy) forControlEvents:UIControlEventTouchUpInside]; [self addSubview:_buy];
+    _key = [UIButton buttonWithType:UIButtonTypeSystem]; _key.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2]; _key.tintColor = UIColor.whiteColor;
+    _key.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold]; [_key setTitle:@"Enter Key" forState:UIControlStateNormal];
+    [_key addTarget:self action:@selector(enterKey) forControlEvents:UIControlEventTouchUpInside]; [self addSubview:_key];
+    [self refresh];
+    return self;
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat W = self.bounds.size.width, H = self.bounds.size.height;
+    for (CALayer *l in self.layer.sublayers) if ([l.name isEqualToString:@"bg"]) l.frame = self.bounds;
+    _badge.frame = CGRectMake(18, 18, 30, 30);
+    _title.frame = CGRectMake(56, 18, W - 74, 30);
+    _sub.frame = CGRectMake(18, 54, W - 36, 58);
+    CGFloat bw = (W - 36 - 10) / 2;
+    _buy.frame = CGRectMake(18, H - 62, bw, 44); _buy.layer.cornerRadius = 22;
+    _key.frame = CGRectMake(28 + bw, H - 62, bw, 44); _key.layer.cornerRadius = 22;
+}
+- (void)refresh {
+    BOOL pro = ProUnlocked();
+    _title.text = pro ? @"Pro unlocked" : @"Messages26 Pro";
+    _sub.text = pro ? @"Keep Unsent Messages and Conversation Insights are yours for good on this iPhone. Thank you for supporting nano! 💜"
+                    : @"Keep Unsent Messages + Conversation Insights.\n$2.99 once. Buy, get a key by email, enter it here.";
+    _badge.image = [UIImage systemImageNamed:pro ? @"checkmark.seal.fill" : @"sparkles" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightBold]];
+    _buy.hidden = pro; _key.hidden = pro;
+}
+- (void)buy {
+    UIViewController *vc = M26VCOf(self);
+    ProConfig(^(NSDictionary *c) {
+        NSString *u = c[@"buy_url"];
+        if ([u isKindOfClass:[NSString class]] && u.length) { [[UIApplication sharedApplication] openURL:[NSURL URLWithString:u] options:@{} completionHandler:nil]; return; }
+        UIAlertController *s = [UIAlertController alertControllerWithTitle:@"Coming soon" message:@"Pro isn't on sale yet. Check back soon." preferredStyle:UIAlertControllerStyleAlert];
+        [s addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [vc presentViewController:s animated:YES completion:nil];
+    });
+}
+- (void)enterKey {
+    __weak typeof(self) me = self;
+    ProShowKeyEntry(M26VCOf(self), ^(BOOL ok) { [me refresh]; });
+}
+@end
+static void M26ProCardLayout(UITableViewCell *self, SEL _cmd) {
+    struct objc_super sup = { self, class_getSuperclass(object_getClass(self)) };
+    ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
+    self.selectionStyle = UITableViewCellSelectionStyleNone;
+    self.backgroundColor = UIColor.clearColor; self.textLabel.hidden = YES;
+    UIView *cv = self.contentView;
+    M26ProCard *c = (M26ProCard *)[cv viewWithTag:0x4D325052];
+    if (!c) { c = [[M26ProCard alloc] initWithFrame:cv.bounds]; c.tag = 0x4D325052; [cv addSubview:c]; }
+    c.frame = cv.bounds;
+    [c refresh];
+}
+static Class M26ProCardClass(void) {
+    Class sup = NSClassFromString(@"PSTableCell"); if (!sup) return nil;
+    Class c = objc_getClass("M26ProCardCell");
+    if (!c) { c = objc_allocateClassPair(sup, "M26ProCardCell", 0); class_addMethod(c, @selector(layoutSubviews), (IMP)M26ProCardLayout, "v@:"); objc_registerClassPair(c); }
+    return c;
+}
+
 static NSArray *(*origM26Specs)(id, SEL);
 static NSArray *M26Specs(id self, SEL _cmd) {
     NSArray *a = origM26Specs(self, _cmd);
     @try {
         for (id s in a) {
             if (![s respondsToSelector:@selector(identifier)]) continue;
-            Class c = [[s identifier] isEqualToString:@"M26_PREVIEW"] ? M26PreviewClass() : [[s identifier] isEqualToString:@"M26_INSDEMO"] ? M26InsDemoClass() : nil;
+            Class c = [[s identifier] isEqualToString:@"M26_PREVIEW"] ? M26PreviewClass() : [[s identifier] isEqualToString:@"M26_INSDEMO"] ? M26InsDemoClass() : [[s identifier] isEqualToString:@"M26_PRO"] ? M26ProCardClass() : nil;
             if (c && [s propertyForKey:@"cellClass"] != c) ((void (*)(id, SEL, id, id))objc_msgSend)(s, @selector(setProperty:forKey:), c, @"cellClass");
         }
     } @catch (__unused id e) {}

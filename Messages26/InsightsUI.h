@@ -776,6 +776,16 @@ static void InsBounce(UIView *v, CGFloat dy) {
 @implementation M26InsPan { BOOL _opened; }
 - (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
     if (!gInsOn || gIns.superview) return NO;
+    if (!ProUnlocked()) {   // 1.8: Insights is Pro
+        CGPoint v0 = [g velocityInView:g.view];
+        static CFTimeInterval last;
+        if (v0.y < 0 && fabs(v0.y) > fabs(v0.x) && CACurrentMediaTime() - last > 1.5 && g.view.window) {
+            last = CACurrentMediaTime();
+            [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+            ProPaywall(TopVC(g.view.window), @"Conversation Insights", nil);
+        }
+        return NO;
+    }
     CGPoint v = [g velocityInView:g.view];
     return v.y < 0 && fabs(v.y) > fabs(v.x);   // straight up only (taps stay the pill's)
 }

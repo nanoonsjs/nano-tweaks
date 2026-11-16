@@ -5,6 +5,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <substrate.h>
+#define M26_PRO_NO_UI
+#include "M26Pro.h"
 
 #define DIR @"/var/mobile/Library/SMS/M26Unsent"
 #define LIST DIR @"/unsent.plist"
@@ -22,6 +24,7 @@ static void KLog(NSString *fmt, ...) {
 }
 // Messages26 drops an "on" file here while the switch is on (prefs of another app can't always be read from here)
 static BOOL KeepOn(void) {
+    if (!ProUnlocked()) return NO;   // 1.8: Pro
     if ([[NSFileManager defaultManager] fileExistsAtPath:DIR @"/on"]) return YES;
     CFStringRef app = CFSTR("com.apple.MobileSMS");
     CFPreferencesAppSynchronize(app);
