@@ -80,7 +80,7 @@ static void VVExtract(NSURL *video, void (^done)(NSURL *out, NSString *err)) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         AVURLAsset *asset = [AVURLAsset URLAssetWithURL:video options:nil];
         AVAssetTrack *track = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
-        if (!track) { done(nil, @"That video has no sound"); return; }
+        if (!track) { done(nil, @"That has no sound"); return; }
         NSError *e = nil;
         AVAssetReader *rd = [AVAssetReader assetReaderWithAsset:asset error:&e];
         AVAssetReaderTrackOutput *ro = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:track outputSettings:@{AVFormatIDKey: @(kAudioFormatLinearPCM), AVSampleRateKey: @48000, AVNumberOfChannelsKey: @2, AVLinearPCMBitDepthKey: @16, AVLinearPCMIsFloatKey: @NO, AVLinearPCMIsBigEndianKey: @NO, AVLinearPCMIsNonInterleaved: @NO}];
@@ -152,6 +152,60 @@ static void VVSend(NSURL *audio) {
 }
 @end
 static M26VVPicker *gVVDelegate;
+#pragma mark - File as Voice (1.8.2, Pro): an audio file (mp3, m4a, wav...) sent as a voice message
+
+@interface M26FVPicker : NSObject <UIDocumentPickerDelegate>
+@end
+@implementation M26FVPicker
+- (void)documentPicker:(UIDocumentPickerViewController *)c didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *u = urls.firstObject; if (!u) return;
+    BOOL sec = [u startAccessingSecurityScopedResource];
+    NSURL *copy = VVTempURL(u.pathExtension.length ? u.pathExtension : @"m4a");
+    BOOL ok = [[NSFileManager defaultManager] copyItemAtURL:u toURL:copy error:nil];
+    if (sec) [u stopAccessingSecurityScopedResource];
+    if (!ok) { Toast(@"Couldn't open that file", @"exclamationmark.circle.fill"); return; }
+    Toast(@"Making voice message…", @"waveform");
+    VVExtract(copy, ^(NSURL *out, NSString *msg) {
+        [[NSFileManager defaultManager] removeItemAtURL:copy error:nil];
+        dispatch_async(dispatch_get_main_queue(), ^{ if (out) VVSend(out); else Toast(msg, @"exclamationmark.circle.fill"); });
+    });
+}
+@end
+static M26FVPicker *gFVDelegate;
+static void FileVoicePick(void) {
+    UIWindow *w = gEntry.window ?: [UIApplication sharedApplication].keyWindow;
+    NSArray *types = @[@"public.audio", @"public.mp3", @"public.mpeg-4-audio", @"com.microsoft.waveform-audio", @"public.aiff-audio", @"com.apple.coreaudio-format", @"public.movie"];
+    UIDocumentPickerViewController *dp = nil;
+    if (@available(iOS 14.0, *)) {
+        NSMutableArray *ut = [NSMutableArray array];
+        Class UT = NSClassFromString(@"UTType");
+        for (NSString *s in types) { id t = [UT respondsToSelector:@selector(typeWithIdentifier:)] ? [UT performSelector:@selector(typeWithIdentifier:) withObject:s] : nil; if (t) [ut addObject:t]; }
+        dp = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:ut asCopy:YES];
+    } else dp = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:types inMode:UIDocumentPickerModeImport];
+    gFVDelegate = [M26FVPicker new]; dp.delegate = gFVDelegate;
+    [w endEditing:YES];
+    [TopVC(w) presentViewController:dp animated:YES completion:nil];
+}
+// the + menu icon: a glossy orange ball with a music note (like the other glass icons)
+static UIImage *FileVoiceIcon(void) {
+    static UIImage *img; if (img) return img;
+    UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(44, 44)];
+    img = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        CGContextRef c = ctx.CGContext;
+        UIBezierPath *ball = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(0, 0, 44, 44)];
+        [ball addClip];
+        NSArray *cols = @[(id)[UIColor colorWithRed:1 green:0.62 blue:0.25 alpha:1].CGColor, (id)[UIColor colorWithRed:0.95 green:0.33 blue:0.15 alpha:1].CGColor];
+        CGGradientRef g = CGGradientCreateWithColors(NULL, (__bridge CFArrayRef)cols, NULL);
+        CGContextDrawLinearGradient(c, g, CGPointMake(0, 0), CGPointMake(0, 44), 0); CGGradientRelease(g);
+        NSArray *hi = @[(id)[UIColor colorWithWhite:1 alpha:0.45].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+        CGGradientRef h = CGGradientCreateWithColors(NULL, (__bridge CFArrayRef)hi, NULL);
+        CGContextDrawLinearGradient(c, h, CGPointMake(0, 0), CGPointMake(0, 22), 0); CGGradientRelease(h);
+        UIImage *sym = [[UIImage systemImageNamed:@"music.note" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightBold]] imageWithTintColor:UIColor.whiteColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+        [sym drawInRect:CGRectMake(22 - sym.size.width / 2, 22 - sym.size.height / 2, sym.size.width, sym.size.height)];
+        [[UIColor colorWithWhite:1 alpha:0.5] setStroke]; UIBezierPath *rim = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(0.6, 0.6, 42.8, 42.8)]; rim.lineWidth = 1.2; [rim stroke];
+    }];
+    return img;
+}
 static void VidVoicePick(void) {
     UIWindow *w = gEntry.window ?: [UIApplication sharedApplication].keyWindow;
     PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];

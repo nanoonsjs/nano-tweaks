@@ -540,7 +540,7 @@ static UIViewController *M26VCOf(UIView *v) { for (UIResponder *r = v; r; r = r.
     _title = [UILabel new]; _title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightHeavy]; _title.textColor = UIColor.whiteColor; [self addSubview:_title];
     _sub = [UILabel new]; _sub.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium]; _sub.textColor = [UIColor colorWithWhite:1 alpha:0.85]; _sub.numberOfLines = 0; [self addSubview:_sub];
     _buy = [UIButton buttonWithType:UIButtonTypeSystem]; _buy.backgroundColor = UIColor.whiteColor; _buy.tintColor = [UIColor colorWithRed:0.36 green:0.25 blue:0.95 alpha:1];
-    _buy.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold]; [_buy setTitle:@"Buy Pro · $2.99" forState:UIControlStateNormal];
+    _buy.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold]; [_buy setTitle:[@"Buy Pro · " stringByAppendingString:PRO_PRICE] forState:UIControlStateNormal];
     [_buy addTarget:self action:@selector(buy) forControlEvents:UIControlEventTouchUpInside]; [self addSubview:_buy];
     _key = [UIButton buttonWithType:UIButtonTypeSystem]; _key.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2]; _key.tintColor = UIColor.whiteColor;
     _key.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold]; [_key setTitle:@"Enter Key" forState:UIControlStateNormal];
@@ -563,8 +563,8 @@ static UIViewController *M26VCOf(UIView *v) { for (UIResponder *r = v; r; r = r.
     ProMigrate();
     BOOL pro = ProUnlocked();
     _title.text = pro ? @"Pro unlocked" : @"Messages26 Pro";
-    _sub.text = pro ? @"Keep Unsent Messages and Conversation Insights are yours for good on this iPhone. Thank you for supporting nano! 💜"
-                    : @"Keep Unsent Messages + Conversation Insights.\n$2.99 once. Buy, get a key by email, enter it here.";
+    _sub.text = pro ? @"Keep Unsent, Insights, Video as Voice and File as Voice are yours for good on this iPhone. Thank you for supporting nano! 💜"
+                    : [NSString stringWithFormat:@"%@.\n%@ once. Buy, get a key by email, enter it here.", PRO_FEATURES, PRO_PRICE];
     _badge.image = [UIImage systemImageNamed:pro ? @"checkmark.seal.fill" : @"sparkles" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightBold]];
     _buy.hidden = pro; _key.hidden = pro;
 }

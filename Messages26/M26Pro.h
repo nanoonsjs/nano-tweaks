@@ -10,6 +10,9 @@
 
 #define PRO_FILE @"/var/mobile/Library/SMS/M26Unsent/pro.plist"
 #define PRO_CONFIG_URL @"https://nanoonsjs.github.io/nano-repo/pro.json"
+// 1.8.2: $5.99, and Video as Voice + File as Voice are Pro too
+#define PRO_PRICE @"$5.99"
+#define PRO_FEATURES @"Keep Unsent Messages · Conversation Insights · Video as Voice · File as Voice"
 
 // this iPhone (the key is tied to it)
 static NSString *ProDevice(void) {
@@ -131,9 +134,9 @@ static void ProShowKeyEntry(UIViewController *from, void (^done)(BOOL));
 static void ProPaywall(UIViewController *from, NSString *what, void (^done)(BOOL unlocked)) {
     if (!from) { if (done) done(NO); return; }
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Messages26 Pro"
-        message:[NSString stringWithFormat:@"%@ is part of Messages26 Pro.\n\nKeep Unsent Messages + Conversation Insights\n$2.99 once, unlocked for good on this iPhone.\n\nAfter buying you get a key by email: enter it here.", what]
+        message:[NSString stringWithFormat:@"%@ is part of Messages26 Pro.\n\n%@\n\n%@ once, unlocked for good on this iPhone.\n\nAfter buying you get a key by email: enter it here.", what, PRO_FEATURES, PRO_PRICE]
         preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"Buy Pro · $2.99" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *x) {
+    [a addAction:[UIAlertAction actionWithTitle:[@"Buy Pro · " stringByAppendingString:PRO_PRICE] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *x) {
         ProConfig(^(NSDictionary *c) {
             NSString *u = c[@"buy_url"];
             if ([u isKindOfClass:[NSString class]] && u.length) [[UIApplication sharedApplication] openURL:[NSURL URLWithString:u] options:@{} completionHandler:nil];

@@ -1,4 +1,5 @@
-// Messages26 1.8.1 - made by nano
+// Messages26 1.8.2 - made by nano
+// 1.8.2: Pro is $5.99; Video as Voice is Pro; new File as Voice (Pro): an mp3 / m4a / wav... sent as a voice message
 // 1.8.1: Pro's secret word comes from the build, not the public code (1.8 unlocks are moved over after a Gumroad check)
 // 1.8: Messages26 Pro ($2.99 once, Gumroad key, one iPhone per key): Keep Unsent Messages + Conversation Insights
 // 1.7.5: no line across the drop's neck: the pill's glass moves under the drop while you pull (like MusicPill)
@@ -412,6 +413,8 @@ static void OpenStripAppNamed(NSString *name) {
     });
 }
 static void VidVoicePick(void);   // VidVoice.h
+static void FileVoicePick(void);
+static UIImage *FileVoiceIcon(void);
 static void RecAttach(UIView *entry);   // AudioRec.h
 static void RecOpen(UIView *from);
 static BOOL Opt(NSString *k);
@@ -471,6 +474,7 @@ static NSArray *MenuItems(void) {
         UIImage *vi = [UIImage imageWithData:[NSData dataWithBytes:kVVIconPNG length:sizeof(kVVIconPNG)] scale:3] ?: [UIImage systemImageNamed:@"video.fill"];
         [items addObject:@{@"name": @"Video as Voice", @"icon": vi, @"vidvoice": @YES}];
     }
+    if (Opt(@"filevoice")) [items addObject:@{@"name": @"File as Voice", @"icon": FileVoiceIcon(), @"filevoice": @YES}];
     for (NSDictionary *a in apps) if (a != photos && ![a[@"name"] isEqual:photos[@"name"]] && ![[a[@"name"] lowercaseString] containsString:@"app store"] && ![[a[@"name"] lowercaseString] isEqualToString:@"store"]) [items addObject:a];
     NSArray *order = SavedOrder();
     [items sortWithOptions:NSSortStable usingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
@@ -657,7 +661,8 @@ static NSArray *MenuItems(void) {
     [[UISelectionFeedbackGenerator new] selectionChanged];
     [self closeThen:^{
         if (it[@"camera"]) OpenCamera();
-        else if (it[@"vidvoice"]) VidVoicePick();
+        else if (it[@"vidvoice"]) { if (ProUnlocked()) VidVoicePick(); else ProPaywall(TopVC(gEntry.window ?: [UIApplication sharedApplication].keyWindow), @"Video as Voice", nil); }
+        else if (it[@"filevoice"]) { if (ProUnlocked()) FileVoicePick(); else ProPaywall(TopVC(gEntry.window ?: [UIApplication sharedApplication].keyWindow), @"File as Voice", nil); }
         else if (it[@"name"] && Opt(@"newaudio") && [[it[@"name"] lowercaseString] isEqualToString:@"audio"]) RecOpen(nil);
         else if (it[@"name"]) OpenStripAppNamed(it[@"name"]);
     }];
@@ -5117,7 +5122,8 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."],
              @[@"keepunsent", @"Keep Unsent Messages", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"PRO · When someone unsends a message, you still see what it said under \"unsent a message\". Photos and videos they unsend are kept too (open them from here)."],
              @[@"newaudio", @"Voice Recorder", @"mic.fill", UIColor.systemRedColor, @"Audio (+ menu) and the mic open a new recorder: tap to record in high quality, play it back, then send it or tap X to start over."],
-             @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"\"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."]];
+             @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"PRO · \"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."],
+             @[@"filevoice", @"File as Voice Message", @"music.note", UIColor.systemOrangeColor, @"PRO · \"File as Voice\" in the + menu: pick an audio file (mp3, m4a, wav...) from Files and it's sent as a voice message."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
@@ -5208,10 +5214,12 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
 }
 - (void)toggle:(UISwitch *)sw {
     // 1.8: Keep Unsent Messages is Pro
-    if (sw.on && [FeatRows()[sw.tag - 1][0] isEqualToString:@"keepunsent"] && !ProUnlocked()) {
+    NSString *fk = FeatRows()[sw.tag - 1][0];
+    NSDictionary *proNames = @{@"keepunsent": @"Keep Unsent Messages", @"vidvoice": @"Video as Voice", @"filevoice": @"File as Voice"};
+    if (sw.on && proNames[fk] && !ProUnlocked()) {
         [sw setOn:NO animated:YES];
         __weak UISwitch *ws = sw; __weak typeof(self) me = self;
-        ProPaywall(self, @"Keep Unsent Messages", ^(BOOL ok) { if (ok && ws) { [ws setOn:YES animated:YES]; [me toggle:ws]; } });
+        ProPaywall(self, proNames[fk], ^(BOOL ok) { if (ok && ws) { [ws setOn:YES animated:YES]; [me toggle:ws]; } });
         return;
     }
     static BOOL authed;
@@ -5585,7 +5593,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.8.1 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.8.2 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
