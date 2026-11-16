@@ -146,7 +146,7 @@ static void AudioLayout(UIView *self, SEL _cmd) {
         CGFloat L = right ? 6 : 12, R = right ? 12 : 6;
         UIView *play = nil, *wave = nil; UILabel *time = nil;
         for (UIView *v in self.subviews) {
-            if (v.hidden || v.alpha < 0.01 || v.tag == GLASS_TAG) continue;
+            if (v.hidden || v.alpha < 0.01 || v.tag == GLASS_TAG || v.tag == SPEED_TAG) continue;   // 1.8.5: the speed chip was taken for the play button and stretched
             NSString *n = NSStringFromClass(v.class);
             if ([v isKindOfClass:[UILabel class]]) { time = (UILabel *)v; continue; }
             if (!play && ([v isKindOfClass:[UIButton class]] || [n containsString:@"Play"])) { play = v; continue; }
@@ -170,11 +170,12 @@ static void AudioLayout(UIView *self, SEL _cmd) {
             UIColor *tc = time.textColor ?: UIColor.labelColor;
             [chip setTitleColor:tc forState:UIControlStateNormal];
             chip.backgroundColor = [tc colorWithAlphaComponent:0.18];
-            chip.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
-            CGFloat cw = MAX(44, time.bounds.size.width * 0.82), chh = 26;
+            chip.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+            if (!chip.layer.animationKeys.count) chip.transform = CGAffineTransformIdentity;
+            CGFloat cw = 42, chh = 24;
             CGFloat rx = CGRectGetMaxX(time.frame);
             chip.bounds = CGRectMake(0, 0, cw, chh); chip.layer.cornerRadius = chh / 2;
-            chip.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2];
+            chip.backgroundColor = [UIColor colorWithWhite:1 alpha:0.22];
             [chip setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
             chip.center = CGPointMake(rx - time.bounds.size.width / 2, cy - 12);
             time.center = CGPointMake(time.center.x, cy + 15);

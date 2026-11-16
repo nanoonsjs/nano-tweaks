@@ -1,4 +1,5 @@
-// Messages26 1.8.4 - made by nano
+// Messages26 1.8.5 - made by nano
+// 1.8.5: the speed chip is a small even pill (it was being stretched like the play button)
 // 1.8.4: speed chip only while playing (above the time); Confirm Before Calling on contact pages too; Mark All as Read removed
 // 1.8.3: Voice Message Speed (1x / 1.5x / 2x), Confirm Before Calling, Mark All as Read (hold the top-right button), new File as Voice icon, Pro thank-you is a support message
 // 1.8.2: Pro is $5.99; Video as Voice is Pro; new File as Voice (Pro): an mp3 / m4a / wav... sent as a voice message
@@ -5634,7 +5635,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.8.4 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.8.5 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
