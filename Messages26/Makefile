@@ -10,7 +10,7 @@ Messages26_FILES = Tweak.x
 Messages26_FRAMEWORKS = UIKit QuartzCore PhotosUI Photos QuickLook LocalAuthentication NaturalLanguage UserNotifications AudioToolbox AVFoundation CoreMedia Metal MetalKit MetalPerformanceShaders CoreVideo
 # 1.8.1: Pro's secret word comes from the GitHub secret M26_PRO_SALT (never in the code)
 ifneq ($(M26_PRO_SALT),)
-PRO_DEF = -DM26_PRO_SALT=\"$(M26_PRO_SALT)\"
+PRO_DEF = '-DM26_PRO_SALT="$(strip $(M26_PRO_SALT))"'
 endif
 Messages26_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error $(PRO_DEF)
 

@@ -28,6 +28,7 @@ jobs:
           M26_PRO_SALT: ${{ secrets.M26_PRO_SALT }}
         run: |
           set +e +o pipefail
+          M26_PRO_SALT="$(printf '%s' "$M26_PRO_SALT" | tr -cd '0-9A-Za-z')"; export M26_PRO_SALT   # no stray spaces / newlines from pasting
           if [ -z "$M26_PRO_SALT" ]; then echo "::error::The M26_PRO_SALT secret is missing (Settings > Secrets and variables > Actions)"; exit 2; fi
           mkdir -p out
           for p in MusicPill Control26 Photos26 InstaGlass Messages26 LiquidLock; do  # PhotosGlass replaced by Photos26, Spotlight26 ditched
