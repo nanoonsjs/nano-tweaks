@@ -1,4 +1,5 @@
-// Messages26 1.8 - made by nano
+// Messages26 1.8.1 - made by nano
+// 1.8.1: Pro's secret word comes from the build, not the public code (1.8 unlocks are moved over after a Gumroad check)
 // 1.8: Messages26 Pro ($2.99 once, Gumroad key, one iPhone per key): Keep Unsent Messages + Conversation Insights
 // 1.7.5: no line across the drop's neck: the pill's glass moves under the drop while you pull (like MusicPill)
 // 1.7.4: the Insights drop is MusicPill 1.8.2's real liquid glass (shader, smooth neck, foot melting into the pill)
@@ -5584,7 +5585,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.8 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.8.1 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

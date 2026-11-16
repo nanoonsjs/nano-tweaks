@@ -23,12 +23,28 @@ static NSString *ProDevice(void) {
     dev = [v isKindOfClass:[NSString class]] ? v : @"unknown";
     return dev;
 }
-static NSString *ProSig(NSString *key, NSString *dev) {
-    NSData *d = [[NSString stringWithFormat:@"%@|%@|nano.m26.pro.v1", key ?: @"", dev ?: @""] dataUsingEncoding:NSUTF8StringEncoding];
+// 1.8.1: the secret word comes from the build (a GitHub secret), not from the public code. It's kept scrambled
+// in the binary and only put together when needed.
+#ifndef M26_PRO_SALT
+#define M26_PRO_SALT "dev-build"
+#endif
+static NSString *ProSalt(void) {
+    static NSString *s;
+    if (!s) {
+        const char *x = M26_PRO_SALT; size_t n = strlen(x);
+        NSMutableString *m = [NSMutableString string];
+        for (size_t i = 0; i < n; i++) [m appendFormat:@"%c", x[n - 1 - i]];   // stored backwards
+        s = [m copy];
+    }
+    return s;
+}
+static NSString *ProSigWith(NSString *key, NSString *dev, NSString *salt) {
+    NSData *d = [[NSString stringWithFormat:@"%@|%@|%@", key ?: @"", dev ?: @"", salt] dataUsingEncoding:NSUTF8StringEncoding];
     unsigned char md[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(d.bytes, (CC_LONG)d.length, md);
     NSMutableString *s = [NSMutableString string]; for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) [s appendFormat:@"%02x", md[i]];
     return s;
 }
+static NSString *ProSig(NSString *key, NSString *dev) { return ProSigWith(key, dev, ProSalt()); }
 static BOOL ProUnlocked(void) {
     static BOOL cached; static CFAbsoluteTime at;
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
@@ -38,6 +54,26 @@ static BOOL ProUnlocked(void) {
     NSString *key = p[@"key"], *dev = ProDevice();
     cached = [key isKindOfClass:[NSString class]] && key.length && [p[@"dev"] isEqual:dev] && [p[@"sig"] isEqual:ProSig(key, dev)];
     return cached;
+}
+static void ProVerify(NSString *pid, NSString *key, BOOL count, void (^cb)(NSDictionary *res, NSString *err));
+static void ProConfig(void (^cb)(NSDictionary *c));
+// 1.8.1: unlocked on 1.8 (signed the old way): checked once with Gumroad (real, not refunded) and re-signed
+static void ProMigrate(void) {
+    static BOOL done; if (done) return; done = YES;
+    NSDictionary *p = [NSDictionary dictionaryWithContentsOfFile:PRO_FILE];
+    NSString *key = p[@"key"], *dev = ProDevice();
+    if (![key isKindOfClass:[NSString class]] || ![p[@"dev"] isEqual:dev] || [p[@"sig"] isEqual:ProSig(key, dev)]) return;
+    if (![p[@"sig"] isEqual:ProSigWith(key, dev, @"nano.m26.pro.v1")]) return;
+    ProConfig(^(NSDictionary *c) {
+        NSString *pid = c[@"product_id"]; if (![pid isKindOfClass:[NSString class]] || !pid.length) return;
+        ProVerify(pid, key, NO, ^(NSDictionary *j, NSString *err) {
+            NSDictionary *pu = j[@"purchase"];
+            if (err || ![j[@"success"] boolValue] || [pu[@"refunded"] boolValue] || [pu[@"chargebacked"] boolValue]) return;
+            NSMutableDictionary *n = [p mutableCopy]; n[@"sig"] = ProSig(key, dev);
+            [n writeToFile:PRO_FILE atomically:YES];
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.nano.messages26/pro"), NULL, NULL, YES);
+        });
+    });
 }
 static void ProConfig(void (^cb)(NSDictionary *c)) {
     NSURL *u = [NSURL URLWithString:[PRO_CONFIG_URL stringByAppendingFormat:@"?t=%ld", (long)CFAbsoluteTimeGetCurrent()]];

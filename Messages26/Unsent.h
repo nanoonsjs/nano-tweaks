@@ -128,6 +128,7 @@ static void UnsentSyncFlag(void) {
     else [fm removeItemAtPath:f error:nil];
 }
 static void StartUnsent(void) {
+    ProMigrate();
     UnsentSyncFlag();
     Class R = NSClassFromString(@"CKMessageRetractionChatItem");
     SEL s = NSSelectorFromString(@"_loadTranscriptTextWithRetractionUnsupportedCount:unsupportedNames:isFromMe:isFailedRetraction:senderName:");

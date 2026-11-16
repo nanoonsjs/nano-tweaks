@@ -560,6 +560,7 @@ static UIViewController *M26VCOf(UIView *v) { for (UIResponder *r = v; r; r = r.
     _key.frame = CGRectMake(28 + bw, H - 62, bw, 44); _key.layer.cornerRadius = 22;
 }
 - (void)refresh {
+    ProMigrate();
     BOOL pro = ProUnlocked();
     _title.text = pro ? @"Pro unlocked" : @"Messages26 Pro";
     _sub.text = pro ? @"Keep Unsent Messages and Conversation Insights are yours for good on this iPhone. Thank you for supporting nano! 💜"
