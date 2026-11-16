@@ -563,7 +563,7 @@ static UIViewController *M26VCOf(UIView *v) { for (UIResponder *r = v; r; r = r.
     ProMigrate();
     BOOL pro = ProUnlocked();
     _title.text = pro ? @"Pro unlocked" : @"Messages26 Pro";
-    _sub.text = pro ? @"Keep Unsent, Insights, Video as Voice and File as Voice are yours for good on this iPhone. Thank you for supporting nano! 💜"
+    _sub.text = pro ? @"Thank you for supporting nano 💜\nYou're the reason these tweaks keep getting better."
                     : [NSString stringWithFormat:@"%@.\n%@ once. Buy, get a key by email, enter it here.", PRO_FEATURES, PRO_PRICE];
     _badge.image = [UIImage systemImageNamed:pro ? @"checkmark.seal.fill" : @"sparkles" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightBold]];
     _buy.hidden = pro; _key.hidden = pro;

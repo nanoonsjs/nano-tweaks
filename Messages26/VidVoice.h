@@ -186,24 +186,10 @@ static void FileVoicePick(void) {
     [w endEditing:YES];
     [TopVC(w) presentViewController:dp animated:YES completion:nil];
 }
-// the + menu icon: a glossy orange ball with a music note (like the other glass icons)
+// the + menu icon (1.8.3: nano's blue glass file-with-waveform)
 static UIImage *FileVoiceIcon(void) {
-    static UIImage *img; if (img) return img;
-    UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(44, 44)];
-    img = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
-        CGContextRef c = ctx.CGContext;
-        UIBezierPath *ball = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(0, 0, 44, 44)];
-        [ball addClip];
-        NSArray *cols = @[(id)[UIColor colorWithRed:1 green:0.62 blue:0.25 alpha:1].CGColor, (id)[UIColor colorWithRed:0.95 green:0.33 blue:0.15 alpha:1].CGColor];
-        CGGradientRef g = CGGradientCreateWithColors(NULL, (__bridge CFArrayRef)cols, NULL);
-        CGContextDrawLinearGradient(c, g, CGPointMake(0, 0), CGPointMake(0, 44), 0); CGGradientRelease(g);
-        NSArray *hi = @[(id)[UIColor colorWithWhite:1 alpha:0.45].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
-        CGGradientRef h = CGGradientCreateWithColors(NULL, (__bridge CFArrayRef)hi, NULL);
-        CGContextDrawLinearGradient(c, h, CGPointMake(0, 0), CGPointMake(0, 22), 0); CGGradientRelease(h);
-        UIImage *sym = [[UIImage systemImageNamed:@"music.note" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightBold]] imageWithTintColor:UIColor.whiteColor renderingMode:UIImageRenderingModeAlwaysOriginal];
-        [sym drawInRect:CGRectMake(22 - sym.size.width / 2, 22 - sym.size.height / 2, sym.size.width, sym.size.height)];
-        [[UIColor colorWithWhite:1 alpha:0.5] setStroke]; UIBezierPath *rim = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(0.6, 0.6, 42.8, 42.8)]; rim.lineWidth = 1.2; [rim stroke];
-    }];
+    static UIImage *img;
+    if (!img) img = [UIImage imageWithData:[NSData dataWithBytes:kIc_filevoice length:sizeof(kIc_filevoice)] scale:3];
     return img;
 }
 static void VidVoicePick(void) {

@@ -903,10 +903,22 @@ static void M26FTFlatten(UIMenu *m, NSMutableArray *out) {
     UIAction *a = i < _acts.count ? _acts[i] : nil;
     UIButton *b = _btn;
     [self close];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    void (^call)(void) = ^{
         SEL ps = NSSelectorFromString(@"performWithSender:target:");
         if (a && [a respondsToSelector:ps]) ((void (*)(id, SEL, id, id))objc_msgSend)(a, ps, b, nil);
-    });
+    };
+    // 1.8.3: Confirm Before Calling: "Call Camy?" first, so a stray tap doesn't ring anyone
+    if (Opt(@"confirmcall") && a) {
+        NSString *who = nil;
+        @try { who = [VVChat() valueForKeyPath:@"conversation.displayName"]; } @catch (__unused id e) {}
+        NSString *kind = [a.title.lowercaseString containsString:@"video"] ? @"FaceTime Video" : [a.title.lowercaseString containsString:@"audio"] ? @"FaceTime Audio" : (a.title.length ? a.title : @"Call");
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"Call %@?", who.length ? who : @"them"] message:kind preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        [ac addAction:[UIAlertAction actionWithTitle:@"Call" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *x) { call(); }]];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ [TopVC(b.window ?: [UIApplication sharedApplication].keyWindow) presentViewController:ac animated:YES completion:nil]; });
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), call);
 }
 - (void)close {
     UIView *p = _panel, *c = _catcher; UIVisualEffectView *g = _glass; UIButton *b = _btn;

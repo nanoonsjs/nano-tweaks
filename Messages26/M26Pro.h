@@ -121,7 +121,7 @@ static void ProActivate(NSString *key, void (^cb)(BOOL ok, NSString *msg)) {
                 [[NSFileManager defaultManager] createDirectoryAtPath:[PRO_FILE stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
                 BOOL w = [@{@"key": key, @"dev": dev, @"sig": ProSig(key, dev), @"at": @(CFAbsoluteTimeGetCurrent()), @"email": pu[@"email"] ?: @""} writeToFile:PRO_FILE atomically:YES];
                 CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.nano.messages26/pro"), NULL, NULL, YES);
-                cb(w, w ? @"Messages26 Pro is unlocked. Thank you!" : @"Your key worked, but it couldn't be saved. Contact nano with your key.");
+                cb(w, w ? @"Thank you for supporting nano 💜" : @"Your key worked, but it couldn't be saved. Contact nano with your key.");
             });
         });
     });

@@ -1,4 +1,5 @@
-// Messages26 1.8.2 - made by nano
+// Messages26 1.8.3 - made by nano
+// 1.8.3: Voice Message Speed (1x / 1.5x / 2x), Confirm Before Calling, Mark All as Read (hold the top-right button), new File as Voice icon, Pro thank-you is a support message
 // 1.8.2: Pro is $5.99; Video as Voice is Pro; new File as Voice (Pro): an mp3 / m4a / wav... sent as a voice message
 // 1.8.1: Pro's secret word comes from the build, not the public code (1.8 unlocks are moved over after a Gumroad check)
 // 1.8: Messages26 Pro ($2.99 once, Gumroad key, one iPhone per key): Keep Unsent Messages + Conversation Insights
@@ -5123,6 +5124,9 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"keepunsent", @"Keep Unsent Messages", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"PRO · When someone unsends a message, you still see what it said under \"unsent a message\". Photos and videos they unsend are kept too (open them from here)."],
              @[@"newaudio", @"Voice Recorder", @"mic.fill", UIColor.systemRedColor, @"Audio (+ menu) and the mic open a new recorder: tap to record in high quality, play it back, then send it or tap X to start over."],
              @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"PRO · \"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."],
+             @[@"vspeed", @"Voice Message Speed", @"gauge.with.dots.needle.67percent", UIColor.systemTealColor, @"A 1× / 1.5× / 2× button on voice messages. Tap it to change the speed (voices keep their pitch)."],
+             @[@"confirmcall", @"Confirm Before Calling", @"phone.fill.arrow.up.right", UIColor.systemGreenColor, @"FaceTime Audio / Video asks \"Call Camy?\" first, so a stray tap doesn't ring anyone."],
+             @[@"markall", @"Mark All as Read", @"envelope.open.fill", UIColor.systemBlueColor, @"Hold the button at the top right of your chat list → Mark All as Read."],
              @[@"filevoice", @"File as Voice Message", @"music.note", UIColor.systemOrangeColor, @"PRO · \"File as Voice\" in the + menu: pick an audio file (mp3, m4a, wav...) from Files and it's sent as a voice message."]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tv { return 1 + FeatRows().count; }
@@ -5300,6 +5304,20 @@ __attribute__((unused)) static UIBarButtonItem *GearItem(void) {
 
 // Settings: a glass circle (filter icon) at the top right of the list, level with Edit
 #define FGEAR_TAG 0x4D32365B
+// 1.8.3: every unread chat read at once
+static void MarkAllRead(void) {
+    Class CL = NSClassFromString(@"CKConversationList"); SEL sh = NSSelectorFromString(@"sharedConversationList");
+    id list = [CL respondsToSelector:sh] ? ((id (*)(id, SEL))objc_msgSend)(CL, sh) : nil;
+    NSArray *convs = nil; @try { convs = [list valueForKey:@"conversations"]; } @catch (__unused id e) {}
+    NSUInteger n = 0;
+    for (id c in convs) {
+        NSUInteger u = 0; @try { u = [[c valueForKey:@"unreadCount"] unsignedIntegerValue]; } @catch (__unused id e) {}
+        if (!u || ![c respondsToSelector:@selector(markAllMessagesAsRead)]) continue;
+        @try { [c performSelector:@selector(markAllMessagesAsRead)]; n++; } @catch (__unused id e) {}
+    }
+    [[[UINotificationFeedbackGenerator alloc] init] notificationOccurred:UINotificationFeedbackTypeSuccess];
+    Toast(n ? [NSString stringWithFormat:@"Marked %lu chat%@ as read", (unsigned long)n, n == 1 ? @"" : @"s"] : @"Everything's already read", @"envelope.open.fill");
+}
 static void StyleGear(UIWindow *w) {
     UIButton *b = (UIButton *)[w viewWithTag:FGEAR_TAG];
     UIViewController *vc = gOn ? ListVC(w.rootViewController, 0) : nil;
@@ -5315,6 +5333,12 @@ static void StyleGear(UIWindow *w) {
         [b addTarget:[M26Search shared] action:@selector(down:) forControlEvents:UIControlEventTouchDown];
         [b addTarget:[M26Search shared] action:@selector(up:) forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel | UIControlEventTouchUpInside];
         b.alpha = 0; [w addSubview:b];
+    }
+    // 1.8.3: hold the button: Mark All as Read
+    BOOL wantMenu = Opt(@"markall");
+    if ((b.menu != nil) != wantMenu) {
+        b.showsMenuAsPrimaryAction = NO;
+        b.menu = wantMenu ? [UIMenu menuWithChildren:@[[UIAction actionWithTitle:@"Mark All as Read" image:[UIImage systemImageNamed:@"envelope.open"] identifier:nil handler:^(__unused UIAction *a) { MarkAllRead(); }]]] : nil;
     }
     CGFloat d = 50;
     UINavigationBar *nb = nc.navigationBar;
@@ -5593,7 +5617,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.8.2 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.8.3 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];
