@@ -81,6 +81,7 @@ static void InsGooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, C
     CGFloat _tx, _td, _x, _d, _vx, _vd, _bx, _vbx, _rScale;
     int _mode; BOOL _light, _absorbing, _bounced, _broken; CGFloat _nk; CFTimeInterval _popT;
     MPLiquidGlassView *_mg; CAGradientLayer *_caustic;   // 1.7.4: the real liquid glass (MusicPill 1.8.2)
+    UIView *_base;                                       // 1.7.5: the pill's glass, moved under the drop
 }
 - (void)beginOn:(UIView *)pill touchX:(CGFloat)x {
     UIView *host = pill.superview; if (!host) return;
@@ -97,6 +98,18 @@ static void InsGooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, C
         _mg = [[MPLiquidGlassView alloc] initWithFrame:CGRectMake(CGRectGetMinX(P) - 24, CGRectGetMinY(P) - 150, P.size.width + 48, P.size.height + 156)];
     }
     if (_mg) {
+        // 1.7.5: like MusicPill: the pill's own glass (and its bright rim) steps aside and an exact copy sits
+        // under the drop, so the drop's glass covers the pill's top edge where the neck comes out: no line
+        // across the neck
+        _base = [[UIView alloc] initWithFrame:P];
+        _base.backgroundColor = pill.backgroundColor; _base.layer.cornerRadius = P.size.height / 2; _base.layer.cornerCurve = kCACornerCurveContinuous;
+        _base.userInteractionEnabled = NO;
+        [_holder addSubview:_base];
+        RimFit(_base, !_light);
+        _pillBg = pill.backgroundColor;
+        pill.backgroundColor = UIColor.clearColor;
+        for (UIView *s in pill.subviews) if (NGIsGlass(s) && !s.hidden) { s.hidden = YES; objc_setAssociatedObject(s, "m26gh", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+        for (CALayer *l in pill.layer.sublayers) if ([l.name hasSuffix:@"rim"]) { [l setValue:@(l.opacity) forKey:@"m26o"]; l.opacity = 0; }
         _mg.autoresizingMask = UIViewAutoresizingNone; _mg.layer.cornerRadius = 0;
         _mg.glassTint = _light ? [UIColor colorWithWhite:1 alpha:0.32] : [UIColor colorWithRed:0.165 green:0.165 blue:0.176 alpha:0.32];
         _mg.matchLiquidAss = YES; _mg.excludeFirst = YES; _mg.captureScale = 0.5;
@@ -276,6 +289,12 @@ static void InsGooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, C
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:_absorbing ? UIImpactFeedbackStyleSoft : UIImpactFeedbackStyleLight] impactOccurred];
     }
     _absorbing = NO;
+    if (_holder && pill && _mg) {
+        pill.backgroundColor = _pillBg;
+        for (UIView *s in pill.subviews) if ([objc_getAssociatedObject(s, "m26gh") boolValue]) { s.hidden = NO; objc_setAssociatedObject(s, "m26gh", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+        for (CALayer *l in pill.layer.sublayers) { NSNumber *o = [l valueForKey:@"m26o"]; if (o) { l.opacity = o.floatValue; [l setValue:nil forKey:@"m26o"]; } }
+    }
+    _base = nil;
     if (_holder && pill && !_mg) {
         pill.backgroundColor = _pillBg;
         for (CALayer *l in pill.layer.sublayers) { NSNumber *o = [l valueForKey:@"m26o"]; if (o) { l.opacity = o.floatValue; [l setValue:nil forKey:@"m26o"]; } }
