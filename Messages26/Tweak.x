@@ -1,4 +1,5 @@
-// Messages26 1.7.3 - made by nano
+// Messages26 1.7.4 - made by nano
+// 1.7.4: the Insights drop is MusicPill 1.8.2's real liquid glass (shader, smooth neck, foot melting into the pill)
 // 1.7.3: Insights opens with MusicPill's liquid drop (same physics) and closes back into a drop sucked into the pill; settings button hidden over it; demo pill / compose look right and show the drop
 // 1.7.2: Insights opens like MusicPill's Dynamic Pill (stretch, island spring, Dynamic Island close + bounce); its switch and a live demo are in Settings → Messages26
 // 1.7.1: Insights grows out of the search pill (same glass), everything else fades away
@@ -138,6 +139,7 @@
 #import <substrate.h>
 #include "../shared/LGCompat.h"
 #include "../shared/NanoGlass.h"
+#include "../MusicPill/LiquidGlass.h"   // 1.7.4: MusicPill's liquid glass shader, for the Insights drop
 #import <PhotosUI/PhotosUI.h>
 #import <Photos/Photos.h>
 #import <LocalAuthentication/LocalAuthentication.h>
@@ -5571,7 +5573,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.7.3 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.7.4 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

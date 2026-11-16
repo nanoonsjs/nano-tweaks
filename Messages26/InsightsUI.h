@@ -80,6 +80,7 @@ static void InsGooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, C
     CADisplayLink *_link; CFTimeInterval _last;
     CGFloat _tx, _td, _x, _d, _vx, _vd, _bx, _vbx, _rScale;
     int _mode; BOOL _light, _absorbing, _bounced, _broken; CGFloat _nk; CFTimeInterval _popT;
+    MPLiquidGlassView *_mg; CAGradientLayer *_caustic;   // 1.7.4: the real liquid glass (MusicPill 1.8.2)
 }
 - (void)beginOn:(UIView *)pill touchX:(CGFloat)x {
     UIView *host = pill.superview; if (!host) return;
@@ -89,6 +90,29 @@ static void InsGooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, C
     _tx = _x = _bx = MAX(CGRectGetMinX(P), MIN(CGRectGetMaxX(P), x)); _td = _d = 0; _vx = _vd = _vbx = 0;
     _light = pill.traitCollection.userInterfaceStyle == UIUserInterfaceStyleLight;
     _holder = [[UIView alloc] initWithFrame:host.bounds]; _holder.userInteractionEnabled = NO;
+    _mg = nil; _caustic = nil;
+    // 1.7.4: like MusicPill 1.8.2: the neck and drop are one piece of real liquid glass (LiquidGlassKit's shader,
+    // LiquidAss's look) melted onto the pill, which keeps its own glass
+    if (MPLGReady()) {
+        _mg = [[MPLiquidGlassView alloc] initWithFrame:CGRectMake(CGRectGetMinX(P) - 24, CGRectGetMinY(P) - 150, P.size.width + 48, P.size.height + 156)];
+    }
+    if (_mg) {
+        _mg.autoresizingMask = UIViewAutoresizingNone; _mg.layer.cornerRadius = 0;
+        _mg.glassTint = _light ? [UIColor colorWithWhite:1 alpha:0.32] : [UIColor colorWithRed:0.165 green:0.165 blue:0.176 alpha:0.32];
+        _mg.matchLiquidAss = YES; _mg.excludeFirst = YES; _mg.captureScale = 0.5;
+        [_holder addSubview:_mg];
+        _caustic = [CAGradientLayer layer]; _caustic.type = kCAGradientLayerRadial;
+        _caustic.colors = @[(id)[UIColor colorWithWhite:1 alpha:_light ? 0.55 : 0.38].CGColor, (id)[UIColor colorWithWhite:1 alpha:0].CGColor];
+        _caustic.startPoint = CGPointMake(0.5, 0.5); _caustic.endPoint = CGPointMake(1, 1);
+        [_holder.layer addSublayer:_caustic];
+        [host insertSubview:_holder belowSubview:pill];
+        [self draw];
+        _last = 0;
+        _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(step:)];
+        if (@available(iOS 15.0, *)) _link.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+        [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+        return;
+    }
     // one piece of the pill's own glass: the capsule and the drop share it
     _pillBg = pill.backgroundColor ?: [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97];
     _fill = [CAShapeLayer layer]; _fill.fillColor = _pillBg.CGColor;
@@ -196,6 +220,43 @@ static void InsGooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, C
     [p closePath];
     if (apart && r0 > 0.5) [p appendPath:[UIBezierPath bezierPathWithOvalInRect:CGRectMake(cx - rx, by - ry, rx * 2, ry * 2)]];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
+    if (_mg) {
+        // pill, neck and drop melted together by the shader: the neck is a chain of beads from its foot on the
+        // pill up to the drop, thinning as it rises; past the snap the drop is its own ball
+        CGPoint o = _mg.frame.origin;
+        NSMutableArray *sh = [NSMutableArray array];
+        [sh addObject:[NSValue valueWithCGRect:CGRectOffset(P, -o.x, -o.y)]];
+        if (hasDrop && !apart) {
+            int nb = 6;
+            CGFloat footR = MIN(R * 0.95, base * 0.55), endR = MAX(1.2, neck);
+            CGPoint a = CGPointMake(fx, top + footR * 0.6), b = CGPointMake(cx, by), c = CGPointMake((fx + cx) / 2 + lean * 0.2, (top + by) / 2);
+            for (int i = 1; i <= nb; i++) {
+                CGFloat tt = (CGFloat)i / (nb + 1), it = 1 - tt;
+                CGFloat x = it * it * a.x + 2 * it * tt * c.x + tt * tt * b.x, y = it * it * a.y + 2 * it * tt * c.y + tt * tt * b.y;
+                CGFloat rr = footR + (endR - footR) * sqrt(tt);
+                [sh addObject:[NSValue valueWithCGRect:CGRectMake(x - rr - o.x, y - rr - o.y, rr * 2, rr * 2)]];
+            }
+        } else if (apart && lb > 0.05) {
+            CGFloat br = 9 * lb;
+            [sh addObject:[NSValue valueWithCGRect:CGRectMake(fx - br - o.x, top + 4 - 7 * lb - br - o.y, br * 2, br * 2)]];
+        }
+        if (hasDrop && r0 > 0.5) [sh addObject:[NSValue valueWithCGRect:CGRectMake(cx - rx - o.x, by - ry - o.y, rx * 2, ry * 2)]];
+        _mg.shapes = sh; _mg.shapeRadius = R; _mg.mergePts = 12;
+        // around the neck's base the drop's glass covers the pill's top edge (fading out), so it flows into the pill
+        if (hasDrop && !apart) {
+            CGFloat ow = MAX(R * 1.6, base * 2.6) * MIN(1, d / 12), oh = R * 1.3 * MIN(1, d / 12);
+            _mg.footOval = CGRectMake(fx - ow / 2 - o.x, top + R * 0.15 - oh / 2 - o.y, ow, oh);
+        } else if (apart && lb > 0.05) {
+            CGFloat ow = 44 * lb, oh = R * 1.1 * lb;
+            _mg.footOval = CGRectMake(fx - ow / 2 - o.x, top + R * 0.1 - oh / 2 - o.y, ow, oh);
+        } else _mg.footOval = CGRectZero;
+        // light focused through the drop lands as a soft glow near its bottom (like a real water drop)
+        CGFloat cw2 = rx * 1.3, ch2 = ry * 0.75;
+        _caustic.frame = CGRectMake(cx - cw2 / 2 + (cx - fx) * 0.08, by + ry * 0.62 - ch2 / 2, cw2, ch2);
+        _caustic.opacity = hasDrop ? MAX(0, MIN(1, (d - 18) / 30)) : 0;
+        [CATransaction commit];
+        return;
+    }
     _fill.path = p.CGPath; _rim.path = p.CGPath; _holder.layer.shadowPath = p.CGPath;
     // the ink lives in the shape and fades out by the pill's top edge, so only the drop and neck go inky
     _inkMask.path = p.CGPath;
@@ -215,7 +276,7 @@ static void InsGooBump(UIBezierPath *q, CGFloat top, CGFloat fx, CGFloat base, C
         [[[UIImpactFeedbackGenerator alloc] initWithStyle:_absorbing ? UIImpactFeedbackStyleSoft : UIImpactFeedbackStyleLight] impactOccurred];
     }
     _absorbing = NO;
-    if (_holder && pill) {
+    if (_holder && pill && !_mg) {
         pill.backgroundColor = _pillBg;
         for (CALayer *l in pill.layer.sublayers) { NSNumber *o = [l valueForKey:@"m26o"]; if (o) { l.opacity = o.floatValue; [l setValue:nil forKey:@"m26o"]; } }
         pill.layer.shadowOpacity = pill.traitCollection.userInterfaceStyle == UIUserInterfaceStyleLight ? 0.12 : 0.35;
