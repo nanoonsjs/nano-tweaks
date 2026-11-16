@@ -1,5 +1,5 @@
 // ===================== Messages26: Conversation Insights =====================
-// 1.7: swipe up on the search pill (conversation list) and the pill grows into Insights with your finger: messages, emojis,
+// 1.7: swipe up on the search pill (conversation list) and it opens like MusicPill's Dynamic Pill: messages, emojis,
 // busiest days, photos / videos, voice messages, most-used words, and the people you text most (tap one for
 // that conversation). Counted on the phone by M26Keeper (Insights.m) in the Messages background service.
 // Included from Tweak.x after the search pill code.
@@ -45,129 +45,234 @@ static NSString *InsName(NSString *cid, NSString *fallback) {
 }
 static NSString *InsNum(long n) { NSNumberFormatter *f = [NSNumberFormatter new]; f.numberStyle = NSNumberFormatterDecimalStyle; return [f stringFromNumber:@(n)]; }
 
-#pragma mark - the sheet
+#pragma mark - the Dynamic Pill (MusicPill's island, for the search pill)
+
+// 1.7.2: works like MusicPill's Dynamic Pill: swipe up and the pill stretches with your finger, let go and it
+// grows into a dark island with Insights on one spring; pull it down (or tap outside) and it closes the way
+// the Dynamic Island does: top first, sides a beat behind, landing on the pill with a squishy bounce.
+static CGFloat InsCurve(CGFloat p) { p = MAX(0, MIN(1, p)); return p * p * (3 - 2 * p); }
+static CGFloat InsStep(CGFloat a, CGFloat b, CGFloat x) { x = MAX(0, MIN(1, (x - a) / (b - a))); return x * x * (3 - 2 * x); }
+static CGFloat InsLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; }
 
 @interface M26Insights : UIView <UIGestureRecognizerDelegate>
-@property (nonatomic, strong) UIView *sheet, *grab, *ghost;
+@property (nonatomic, strong) UIView *shape, *content, *snap;
 @property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) UIActivityIndicatorView *spin;
 @property (nonatomic, strong) UILabel *loading;
 @property (nonatomic, strong) NSDictionary *allData;
 @property (nonatomic, weak) UIView *pill;
-@property (nonatomic) CGFloat openY, progress;
+@property (nonatomic) CGFloat cw;
 @property (nonatomic) BOOL dark;
 @end
 static __weak M26Insights *gIns;
 
-// 1.7.1: the search pill itself grows into Insights (like MusicPill): same glass, the rest of the screen fades away
-@implementation M26Insights
-- (CGRect)fullRect { return CGRectMake(8, self.openY, self.bounds.size.width - 16, self.bounds.size.height - self.openY - 8); }
-- (CGRect)pillRect {
-    UIView *p = self.pill;
-    if (p.window) return [p convertRect:p.bounds toView:self];
-    CGFloat W = self.bounds.size.width; return CGRectMake(20, self.bounds.size.height - 90, W - 100, 50);
+@implementation M26Insights {
+    CADisplayLink *_link; CFTimeInterval _lastT;
+    CGFloat _prog, _vel, _goal, _zeta;   // 0 = open island, 1 = the pill
+    CGRect _P, _to, _from;
 }
-- (instancetype)initWithFrame:(CGRect)f pill:(UIView *)pill {
-    if (!(self = [super initWithFrame:f])) return nil;
-    self.pill = pill;
-    self.dark = self.traitCollection.userInterfaceStyle != UIUserInterfaceStyleLight;
-    self.backgroundColor = UIColor.clearColor;
+- (instancetype)initWithPill:(UIView *)pill {
     UIWindow *w = pill.window;
-    self.openY = MAX(50, (w ? w.safeAreaInsets.top : 47) + 6);
+    if (!(self = [super initWithFrame:w.bounds])) return nil;
+    self.pill = pill; self.dark = YES;
+    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;   // the island is always dark, like the real one
+    self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.backgroundColor = [UIColor colorWithWhite:0 alpha:0];
+    UIEdgeInsets sa = w.safeAreaInsets;
+    CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
+    _from = [pill convertRect:pill.bounds toView:w];
+    CGFloat bottom = MIN(H - MAX(10, sa.bottom - 8), CGRectGetMaxY(_from) + 4);
+    _to = CGRectMake(8, sa.top + 6, W - 16, bottom - sa.top - 6);
+    self.cw = _to.size.width;
 
-    // the pill's own look: solid dark glass, bright rim
-    self.sheet = [UIView new];
-    self.sheet.backgroundColor = self.dark ? [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:0.97] : [UIColor colorWithWhite:0.97 alpha:0.97];
-    self.sheet.layer.cornerCurve = kCACornerCurveContinuous; self.sheet.clipsToBounds = YES;
-    self.sheet.layer.borderWidth = 0.75; self.sheet.layer.borderColor = [UIColor colorWithWhite:1 alpha:self.dark ? 0.14 : 0.6].CGColor;
-    [self addSubview:self.sheet];
+    // the shape: deep dark glass with a faint rim, like the Dynamic Island
+    UIView *shape = [[UIView alloc] initWithFrame:_from];
+    shape.clipsToBounds = YES; shape.layer.cornerCurve = kCACornerCurveContinuous; shape.layer.cornerRadius = _from.size.height / 2;
+    shape.layer.borderWidth = 0.8; shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+    UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]];
+    blur.frame = shape.bounds; blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [shape addSubview:blur];
+    UIView *ink = [[UIView alloc] initWithFrame:shape.bounds];
+    ink.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55]; ink.autoresizingMask = blur.autoresizingMask;
+    [shape addSubview:ink];
+    // the pill's picture, kept at its size at the bottom while the island grows out of it
+    UIView *snap = [pill snapshotViewAfterScreenUpdates:NO];
+    if (snap) { snap.frame = CGRectMake(0, 0, _from.size.width, _from.size.height); snap.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin; [shape addSubview:snap]; }
+    self.snap = snap;
+    UIView *content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, _to.size.width, _to.size.height)];
+    content.center = CGPointMake(_from.size.width / 2, _from.size.height / 2);
+    content.alpha = 0; content.transform = CGAffineTransformMakeScale(0.94, 0.94);
+    [shape addSubview:content];
+    self.shape = shape; self.content = content;
 
-    // what the pill showed, fading as it grows
-    UIImageView *mag = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightMedium]]];
-    mag.tintColor = UIColor.secondaryLabelColor; mag.frame = CGRectMake(16, 0, 24, 50); mag.contentMode = UIViewContentModeCenter;
-    UILabel *st = [[UILabel alloc] initWithFrame:CGRectMake(46, 0, 200, 50)]; st.text = @"Search"; st.font = [UIFont systemFontOfSize:19]; st.textColor = UIColor.secondaryLabelColor;
-    self.ghost = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 260, 50)]; [self.ghost addSubview:mag]; [self.ghost addSubview:st];
-    self.ghost.userInteractionEnabled = NO;
-    [self.sheet addSubview:self.ghost];
-
-    CGRect full = [self fullRect];
-    self.grab = [[UIView alloc] initWithFrame:CGRectMake((full.size.width - 40) / 2, 8, 40, 5)];
-    self.grab.backgroundColor = [UIColor colorWithWhite:self.dark ? 1 : 0 alpha:0.28]; self.grab.layer.cornerRadius = 2.5;
-    [self.sheet addSubview:self.grab];
-    // the content stays put on screen while the pill opens up around it
-    self.scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(-8, 20, f.size.width, full.size.height - 20)];
+    self.scroll = [[UIScrollView alloc] initWithFrame:content.bounds];
     self.scroll.alwaysBounceVertical = YES; self.scroll.showsVerticalScrollIndicator = NO;
-    [self.sheet addSubview:self.scroll];
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(sheetPan:)];
-    pan.delegate = self; [self.sheet addGestureRecognizer:pan];
-
+    [content addSubview:self.scroll];
+    UIButton *x = [UIButton buttonWithType:UIButtonTypeSystem];
+    [x setImage:[UIImage systemImageNamed:@"xmark" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightBold]] forState:UIControlStateNormal];
+    x.tintColor = UIColor.whiteColor; x.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    x.frame = CGRectMake(_to.size.width - 58, 22, 38, 38); x.layer.cornerRadius = 19;
+    [x addTarget:self action:@selector(collapse) forControlEvents:UIControlEventTouchUpInside];
+    [content addSubview:x];
     self.spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
-    [self.spin startAnimating]; [self.sheet addSubview:self.spin];
-    self.loading = [UILabel new];
+    self.spin.color = UIColor.whiteColor; self.spin.center = CGPointMake(_to.size.width / 2, _to.size.height * 0.4); [self.spin startAnimating];
+    [content addSubview:self.spin];
+    self.loading = [[UILabel alloc] initWithFrame:CGRectMake(0, _to.size.height * 0.4 + 30, _to.size.width, 22)];
     self.loading.text = @"Counting your messages…"; self.loading.textAlignment = NSTextAlignmentCenter;
-    self.loading.textColor = UIColor.secondaryLabelColor; self.loading.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
-    [self.sheet addSubview:self.loading];
-    [self setProgress:0];
+    self.loading.textColor = [UIColor colorWithWhite:1 alpha:0.6]; self.loading.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    [content addSubview:self.loading];
+
+    [self addSubview:shape];
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(bgTap:)];
+    [self addGestureRecognizer:tap];
+    UIPanGestureRecognizer *down = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(pullDown:)];
+    down.delegate = self; [shape addGestureRecognizer:down];
     return self;
 }
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return YES; }
-- (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
-    CGPoint v = [g velocityInView:self];
-    return v.y > fabs(v.x) && (self.scroll.contentOffset.y <= 0 || [g locationInView:self.sheet].y < 40);
+- (void)open {
+    UIView *shape = self.shape, *content = self.content, *snap = self.snap;
+    [UIView performWithoutAnimation:^{ self.pill.alpha = 0; }];
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred];
+    // one spring out of the pill: quick, a touch of overshoot, settles like the Dynamic Island
+    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0.35 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut animations:^{
+        shape.frame = self->_to; shape.layer.cornerRadius = 44;
+        content.center = CGPointMake(self->_to.size.width / 2, self->_to.size.height / 2);
+        content.transform = CGAffineTransformIdentity;
+        snap.frame = CGRectMake((self->_to.size.width - self->_from.size.width) / 2, self->_to.size.height - self->_from.size.height, self->_from.size.width, self->_from.size.height);
+    } completion:nil];
+    [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ snap.alpha = 0; } completion:nil];
+    [UIView animateWithDuration:0.16 delay:0.03 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{ content.alpha = 1; } completion:nil];
+    [UIView animateWithDuration:0.35 animations:^{ self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3]; }];
 }
-- (void)sheetPan:(UIPanGestureRecognizer *)g {
-    CGFloat dy = MAX(0, [g translationInView:self].y), H = self.bounds.size.height;
-    if (g.state == UIGestureRecognizerStateChanged) {
-        if (self.scroll.contentOffset.y > 0 && [g locationInView:self.sheet].y > 40) return;
-        self.scroll.contentOffset = CGPointZero;
-        [self setProgress:1 - dy / (H * 0.7)];
-    } else if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
-        if (dy > 130 || [g velocityInView:self].y > 900) [self close]; else [self settle];
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)g {
+    if (![g isKindOfClass:[UIPanGestureRecognizer class]]) return YES;
+    CGPoint p = [g locationInView:self.shape], v = [(UIPanGestureRecognizer *)g velocityInView:self.shape];
+    return v.y > fabs(v.x) && (p.y < 96 || self.scroll.contentOffset.y <= 0);
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return NO; }
+- (CGRect)pillRect {
+    UIView *p = self.pill;
+    CGRect r = p.window == self.window ? [p convertRect:p.bounds toView:self] : _from;
+    return r.size.width < 20 ? _from : r;
+}
+// the top edge leads, the sides and the bottom follow a beat behind
+- (CGRect)rectFor:(CGFloat)pr {
+    CGRect P = _P, T = _to;
+    CGFloat e = InsCurve(pr);
+    CGFloat top = InsLerp(CGRectGetMinY(T), CGRectGetMinY(P), MAX(-0.04, MIN(1.06, pr))), bottom = InsLerp(CGRectGetMaxY(T), CGRectGetMaxY(P), e);
+    CGFloat w = InsLerp(T.size.width, P.size.width, e), cx = InsLerp(CGRectGetMidX(T), CGRectGetMidX(P), e);
+    return CGRectMake(cx - w / 2, top, w, MAX(P.size.height, bottom - top));
+}
+- (void)beginMove {
+    _P = [self pillRect];
+    UIView *fresh = nil;
+    if (self.pill.window) {
+        CGFloat a0 = self.pill.alpha;
+        [UIView performWithoutAnimation:^{ self.pill.alpha = 1; }];
+        fresh = [self.pill snapshotViewAfterScreenUpdates:YES];
+        [UIView performWithoutAnimation:^{ self.pill.alpha = a0; }];
+    }
+    if (fresh) { fresh.alpha = self.snap.alpha; [self.snap removeFromSuperview]; self.snap = fresh; [self.shape addSubview:fresh]; }
+    self.snap.autoresizingMask = UIViewAutoresizingNone;
+    [self.shape bringSubviewToFront:self.snap];
+    [self.shape.layer removeAllAnimations]; [self.content.layer removeAllAnimations]; [self.snap.layer removeAllAnimations];
+    self.content.layer.shouldRasterize = YES; self.content.layer.rasterizationScale = UIScreen.mainScreen.scale;
+}
+- (void)show:(CGFloat)pr {
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    [UIView performWithoutAnimation:^{ [self morphTo:[self rectFor:pr] progress:MAX(0, MIN(1, pr))]; }];
+    [CATransaction commit];
+}
+- (void)morphTo:(CGRect)f progress:(CGFloat)p {
+    CGRect P = _P, T = _to;
+    self.shape.frame = f;
+    CGFloat e = InsCurve(p);
+    self.shape.layer.cornerRadius = MIN(f.size.height / 2, InsLerp(44, P.size.height / 2, e));
+    self.shape.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16 * (1 - InsStep(0, 0.35, p))].CGColor;
+    CGFloat sc = MIN(1, MAX(f.size.width / MAX(1, T.size.width), f.size.height / MAX(1, T.size.height)));
+    self.content.transform = CGAffineTransformMakeScale(sc, sc);
+    self.content.center = CGPointMake(f.size.width / 2, f.size.height / 2);
+    self.content.alpha = 1 - InsStep(0.12, 0.62, p);
+    self.snap.frame = CGRectMake((f.size.width - P.size.width) / 2, f.size.height - P.size.height, P.size.width, P.size.height);
+    self.snap.alpha = InsStep(0.25, 0.75, p);
+    self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.3 * (1 - MIN(1, p))];
+}
+- (void)pullDown:(UIPanGestureRecognizer *)g {
+    if (self.tag == 0x4D50) return;
+    if (g.state == UIGestureRecognizerStateBegan) { [_link invalidate]; _link = nil; [self beginMove]; }
+    CGFloat span = MAX(1, CGRectGetMinY(_P) - CGRectGetMinY(_to));
+    CGFloat dy = MAX(0, [g translationInView:self].y);
+    CGFloat pr = dy / span; if (pr > 1) pr = 1 + (1 - 1 / ((pr - 1) * 2.2 + 1)) * 0.06;
+    if (g.state == UIGestureRecognizerStateBegan || g.state == UIGestureRecognizerStateChanged) { _prog = pr; [self show:pr]; return; }
+    CGFloat vy = [g velocityInView:self].y;
+    if (g.state == UIGestureRecognizerStateEnded && (_prog > 0.28 || vy > 600)) { [self collapseWithVelocity:vy]; return; }
+    _vel = -fabs(vy) / span * 0.5; _goal = 0; _zeta = 0.84;
+    [self runSpring];
+}
+- (void)runSpring {
+    if (!_link) {
+        _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(springStep:)];
+        if (@available(iOS 15.0, *)) _link.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+        [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    }
+    _lastT = 0;
+}
+- (void)springStep:(CADisplayLink *)l {
+    CFTimeInterval now = l.targetTimestamp > 0 ? l.targetTimestamp : CACurrentMediaTime();
+    double dt = _lastT > 0 ? MIN(1.0 / 30, now - _lastT) : 1.0 / 60; _lastT = now;
+    double w = 2 * M_PI / (_goal >= 1 ? 0.5 : 0.32), k = w * w, c = 2 * _zeta * w;
+    int n = MAX(1, (int)ceil(dt / (1.0 / 240))); double h = dt / n;
+    for (int i = 0; i < n; i++) { double a = -k * (_prog - _goal) - c * _vel; _vel += a * h; _prog += _vel * h; }
+    [self show:_prog];
+    if (_goal >= 1 && self.tag == 0x4D50 && _prog >= 0.985) { [self landed]; return; }
+    if (fabs(_prog - _goal) < 0.0015 && fabs(_vel) < 0.02) {
+        [_link invalidate]; _link = nil;
+        _prog = _goal; [self show:_goal];
+        if (_goal >= 1) [self landed]; else self.content.layer.shouldRasterize = NO;
     }
 }
-static CGFloat InsLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t; }
-// 0 = the search pill, 1 = Insights filling the screen (anything in between follows the finger)
-- (void)setProgress:(CGFloat)p {
-    p = MAX(0, MIN(1, p)); _progress = p;
-    CGRect a = [self pillRect], b = [self fullRect];
-    CGRect r = CGRectMake(InsLerp(a.origin.x, b.origin.x, p), InsLerp(a.origin.y, b.origin.y, p), InsLerp(a.size.width, b.size.width, p), InsLerp(a.size.height, b.size.height, p));
-    self.sheet.frame = r;
-    self.sheet.layer.cornerRadius = InsLerp(a.size.height / 2, 44, MIN(1, p * 1.4));
-    // content pinned to the screen, revealed by the growing glass
-    self.scroll.frame = CGRectMake(b.origin.x - r.origin.x - 8, b.origin.y - r.origin.y + 20, self.bounds.size.width, b.size.height - 20);
-    self.grab.center = CGPointMake(r.size.width / 2, 10.5);
-    self.spin.center = CGPointMake(self.bounds.size.width / 2 - r.origin.x, b.origin.y - r.origin.y + 170);
-    self.loading.frame = CGRectMake(-r.origin.x, b.origin.y - r.origin.y + 200, self.bounds.size.width, 22);
-    CGFloat c = MAX(0, MIN(1, (p - 0.25) / 0.6));
-    self.scroll.alpha = c; self.spin.alpha = c; self.loading.alpha = c; self.grab.alpha = c;
-    self.ghost.alpha = MAX(0, 1 - p * 4);
-    self.ghost.frame = CGRectMake(0, 0, 260, a.size.height);
-    // everything else steps back; only Insights is left
-    self.backgroundColor = [(self.dark ? UIColor.blackColor : UIColor.whiteColor) colorWithAlphaComponent:MIN(1, p * 1.15)];
-    self.pill.alpha = p > 0.001 ? 0 : 1;
-    UIView *comp = [self.window viewWithTag:SCOMPOSE_TAG];
-    comp.alpha = 1 - MIN(1, p * 3);
-    comp.transform = CGAffineTransformMakeScale(1 - 0.4 * MIN(1, p * 3), 1 - 0.4 * MIN(1, p * 3));
-    UIView *root = self.window.rootViewController.view;
-    root.alpha = 1 - MIN(1, p * 1.3);
-    root.transform = CGAffineTransformMakeScale(1 - 0.06 * p, 1 - 0.06 * p);
+- (void)bgTap:(UITapGestureRecognizer *)g { if (!CGRectContainsPoint(self.shape.frame, [g locationInView:self])) [self collapse]; }
+- (void)collapse { [self collapseWithVelocity:0]; }
+- (void)close { [self collapse]; }
+- (void)collapseWithVelocity:(CGFloat)vy {
+    if (self.tag == 0x4D50) return;
+    self.tag = 0x4D50; gInsCB = nil;
+    self.userInteractionEnabled = NO;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleSoft] impactOccurred];
+    CALayer *pl = self.shape.layer.presentationLayer;
+    CGRect cur = pl ? pl.frame : self.shape.frame;
+    BOOL moving = _link != nil;
+    if (!moving) [self beginMove];
+    CGFloat span = MAX(1, CGRectGetMinY(_P) - CGRectGetMinY(_to));
+    if (!moving) _prog = CGRectGetMinY(cur) > CGRectGetMinY(_to) + 1 ? MAX(0, (CGRectGetMinY(cur) - CGRectGetMinY(_to)) / span) : 0;
+    _vel = vy > 0 ? MIN(6, vy / span) : (moving ? _vel : 0);
+    _goal = 1; _zeta = 0.9;
+    [self runSpring];
+    __weak UIView *wp = self.pill;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ UIView *p = wp; if (p && p.alpha < 0.01) p.alpha = 1; if (self.superview && self.tag != 0x4D51) [self landed]; });
 }
-- (void)settle {
-    [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3 options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionBeginFromCurrentState animations:^{ [self setProgress:1]; } completion:nil];
+static void InsLandBounce(CALayer *L) {
+    CASpringAnimation *sx = [CASpringAnimation animationWithKeyPath:@"transform.scale.x"]; sx.fromValue = @1.07; sx.toValue = @1;
+    CASpringAnimation *sy = [CASpringAnimation animationWithKeyPath:@"transform.scale.y"]; sy.fromValue = @0.86; sy.toValue = @1;
+    CASpringAnimation *ty = [CASpringAnimation animationWithKeyPath:@"transform.translation.y"]; ty.fromValue = @3; ty.toValue = @0;
+    for (CASpringAnimation *a in @[sx, sy, ty]) { a.mass = 1; a.stiffness = 300; a.damping = 10; a.initialVelocity = 2; a.duration = a.settlingDuration; }
+    [L addAnimation:sx forKey:@"m26.landx"]; [L addAnimation:sy forKey:@"m26.landy"]; [L addAnimation:ty forKey:@"m26.landt"];
 }
-- (void)close {
-    gInsCB = nil;
-    [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{ [self setProgress:0]; } completion:^(BOOL f) {
-        UIView *root = self.window.rootViewController.view; root.alpha = 1; root.transform = CGAffineTransformIdentity;
-        UIView *comp = [self.window viewWithTag:SCOMPOSE_TAG]; comp.alpha = 1; comp.transform = CGAffineTransformIdentity;
-        self.pill.alpha = 1;
-        [self removeFromSuperview];
-    }];
+- (void)landed {
+    if (!self.superview || self.tag == 0x4D51) return;
+    self.tag = 0x4D51;
+    [_link invalidate]; _link = nil;
+    UIView *pill = self.pill;
+    [UIView performWithoutAnimation:^{ pill.alpha = 1; }];
+    if (pill.window) InsLandBounce(pill.layer);
+    InsLandBounce(self.shape.layer);
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    [UIView animateWithDuration:0.26 delay:0.02 options:UIViewAnimationOptionCurveEaseInOut animations:^{ self.alpha = 0; } completion:^(__unused BOOL f) { [self removeFromSuperview]; }];
 }
 
 #pragma mark building the cards
 - (UIView *)card:(CGFloat)y height:(CGFloat)h {
-    UIView *c = [[UIView alloc] initWithFrame:CGRectMake(16, y, self.bounds.size.width - 32, h)];
+    UIView *c = [[UIView alloc] initWithFrame:CGRectMake(16, y, self.cw - 32, h)];
     c.backgroundColor = [UIColor colorWithWhite:self.dark ? 1 : 0 alpha:self.dark ? 0.07 : 0.045];
     c.layer.cornerRadius = 24; c.layer.cornerCurve = kCACornerCurveContinuous;
     [self.scroll addSubview:c];
@@ -179,9 +284,9 @@ static CGFloat InsLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t
 }
 - (UILabel *)cardTitle:(NSString *)t in:(UIView *)c { return [self label:t.uppercaseString size:13 weight:UIFontWeightSemibold color:UIColor.secondaryLabelColor in:c frame:CGRectMake(18, 14, c.bounds.size.width - 36, 18)]; }
 - (void)show:(NSDictionary *)d chat:(NSString *)chat name:(NSString *)name {
-    [self.spin stopAnimating]; self.loading.hidden = YES;
+    [self.spin stopAnimating]; self.loading.hidden = YES; self.scroll.layer.shouldRasterize = NO;
     for (UIView *v in self.scroll.subviews.copy) [v removeFromSuperview];
-    CGFloat W = self.bounds.size.width, y = 6;
+    CGFloat W = self.cw, y = 20;
     BOOL all = [chat isEqualToString:@"*"];
     if (!all) {   // back to everything
         UIButton *back = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -332,7 +437,7 @@ static CGFloat InsLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t
         y += c.bounds.size.height + 12;
     }
     [self label:@"Counted on your iPhone. Nothing leaves it." size:12 weight:UIFontWeightMedium color:UIColor.tertiaryLabelColor in:self.scroll frame:CGRectMake(0, y + 4, W, 16)].textAlignment = NSTextAlignmentCenter;
-    self.scroll.contentSize = CGSizeMake(W, y + 60 + self.safeAreaInsets.bottom);
+    self.scroll.contentSize = CGSizeMake(W, y + 60 + 0);
     // the cards float in
     NSArray *vs = self.scroll.subviews; NSUInteger i = 0;
     for (UIView *v in vs) {
@@ -360,38 +465,56 @@ static CGFloat InsLerp(CGFloat a, CGFloat b, CGFloat t) { return a + (b - a) * t
 
 #pragma mark - pulled up from the search pill
 
-static M26Insights *InsMake(UIView *pill) {
-    UIWindow *w = pill.window;
-    M26Insights *s = [[M26Insights alloc] initWithFrame:w.bounds pill:pill];
-    s.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [w addSubview:s];
-    gIns = s;
-    [s load:@"*" name:nil];
-    return s;
+// the swipe stretches the pill up with your finger (like MusicPill's), let go and the island opens out of it
+static void InsStretch(UIView *v, CGFloat up) {
+    CGFloat d = MAX(0, up), r = 26 * (1 - 1 / (d / 60 + 1));                   // rubber band
+    CGFloat sy = 1 + MIN(0.22, d / 420), sx = 1 - MIN(0.05, d / 1600);
+    v.layer.transform = CATransform3DScale(CATransform3DMakeTranslation(0, -r - v.bounds.size.height * (sy - 1) / 2, 0), sx, sy, 1);
+}
+static void InsRelease(UIView *v) {
+    CATransform3D from = v.layer.transform;
+    v.layer.transform = CATransform3DIdentity;
+    CASpringAnimation *a = [CASpringAnimation animationWithKeyPath:@"transform"];
+    a.fromValue = [NSValue valueWithCATransform3D:from]; a.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+    a.mass = 1; a.stiffness = 260; a.damping = 12; a.duration = a.settlingDuration;
+    [v.layer addAnimation:a forKey:@"m26.release"];
 }
 @interface M26InsPan : NSObject <UIGestureRecognizerDelegate>
 @end
 @implementation M26InsPan
 - (BOOL)gestureRecognizerShouldBegin:(UIPanGestureRecognizer *)g {
-    if (!Opt(@"insights")) return NO;
+    if (!gInsOn || gIns.superview) return NO;
     CGPoint v = [g velocityInView:g.view];
-    return v.y < 0 && fabs(v.y) > fabs(v.x);   // straight up only (sideways and taps stay the pill's)
+    return v.y < 0 && fabs(v.y) > fabs(v.x);   // straight up only (taps stay the pill's)
 }
 - (void)pan:(UIPanGestureRecognizer *)g {
-    UIWindow *w = g.view.window; if (!w) return;
-    M26Insights *s = gIns;
-    if (g.state == UIGestureRecognizerStateBegan) {
-        if (!s.superview) s = InsMake(g.view);
-        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
-        if ([g.view isKindOfClass:[UIControl class]]) [(UIControl *)g.view cancelTrackingWithEvent:nil];
-    }
-    if (!s) return;
+    UIView *pill = g.view; UIWindow *w = pill.window; if (!w) return;
     CGFloat up = -[g translationInView:w].y;
-    if (g.state == UIGestureRecognizerStateChanged) [s setProgress:up / (w.bounds.size.height * 0.5)];
-    else if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
-        if (up > 60 || [g velocityInView:w].y < -500) { [s settle]; [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium] impactOccurred]; }
-        else [s close];
+    if (g.state == UIGestureRecognizerStateBegan) {
+        [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+        if ([pill isKindOfClass:[UIControl class]]) [(UIControl *)pill cancelTrackingWithEvent:nil];
+        [pill.layer removeAnimationForKey:@"m26.release"];
     }
+    if (g.state == UIGestureRecognizerStateChanged) {
+        [CATransaction begin]; [CATransaction setDisableActions:YES]; InsStretch(pill, up); [CATransaction commit];
+        if (up > 150) { g.enabled = NO; g.enabled = YES; [self openFrom:pill]; }   // pulled far: it opens by itself
+    } else if (g.state == UIGestureRecognizerStateEnded || g.state == UIGestureRecognizerStateCancelled) {
+        if (g.state == UIGestureRecognizerStateEnded && (up > 40 || [g velocityInView:w].y < -450)) [self openFrom:pill];
+        else InsRelease(pill);
+    }
+}
+- (void)openFrom:(UIView *)pill {
+    if (gIns.superview) return;
+    // the island starts from the pill as it looks right now (still stretched)
+    M26Insights *s = [[M26Insights alloc] initWithPill:pill];
+    CALayer *pl = pill.layer.presentationLayer ?: pill.layer;
+    CGRect seen = [pill.superview.layer convertRect:pl.frame toLayer:pill.window.layer];
+    pill.layer.transform = CATransform3DIdentity;
+    if (seen.size.width > 20) { s.shape.frame = seen; s.shape.layer.cornerRadius = MIN(seen.size.height, seen.size.width) / 2; s.content.center = CGPointMake(seen.size.width / 2, seen.size.height / 2); s.snap.frame = CGRectMake((seen.size.width - pill.bounds.size.width) / 2, seen.size.height - pill.bounds.size.height, pill.bounds.size.width, pill.bounds.size.height); }
+    [pill.window addSubview:s];
+    gIns = s;
+    [s open];
+    [s load:@"*" name:nil];
 }
 @end
 static void InsAttach(UIView *pill) {

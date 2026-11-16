@@ -1,4 +1,5 @@
-// Messages26 1.7.1 - made by nano
+// Messages26 1.7.2 - made by nano
+// 1.7.2: Insights opens like MusicPill's Dynamic Pill (stretch, island spring, Dynamic Island close + bounce); its switch and a live demo are in Settings → Messages26
 // 1.7.1: Insights grows out of the search pill (same glass), everything else fades away
 // 1.7: Conversation Insights (swipe up on the search pill)
 // 1.6.2: the keyboard goes away when the recorder opens (it stayed on top)
@@ -203,6 +204,7 @@ static UIImage *MenuIconFor(NSDictionary *it) {
 #define DOM CFSTR("com.nano.messages26")
 static BOOL gBigPfp = YES;
 static BOOL gOn = YES, gBarOn = YES, gMenuOn = YES, gTopOn = YES, gSearchOn = YES, gBubblesOn = YES, gSwipeOn = YES, gPrefDebug = NO;
+static BOOL gInsOn = NO;   // 1.7.2: Conversation Insights (Settings app → Messages26)
 static BOOL gViewerOn = YES;   // 1.3: iOS 26 photo / video viewer (MsgViewer.h)
 static BOOL gAudioBig = YES, gSpeakerOn = YES, gContactAnim = YES;
 static NSString *gMVDebug = @"viewer: -", *gMVItems = @"", *gMVPans = @"";   // viewer debug (MsgViewer.h)
@@ -229,6 +231,7 @@ static void LoadPrefs(void) {
     gTopOn = gOn && PrefBool(file, @"topbar", YES);
     gBigPfp = gTopOn && PrefBool(file, @"bigphoto", YES);
     gSearchOn = gOn && PrefBool(file, @"searchpill", YES);
+    gInsOn = gOn && gSearchOn && PrefBool(file, @"insights", NO);
     gBubblesOn = gOn && PrefBool(file, @"bubbles", YES);
     gSwipeOn = gOn && PrefBool(file, @"swipereply", YES);
     gViewerOn = gOn && PrefBool(file, @"viewer", YES);
@@ -5105,7 +5108,6 @@ static NSArray *FeatRows(void) {   // key, title, icon, color, footer
              @[@"remind", @"Message Reminders", @"bell.badge.fill", UIColor.systemPinkColor, @"Hold a message → Remind Me, and get a notification about it later."],
              @[@"fwd", @"Forward Messages", @"arrowshape.turn.up.right.fill", UIColor.systemBlueColor, @"Hold a message → Forward, then pick who to send it to."],
              @[@"keepunsent", @"Keep Unsent Messages", @"arrow.uturn.backward.circle.fill", UIColor.systemRedColor, @"When someone unsends a message, you still see what it said under \"unsent a message\". Photos and videos they unsend are kept too (open them from here)."],
-             @[@"insights", @"Conversation Insights", @"chart.bar.xaxis", UIColor.systemIndigoColor, @"Swipe up on the search pill: total messages, your top emojis and words, busiest days, photos, videos, voice messages, and who you text most. Counted on your iPhone."],
              @[@"newaudio", @"Voice Recorder", @"mic.fill", UIColor.systemRedColor, @"Audio (+ menu) and the mic open a new recorder: tap to record in high quality, play it back, then send it or tap X to start over."],
              @[@"vidvoice", @"Video as Voice Message", @"waveform", UIColor.systemPurpleColor, @"\"Video as Voice\" in the + menu: pick a video and its sound is sent as a voice message."]];
 }
@@ -5568,7 +5570,7 @@ static void Tick(void) {
         l.layer.cornerRadius = 10; l.clipsToBounds = YES;
         [w addSubview:l];
     }
-    l.text = [NSString stringWithFormat:@" Messages26 1.7.1 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
+    l.text = [NSString stringWithFormat:@" Messages26 1.7.2 debug\n %@\n %@\n %@\n %@\n pans:%@\n %@", gDebug, gNavDebug, gSearchDebug, gMVDebug, gMVPans, gContactDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ %@\n %@\n %@", gBubbleDebug, gReplyDebug, gToDebug, gTitleDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ | %@", gFrameDebug, gFeatDebug];
     l.text = [l.text stringByAppendingFormat:@"\n %@ tab=%@ head=%ld child=%ld\n sections: %@\n edit: %@", gDetDebug, gDetTab, (long)gHeadRowSection, (long)gChildRowSection, gSnapDebug, gEditDebug];

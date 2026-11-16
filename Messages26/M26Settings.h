@@ -349,14 +349,144 @@ static Class M26PreviewClass(void) {
     if (!c) { c = objc_allocateClassPair(sup, "M26PreviewCell", 0); class_addMethod(c, @selector(layoutSubviews), (IMP)M26PreviewLayout, "v@:"); objc_registerClassPair(c); }
     return c;
 }
+
+#pragma mark - Insights demo (a little phone: swipe up on the search pill, the Dynamic Pill opens and closes)
+
+@interface M26InsDemo : UIView
+@end
+@implementation M26InsDemo {
+    UIView *_screen, *_pill, *_island, *_content, *_dot;
+    NSUInteger _gen;
+    CGRect _pillR, _bigR;
+}
+static UIView *M26Box(UIView *in, CGRect r, CGFloat rad, UIColor *c) {
+    UIView *v = [[UIView alloc] initWithFrame:r]; v.backgroundColor = c; v.layer.cornerRadius = rad; v.layer.cornerCurve = kCACornerCurveContinuous; [in addSubview:v]; return v;
+}
+- (instancetype)initWithFrame:(CGRect)f {
+    if (!(self = [super initWithFrame:f])) return nil;
+    self.userInteractionEnabled = NO;
+    CGFloat W = f.size.width, H = f.size.height;
+    UIView *body = M26Box(self, self.bounds, 22, [UIColor colorWithWhite:0.1 alpha:1]);
+    body.layer.borderWidth = 2; body.layer.borderColor = [UIColor colorWithWhite:0.35 alpha:1].CGColor;
+    _screen = M26Box(body, CGRectInset(body.bounds, 4, 4), 18, UIColor.blackColor); _screen.clipsToBounds = YES;
+    CGFloat sw = _screen.bounds.size.width, sh = _screen.bounds.size.height;
+    M26Box(_screen, CGRectMake((sw - 30) / 2, 5, 30, 8), 4, [UIColor colorWithWhite:0 alpha:1]).layer.borderWidth = 0;
+    [self label:@"Messages" in:_screen frame:CGRectMake(9, 18, sw, 14) size:11 weight:UIFontWeightBold];
+    // the chat list
+    for (int i = 0; i < 6; i++) {
+        CGFloat y = 40 + i * 27;
+        M26Box(_screen, CGRectMake(9, y, 18, 18), 9, [UIColor colorWithHue:0.1 + i * 0.13 saturation:0.45 brightness:0.8 alpha:1]);
+        M26Box(_screen, CGRectMake(32, y + 2, 34 + (i * 7) % 20, 5), 2.5, [UIColor colorWithWhite:1 alpha:0.75]);
+        M26Box(_screen, CGRectMake(32, y + 10, 48 - (i * 5) % 16, 4), 2, [UIColor colorWithWhite:1 alpha:0.3]);
+    }
+    // the search pill and compose
+    _pillR = CGRectMake(8, sh - 30, sw - 40, 20);
+    _pill = M26Box(_screen, _pillR, 10, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
+    _pill.layer.borderWidth = 0.6; _pill.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
+    UIImageView *mag = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:8 weight:UIImageSymbolWeightBold]]];
+    mag.tintColor = [UIColor colorWithWhite:1 alpha:0.55]; mag.frame = CGRectMake(7, 5, 10, 10); [_pill addSubview:mag];
+    [self label:@"Search" in:_pill frame:CGRectMake(19, 3, 40, 14) size:8 weight:UIFontWeightRegular].textColor = [UIColor colorWithWhite:1 alpha:0.55];
+    M26Box(_screen, CGRectMake(sw - 28, sh - 30, 20, 20), 10, [UIColor colorWithRed:0.115 green:0.115 blue:0.12 alpha:1]);
+    // the island (hidden until it opens)
+    _bigR = CGRectMake(4, 18, sw - 8, sh - 18 - 6);
+    _island = M26Box(_screen, _pillR, 10, [UIColor colorWithWhite:0.06 alpha:1]);
+    _island.layer.borderWidth = 0.6; _island.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor; _island.clipsToBounds = YES; _island.alpha = 0;
+    _content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, _bigR.size.width, _bigR.size.height)];
+    [_island addSubview:_content];
+    CGFloat cw = _bigR.size.width;
+    [self label:@"Insights" in:_content frame:CGRectMake(9, 8, cw, 16) size:13 weight:UIFontWeightHeavy];
+    [self label:@"12,480" in:_content frame:CGRectMake(9, 28, cw, 18) size:15 weight:UIFontWeightBold];
+    UIView *bar = M26Box(_content, CGRectMake(9, 50, cw - 18, 4), 2, [UIColor colorWithWhite:1 alpha:0.15]);
+    M26Box(bar, CGRectMake(0, 0, (cw - 18) * 0.46, 4), 2, UIColor.systemBlueColor);
+    NSArray *tc = @[UIColor.systemOrangeColor, UIColor.systemPinkColor, UIColor.systemRedColor, UIColor.systemPurpleColor];
+    CGFloat tw = (cw - 18 - 5) / 2;
+    for (int i = 0; i < 4; i++) {
+        UIView *tile = M26Box(_content, CGRectMake(9 + (i % 2) * (tw + 5), 60 + (i / 2) * 25, tw, 21), 6, [UIColor colorWithWhite:1 alpha:0.08]);
+        M26Box(tile, CGRectMake(4, 5, 11, 11), 3, tc[i]);
+        M26Box(tile, CGRectMake(19, 8, 16 + i * 3, 5), 2.5, [UIColor colorWithWhite:1 alpha:0.7]);
+    }
+    UIView *wk = M26Box(_content, CGRectMake(9, 114, cw - 18, 50), 7, [UIColor colorWithWhite:1 alpha:0.08]);
+    CGFloat hs[] = {0.4, 0.55, 0.35, 0.7, 1, 0.8, 0.5};
+    CGFloat bw = (wk.bounds.size.width - 12) / 7;
+    for (int i = 0; i < 7; i++) M26Box(wk, CGRectMake(6 + i * bw + bw * 0.22, 44 - 36 * hs[i], bw * 0.56, 36 * hs[i]), 2, i == 4 ? UIColor.systemBlueColor : [UIColor colorWithWhite:1 alpha:0.22]);
+    UILabel *em = [self label:@"😂 🔥 ❤️ 💀 😭" in:_content frame:CGRectMake(9, 170, cw, 16) size:11 weight:UIFontWeightRegular]; (void)em;
+    _dot = M26Box(_screen, CGRectMake(0, 0, 16, 16), 8, [UIColor colorWithWhite:1 alpha:0.75]);
+    _dot.layer.borderWidth = 1.5; _dot.layer.borderColor = [UIColor colorWithWhite:0.6 alpha:0.9].CGColor; _dot.alpha = 0;
+    return self;
+}
+- (UILabel *)label:(NSString *)s in:(UIView *)v frame:(CGRect)f size:(CGFloat)sz weight:(UIFontWeight)w {
+    UILabel *l = [[UILabel alloc] initWithFrame:f]; l.text = s; l.font = [UIFont systemFontOfSize:sz weight:w]; l.textColor = UIColor.whiteColor; [v addSubview:l]; return l;
+}
+- (void)didMoveToWindow { [super didMoveToWindow]; _gen++; if (self.window) [self loop:_gen]; }
+- (void)after:(double)t gen:(NSUInteger)g do:(void (^)(void))b { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(t * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ if (g == self->_gen && self.window) b(); }); }
+- (void)loop:(NSUInteger)g {
+    UIView *pill = _pill, *isl = _island, *ct = _content, *dot = _dot;
+    CGRect P = _pillR, B = _bigR;
+    [UIView performWithoutAnimation:^{
+        isl.alpha = 0; isl.frame = P; isl.layer.cornerRadius = P.size.height / 2;
+        ct.alpha = 0; ct.transform = CGAffineTransformMakeScale(0.3, 0.3); ct.center = CGPointMake(P.size.width / 2, P.size.height / 2);
+        pill.alpha = 1; pill.transform = CGAffineTransformIdentity;
+        dot.center = CGPointMake(CGRectGetMidX(P), CGRectGetMidY(P) + 6); dot.alpha = 0; dot.transform = CGAffineTransformIdentity;
+    }];
+    // a finger comes down on the pill and swipes up: the pill stretches with it
+    [UIView animateWithDuration:0.25 delay:0.5 options:0 animations:^{ dot.alpha = 1; dot.center = CGPointMake(CGRectGetMidX(P), CGRectGetMidY(P)); dot.transform = CGAffineTransformMakeScale(0.85, 0.85); } completion:nil];
+    [self after:0.85 gen:g do:^{
+        [UIView animateWithDuration:0.32 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+            dot.center = CGPointMake(CGRectGetMidX(P), CGRectGetMidY(P) - 34);
+            pill.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.97, 1.35), CGAffineTransformMakeTranslation(0, -8));
+        } completion:nil];
+    }];
+    // let go: the island grows out of the pill on one spring
+    [self after:1.2 gen:g do:^{
+        [UIView animateWithDuration:0.2 animations:^{ dot.alpha = 0; }];
+        [UIView performWithoutAnimation:^{ isl.frame = CGRectOffset(CGRectInset(P, 0, -3), 0, -8); isl.alpha = 1; pill.alpha = 0; pill.transform = CGAffineTransformIdentity; }];
+        [UIView animateWithDuration:0.55 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.35 options:0 animations:^{
+            isl.frame = B; isl.layer.cornerRadius = 16;
+            ct.transform = CGAffineTransformIdentity; ct.center = CGPointMake(B.size.width / 2, B.size.height / 2);
+        } completion:nil];
+        [UIView animateWithDuration:0.18 delay:0.04 options:0 animations:^{ ct.alpha = 1; } completion:nil];
+    }];
+    // a moment later it closes like the Dynamic Island: top first, then the sides, and lands with a squish
+    [self after:3.6 gen:g do:^{
+        CGRect mid = CGRectMake(B.origin.x + 4, CGRectGetMinY(P) - 46, B.size.width - 8, 46 + P.size.height);
+        [UIView animateWithDuration:0.24 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+            isl.frame = mid; isl.layer.cornerRadius = 14; ct.alpha = 0; ct.transform = CGAffineTransformMakeScale(0.5, 0.5); ct.center = CGPointMake(mid.size.width / 2, mid.size.height / 2);
+        } completion:^(__unused BOOL f) {
+            [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{ isl.frame = P; isl.layer.cornerRadius = P.size.height / 2; } completion:^(__unused BOOL f2) {
+                pill.alpha = 1; isl.alpha = 0;
+                pill.transform = CGAffineTransformMakeScale(1.07, 0.84);
+                [UIView animateWithDuration:0.5 delay:0 usingSpringWithDamping:0.42 initialSpringVelocity:0.6 options:0 animations:^{ pill.transform = CGAffineTransformIdentity; } completion:nil];
+            }];
+        }];
+    }];
+    [self after:5.6 gen:g do:^{ [self loop:g]; }];
+}
+@end
+static void M26InsDemoLayout(UITableViewCell *self, SEL _cmd) {
+    struct objc_super sup = { self, class_getSuperclass(object_getClass(self)) };
+    ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
+    UIView *cv = self.contentView;
+    self.selectionStyle = UITableViewCellSelectionStyleNone;
+    self.textLabel.hidden = YES; self.detailTextLabel.hidden = YES;
+    UIView *ph = [cv viewWithTag:0x4D324944];
+    if (!ph) { ph = [[M26InsDemo alloc] initWithFrame:CGRectMake(0, 0, 112, 226)]; ph.tag = 0x4D324944; [cv addSubview:ph]; }
+    ph.center = CGPointMake(cv.bounds.size.width / 2, cv.bounds.size.height / 2);
+}
+static Class M26InsDemoClass(void) {
+    Class sup = NSClassFromString(@"PSTableCell"); if (!sup) return nil;
+    Class c = objc_getClass("M26InsDemoCell");
+    if (!c) { c = objc_allocateClassPair(sup, "M26InsDemoCell", 0); class_addMethod(c, @selector(layoutSubviews), (IMP)M26InsDemoLayout, "v@:"); objc_registerClassPair(c); }
+    return c;
+}
+
 static NSArray *(*origM26Specs)(id, SEL);
 static NSArray *M26Specs(id self, SEL _cmd) {
     NSArray *a = origM26Specs(self, _cmd);
     @try {
-        for (id s in a) if ([s respondsToSelector:@selector(identifier)] && [[s identifier] isEqualToString:@"M26_PREVIEW"]) {
-            Class c = M26PreviewClass();
+        for (id s in a) {
+            if (![s respondsToSelector:@selector(identifier)]) continue;
+            Class c = [[s identifier] isEqualToString:@"M26_PREVIEW"] ? M26PreviewClass() : [[s identifier] isEqualToString:@"M26_INSDEMO"] ? M26InsDemoClass() : nil;
             if (c && [s propertyForKey:@"cellClass"] != c) ((void (*)(id, SEL, id, id))objc_msgSend)(s, @selector(setProperty:forKey:), c, @"cellClass");
-            break;
         }
     } @catch (__unused id e) {}
     return a;

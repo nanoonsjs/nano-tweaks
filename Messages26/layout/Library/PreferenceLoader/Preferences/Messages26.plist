@@ -255,6 +255,38 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>footerText</key>
+			<string>Swipe up on the search pill and it grows into Insights, like MusicPill's Dynamic Pill: total messages, your top emojis and words, your busiest days, photos, videos, voice messages, and who you text most. Counted on your iPhone; nothing leaves it.</string>
+			<key>label</key>
+			<string>Conversation Insights</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.nano.messages26/prefschanged</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.nano.messages26</string>
+			<key>key</key>
+			<string>insights</string>
+			<key>label</key>
+			<string>Insights (Dynamic Pill)</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSStaticTextCell</string>
+			<key>height</key>
+			<integer>250</integer>
+			<key>id</key>
+			<string>M26_INSDEMO</string>
+			<key>label</key>
+			<string></string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
 			<string>For the Liquid (Gl)ass tweak. On: where LiquidAss draws its glass buttons (like back buttons), Messages26's own glass steps aside so only LiquidAss's shows. Off: Messages26's glass shows there and LiquidAss's under it is hidden. Reopen the app after changing.</string>
 			<key>label</key>
 			<string>LiquidAss</string>
